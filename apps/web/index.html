@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#E9EBEF" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0a0d14" media="(prefers-color-scheme: dark)" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Nokker" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <!-- Titre réel posé par App.tsx depuis packages/brand (source unique de la marque). -->
+    <title>Nokker</title>
+    <meta name="description" content="Nokker — le chat de Nina, ses sessions et ses bulles vivantes" />
+    <!-- Kit de marque : packages/brand/assets, servi sous /brand/ (vite.config.ts). -->
+    <link rel="icon" href="/brand/icon/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/brand/icon/favicon.ico" sizes="48x48" />
+    <link rel="apple-touch-icon" href="/brand/icon/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

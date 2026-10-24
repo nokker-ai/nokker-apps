@@ -1,0 +1,25 @@
+{
+  "name": "@nokker-apps/brand",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./assets/*": "./assets/*"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "echo \"(brand : rien à tester, config statique)\""
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  },
+  "files": [
+    "src",
+    "assets"
+  ]
+}

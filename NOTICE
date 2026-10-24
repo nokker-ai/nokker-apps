@@ -1,0 +1,7 @@
+Nokker apps (web interface, `nokker` terminal client, SDK)
+Copyright 2026 Ninabot Sàrl
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Third-party dependencies bundled in the builds keep their own licenses (MIT, ISC, Apache-2.0, BSD-3-Clause,
+CC-BY-4.0, CC0-1.0); see each package's license in node_modules.

@@ -1,0 +1,17 @@
+{
+  "name": "nokker-apps",
+  "private": true,
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "description": "Interfaces client de Nokker (nom commercial provisoire : voir packages/brand) — monorepo pnpm.",
+  "engines": {
+    "node": ">=18.18"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "build": "pnpm -r --workspace-concurrency=1 build",
+    "test": "pnpm -r --workspace-concurrency=1 test",
+    "typecheck": "pnpm -r --workspace-concurrency=1 typecheck",
+    "lint": "echo \"(pas de lint configuré en P1 — à ajouter avec eslint flat config si besoin)\""
+  }
+}

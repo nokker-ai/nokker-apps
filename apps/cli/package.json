@@ -1,0 +1,33 @@
+{
+  "name": "@nokker-apps/cli",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "nokker": "./bin/nokker.mjs"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "tsx src/bin.ts",
+    "build:bin": "bash scripts/build-bin.sh"
+  },
+  "dependencies": {
+    "@nokker-apps/brand": "workspace:*",
+    "@nokker-apps/sdk": "workspace:*",
+    "ink": "^8.0.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.3.1"
+  },
+  "devDependencies": {
+    "@nokker-apps/mock-server": "workspace:*",
+    "@types/react": "^19.3.0",
+    "@types/node": "^22.9.0",
+    "ink-testing-library": "^4.0.0",
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.1",
+    "vitest": "^2.1.4"
+  }
+}
