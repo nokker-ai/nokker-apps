@@ -2580,6 +2580,7 @@ button:disabled {
 }
 .ra-card .ob-btn:last-child {
   margin-top: 16px;
+}
 /* ---- Bulle artefact (page créée en session) ---------------------------------------------- */
 .artifact-frame {
   position: relative;

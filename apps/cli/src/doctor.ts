@@ -1,6 +1,7 @@
 /**
  * `nokker doctor` — contrôles en table : docker joignable, compose Lokkal présent, `/healthz` du serveur,
- * jeton local ou appareil valide, version du client contre la minimale annoncée, git présent.
+ * jeton local ou appareil valide, version du client contre la minimale annoncée, git présent ; coffre OpenBao si
+ * l'installation en a un (`NOKKER_SECRETS_PROVIDER=openbao`).
  * Aucune exception ne remonte : un binaire absent est un résultat, pas une trace d'erreur.
  */
 import { NokkerClient } from "@nokker-apps/sdk";
@@ -11,6 +12,7 @@ import { legacyLokkalFilePaths, lokkalFilePath } from "./config.js";
 import { composeArgs, hostCommand, readLokkal, type ServerSource } from "./lokkal.js";
 import { firstLine, run as realRun, type Runner } from "./proc.js";
 import { CLI_VERSION, compareVersions } from "./version.js";
+import { checkVault } from "./vault-check.js";
 
 export type CheckStatus = "ok" | "warn" | "ko";
 export interface Check {
@@ -156,6 +158,12 @@ export async function runDoctor(opts: DoctorOptions): Promise<{ checks: Check[];
   checks.push(git.code === 0
     ? { name: "git", status: "ok", detail: git.stdout.trim() }
     : { name: "git", status: "ko", detail: "git absent de l'hôte (nécessaire pour /diff et les points de retour)" });
+
+  // 7. coffre (X4) : seulement si l'installation utilise OpenBao (sinon aucune ligne)
+  if (dockerOk && composeReady) {
+    const vault = await checkVault(composeReady, run);
+    if (vault) checks.push(vault);
+  }
 
   // --fix : relance ce qui peut l'être
   if (fixes.includes("up") && composeReady) {
