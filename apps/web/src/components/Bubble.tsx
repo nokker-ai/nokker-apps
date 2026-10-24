@@ -1,6 +1,6 @@
 import React, { useLayoutEffect, useRef } from "react";
 import type { Bubble as BubbleT, Thread, TransferMode } from "@nokker-apps/sdk";
-import { BUBBLE_THEME } from "@nokker-apps/brand";
+import { bubbleTheme } from "@nokker-apps/brand";
 import { Icon } from "../icons.js";
 import { BubbleBody, statusLabel, useNow } from "../bubbles/kinds.js";
 import { useStore } from "../context.js";
@@ -35,7 +35,7 @@ export interface BubbleProps {
 /** Une bulle : en-tête (poignée, type, titre, statut, Réduire · Partager · Envoyer vers · Fermer), corps, pied partagé. */
 export function Bubble(p: BubbleProps): React.ReactElement {
   const b = p.bubble;
-  const theme = BUBBLE_THEME[b.kind];
+  const theme = bubbleTheme(b.kind);
   const working = b.status === "working";
   const now = useNow(b.kind === "timer" && b.status !== "done");
   const ref = useRef<HTMLElement>(null);

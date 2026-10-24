@@ -2,7 +2,8 @@
  * Rendu du corps des bulles, par `kind` (BUBBLES.md §2). Un champ inconnu de `state` est ignoré ; un
  * champ attendu absent ne casse rien (le noyau peut remplir l'état en plusieurs `bubble.updated`).
  */
-import React, { useEffect, useState } from "react";
+import { gatewayContext, remoteApprovalUrl } from "../auth.js";
+import React, { useEffect, useRef, useState } from "react";
 import { NokkerApiError, type Approval, type Bubble, type BubbleBase } from "@nokker-apps/sdk";
 import { useStore } from "../context.js";
 import { Icon } from "../icons.js";
@@ -24,12 +25,16 @@ export function statusLabel(b: Bubble, now: number): string {
       return b.status === "working" ? "tourne" : b.state.exit_code === 0 ? "exit 0" : b.state.exit_code != null ? `exit ${b.state.exit_code}` : b.status;
     case "media":
       return b.state.mime?.split("/")[0] ?? "aperçu";
+    case "artifact":
+      return b.status === "working" ? "écrit" : `v${b.state.version ?? 1}`;
     case "notify":
       return b.state.from_title;
     case "agent_draft":
       return b.status === "working" ? "Nina remplit" : "prête";
     case "approval":
       return b.status === "working" ? "en attente" : b.status === "done" ? "approuvée" : b.status === "failed" ? "refusée" : b.status;
+    default:
+      return (b as { status: string }).status;
   }
 }
 
@@ -247,6 +252,159 @@ function Media({ b }: { b: B<"media"> }) {
   );
 }
 
+/**
+ * Page créée en session (BUBBLES.md §10). Le state ne porte JAMAIS le HTML : on demande au noyau un lien signé
+ * neuf à chaque montage et à chaque `bubble.updated` (usage court), et l'iframe reste en sandbox sans
+ * `allow-same-origin` — la page vit sur une origine séparée et ne touche ni la session ni le DOM de l'app.
+ */
+function Artifact({ b }: { b: B<"artifact"> }) {
+  const store = useStore();
+  const s = b.state;
+  const pageId = s.page_id;
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const [busy, setBusy] = useState<"download" | "copy" | null>(null);
+  const [copied, setCopied] = useState<"ok" | "fail" | null>(null);
+  const [publicUrl, setPublicUrl] = useState<string | null>(null);
+  const [dl, setDl] = useState<string | null>(null);
+  // Capacité d'URL expirée (relais, 1 h) : la page d'erreur du relais poste `nokker:pages-expired` ; on redemande un
+  // lien, au plus une fois par minute (la page elle-même pourrait envoyer ce message en boucle).
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const [relink, setRelink] = useState(0);
+  const lastRelink = useRef(0);
+  useEffect(() => {
+    const onMessage = (e: MessageEvent): void => {
+      if (e.source !== frameRef.current?.contentWindow) return;
+      if ((e.data as { type?: unknown } | null)?.type !== "nokker:pages-expired") return;
+      if (Date.now() - lastRelink.current < 60_000) return;
+      lastRelink.current = Date.now();
+      setRelink((n) => n + 1);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
+  useEffect(() => {
+    if (!pageId) return;
+    let live = true;
+    setFailed(false);
+    store.client
+      .getPageLink(pageId, { embed: true })
+      .then((l) => live && setSrc(store.client.resolveUrl(l.url)))
+      .catch(() => live && setFailed(true));
+    return () => {
+      live = false;
+    };
+  }, [store.client, pageId, b.version, relink]);
+
+  const open = async () => {
+    if (!pageId || opening) return;
+    setOpening(true);
+    const w = window.open("", "_blank");
+    try {
+      const l = await store.client.getPageLink(pageId);
+      if (w) {
+        w.opener = null;
+        w.location.href = store.client.resolveUrl(l.url) ?? l.url;
+      }
+    } catch {
+      w?.close();
+      setFailed(true);
+    } finally {
+      setOpening(false);
+    }
+  };
+
+  // Téléchargement : lien `download` à usage unique, chargé dans un iframe caché sandboxé qui n'a droit qu'au
+  // téléchargement (pièce jointe) — une réponse d'erreur s'y afficherait sans quitter l'app ni exécuter de script.
+  const download = async () => {
+    if (!pageId || busy) return;
+    setBusy("download");
+    try {
+      const l = await store.client.getPageLink(pageId, { download: true });
+      setDl(store.client.resolveUrl(l.url) ?? l.url);
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const copyLink = async () => {
+    if (!pageId || busy) return;
+    setBusy("copy");
+    setCopied(null);
+    setPublicUrl(null);
+    try {
+      const l = await store.client.getPageLink(pageId);
+      if (!l.public_url) throw new Error("pas d'adresse publique");
+      const href = new URL(store.client.resolveUrl(l.public_url) ?? l.public_url, location.href).href;
+      // Presse-papiers absent (contexte non sécurisé, permission refusée) : l'adresse s'affiche pour une copie à la main.
+      setPublicUrl(href);
+      await navigator.clipboard.writeText(href);
+      setCopied("ok");
+    } catch {
+      setCopied("fail");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="bubble-body artifact">
+      <div className="artifact-frame">
+        {src && !failed ? (
+          <iframe
+            ref={frameRef}
+            key={src}
+            className="artifact-iframe"
+            src={src}
+            title={s.title || b.title}
+            sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"
+            referrerPolicy="no-referrer"
+            loading="lazy"
+          />
+        ) : failed ? (
+          <p className="fine artifact-fail">L'aperçu n'a pas pu se charger — ouvre la page dans un onglet.</p>
+        ) : (
+          <div className="skel artifact-iframe" />
+        )}
+        {b.status === "working" ? <span className="artifact-writing">écriture…</span> : null}
+      </div>
+      <div className="artifact-meta fine">
+        <span>
+          {s.path} · v{s.version ?? 1}
+        </span>
+        <span className={`artifact-vis ${s.public ? "is-public" : ""}`}>{s.public ? "publique" : "privée"}</span>
+      </div>
+      <div className="bubble-actions">
+        <button type="button" className="btn" disabled={!pageId || opening} onClick={() => void open()}>
+          <Icon name="goto" /> Ouvrir
+        </button>
+        <button type="button" className="btn" disabled={!pageId || busy !== null} onClick={() => void download()}>
+          Télécharger
+        </button>
+        {s.public ? (
+          <button type="button" className="btn" disabled={!pageId || busy !== null} onClick={() => void copyLink()}>
+            {copied === "ok" ? "Lien copié" : "Copier le lien"}
+          </button>
+        ) : null}
+        {b.actions.map((a) => (
+          <button key={a.id} type="button" className={`btn ${a.primary ? "btn-brass" : ""}`} onClick={() => void store.runAction(b, a.id)}>
+            {a.label}
+          </button>
+        ))}
+      </div>
+      {copied === "fail" && publicUrl ? (
+        <input className="artifact-url mono" readOnly value={publicUrl} aria-label="Adresse publique de la page" autoFocus onFocus={(e) => e.currentTarget.select()} />
+      ) : copied === "fail" ? (
+        <p className="fine artifact-fail" role="alert">Le lien n'a pas pu être copié.</p>
+      ) : null}
+      {dl ? <iframe key={dl} className="artifact-dl" src={dl} title="" aria-hidden="true" sandbox="allow-downloads" /> : null}
+    </div>
+  );
+}
+
 function Notify({ b }: { b: B<"notify"> }) {
   const store = useStore();
   return (
@@ -325,7 +483,11 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
       setBusy(false);
     }
   };
-  const canSign = store.authMode !== "demo" && store.authMode !== null;
+  // Par la passerelle, cette origine n'a pas de clé d'appareil : l'approbation forte se signe là où elle existe
+  // (app.nokker.ai ou le téléphone, LOKKAL.md §7.3).
+  const viaGateway = store.authMode === "gateway";
+  const gwHost = viaGateway ? gatewayContext() : null;
+  const canSign = store.authMode !== "demo" && store.authMode !== null && !viaGateway;
   return (
     <div className="bubble-body">
       <p className="notify-text">{a.reason}</p>
@@ -348,7 +510,15 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
               </button>
             </div>
           ) : null}
-          {a.strength === "standard" ? (
+          {viaGateway && gwHost ? (
+            <p className="fine">
+              Approbation forte : confirme-la depuis un appareil enrôlé.{" "}
+              <a href={remoteApprovalUrl(gwHost, a.id)} target="_blank" rel="noopener noreferrer">
+                Ouvrir sur app.nokker.ai
+              </a>
+            </p>
+          ) : null}
+          {a.strength === "standard" && !viaGateway ? (
             <form
               className="totp"
               onSubmit={(e) => {
@@ -387,11 +557,19 @@ export function BubbleBody({ b, readOnly }: { b: Bubble; readOnly: boolean }): R
       return <Script b={b} />;
     case "media":
       return <Media b={b} />;
+    case "artifact":
+      return <Artifact b={b} />;
     case "notify":
       return <Notify b={b} />;
     case "agent_draft":
       return <AgentDraft b={b} readOnly={readOnly} />;
     case "approval":
       return <ApprovalBody b={b} />;
+    default:
+      return (
+        <div className="bubble-body">
+          <p className="fine">Ce type de bulle n'est pas géré par cette version de l'app.</p>
+        </div>
+      );
   }
 }

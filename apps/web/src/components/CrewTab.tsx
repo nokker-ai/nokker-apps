@@ -14,7 +14,7 @@ function ago(iso: string | null | undefined): string {
   return h < 48 ? `il y a ${h} h` : `il y a ${Math.round(h / 24)} j`;
 }
 
-/** Onglet Crew — deck façon SOKKAN : une carte par agent, couleur ET libellé d'état, la carte respire quand
+/** Onglet Crew — un deck : une carte par agent, couleur ET libellé d'état, la carte respire quand
  * l'agent tourne ; clic = popout (Réglages, Session en cours, Sessions passées) au-dessus du deck. */
 export function CrewTab({ agents, freshId }: { agents: Agent[]; freshId: string | null }): React.ReactElement {
   const [open, setOpen] = useState<Agent | null>(null);

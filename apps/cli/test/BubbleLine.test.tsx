@@ -60,4 +60,23 @@ describe("BubbleLine (ink-testing-library)", () => {
     const frame = lastFrame() ?? "";
     expect(frame.split("\n").filter((l) => l.trim().length > 0)).toHaveLength(1);
   });
+
+  it("artifact : titre + « page <nom> »", () => {
+    const b = {
+      ...searchBubble,
+      kind: "artifact",
+      title: "Tarifs",
+      status: "done",
+      state: { page_id: "pg_0123456789abcdef", path: "tarifs.html", title: "Tarifs", mime: "text/html", version: 1, size: 10, public: false, updated_at: "2026-10-24T00:00:00Z" },
+    } as unknown as Bubble;
+    const frame = render(<BubbleLine bubble={b} spinnerFrame={0} />).lastFrame();
+    expect(frame).toContain("Tarifs");
+    expect(frame).toContain("page tarifs.html");
+  });
+
+  it("ignore proprement un kind inconnu du client", () => {
+    const b = { ...searchBubble, kind: "hologramme", title: "Futur", state: {} } as unknown as Bubble;
+    const frame = render(<BubbleLine bubble={b} spinnerFrame={0} />).lastFrame();
+    expect(frame).toContain("Futur");
+  });
 });

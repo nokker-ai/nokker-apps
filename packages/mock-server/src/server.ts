@@ -44,10 +44,13 @@ import {
   transferBubble,
   updateBubble,
 } from "./bubbles.js";
+import { PAGE_HEADERS, downloadName, getPage, signPageUrl, verifyPageSignature } from "./pages.js";
 import { approvalBubble, verifyImageSignature, fakePreview, interpretDemo, previewImage, sessionMessage, settleApprovalBubbles, startDemoTimers } from "./demo.js";
 import { BUBBLE_KINDS, BUBBLE_STATUSES, type BubbleKind } from "@nokker-apps/sdk";
 import { verifyWebAuthnAssertion } from "./webauthn.js";
 import { handleAccount } from "./account.js";
+import { handleLink, handleLinkDev } from "./link.js";
+import { handleGatewayAuthorize, handleGatewayRelay } from "./gateway.js";
 import { handleAuthedOnboarding, handlePublicOnboarding } from "./onboarding.js";
 
 export const MOCK_TOTP_CODE = "000000";
@@ -169,10 +172,30 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     return;
   }
 
+  // Pages (BUBBLES.md §10) — l'identité normale, un lien signé, OU la page publiée ; sinon 404 (on ne révèle rien).
+  const pageGet = path.match(/^\/v1\/pages\/(pg_[0-9a-f]{16})$/);
+  if (method === "GET" && pageGet) {
+    const page = state.pages.get(pageGet[1]!);
+    const download = url.searchParams.get("dl") === "1";
+    const signed = verifyPageSignature(pageGet[1]!, url.searchParams.get("exp"), url.searchParams.get("sig"), download);
+    // Téléchargement : seulement par un lien signé `download` (une URL publique ne devient pas pièce jointe).
+    const proven = signed || (!download && authUser(state, req) !== null);
+    if (!page || !(proven || (page.public && !download))) return void sendJson(res, 404, { error: { message: "page inconnue" } });
+    const v = url.searchParams.get("v");
+    const idx = v === null ? page.versions.length : Number(v);
+    const body = page.versions[idx - 1];
+    if (!Number.isInteger(idx) || body === undefined) return void sendJson(res, 404, { error: { message: "version inconnue" } });
+    const attach = download ? { "Content-Disposition": `attachment; filename="${downloadName(page.title)}"` } : {};
+    res.writeHead(200, { ...PAGE_HEADERS, ...attach, ...corsHeaders() });
+    res.end(body);
+    return;
+  }
+
   // ---- Onboarding du testeur (publiques : pas encore de session) ----------------------------
   let bodyCache: Promise<Record<string, unknown>> | undefined;
   const readBody = (): Promise<Record<string, unknown>> => (bodyCache ??= readJsonBody(req));
   if (await handlePublicOnboarding(state, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleGatewayRelay(state, req, res, method, path, readBody)) return;
 
   // ---- Appareils / sessions -----------------------------------------------------------------
 
@@ -319,6 +342,8 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     return;
   }
 
+  if (await handleLinkDev(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+
   // Tout ce qui suit exige une session valide.
   const user = authUser(state, req);
   if (!user && path !== "/v1/chat/completions") {
@@ -326,6 +351,8 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   }
 
   if (await handleAccount(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (user && (await handleLink(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj)))) return;
+  if (await handleGatewayAuthorize(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleAuthedOnboarding(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
 
   // ---- Session de code locale (LOKKAL.md §7.4.1) ------------------------------------------------
@@ -528,6 +555,16 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   if (bubbleActionMatch && method === "POST") {
     const r = runAction(state, bubbleActionMatch[1]!, decodeURIComponent(bubbleActionMatch[2]!));
     return void sendJson(res, r.status, r.body);
+  }
+
+  const pageLink = path.match(/^\/v1\/pages\/(pg_[0-9a-f]{16})\/link$/);
+  if (method === "POST" && pageLink) {
+    const page = getPage(state, pageLink[1]!);
+    const body = await readJsonBody(req);
+    const signed = signPageUrl(page.id, body.download === true);
+    // Chemins relatifs au serveur : le client les résout (derrière le proxy de dev, l'hôte du mock n'est pas joignable).
+    const pub = page.public ? { public_url: `/v1/pages/${page.id}` } : {};
+    return void sendJson(res, 200, { url: signed.path, expires_at: signed.expires_at, ...pub });
   }
 
   // ---- Aperçus (§5) — fictifs ---------------------------------------------------------------

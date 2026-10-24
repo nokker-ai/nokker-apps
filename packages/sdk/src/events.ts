@@ -70,7 +70,8 @@ export const DEFAULT_BACKOFF: BackoffPolicy = { initialMs: 500, maxMs: 15_000, f
 
 export interface SubscribeEventsOptions {
   baseUrl: string;
-  token: string;
+  /** Jeton, ou fonction relue à chaque (re)connexion : un jeton renouvelé (passerelle, 15 min) sert au prochain essai. */
+  token: string | (() => string);
   fetchImpl: FetchLike;
   onEvent: (event: NokkerEvent) => void;
   /** Appelé après une reconnexion réussie (événements potentiellement manqués, voir doc du module). */
@@ -118,7 +119,7 @@ export function subscribeEvents(opts: SubscribeEventsOptions): EventSubscription
         const res = await opts.fetchImpl(`${opts.baseUrl}/v1/events`, {
           method: "GET",
           headers: {
-            Authorization: `Bearer ${opts.token}`,
+            Authorization: `Bearer ${typeof opts.token === "function" ? opts.token() : opts.token}`,
             Accept: "text/event-stream",
             ...(lastEventId ? { "Last-Event-ID": lastEventId } : {}),
           },

@@ -2475,3 +2475,160 @@ button:disabled {
 .acc-danger {
   border-color: rgba(var(--ko-rgb), 0.35);
 }
+
+/* ---- Page /link (liaison d'une machine Lokkal) ---- */
+.lk-code {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 24px;
+  letter-spacing: 0.18em;
+  text-align: center;
+  text-transform: uppercase;
+}
+.lk-machine {
+  font-size: 17px;
+  color: var(--strong);
+}
+.lk-codeshow {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 28px;
+  letter-spacing: 0.18em;
+  text-align: center;
+  margin: 12px 0;
+  color: var(--strong);
+}
+.lk-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.lk-actions .ob-btn {
+  flex: 1 1 140px;
+}
+
+/* ---- Page /machines (« mes machines ») ---- */
+.mc-list {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.mc-item {
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  padding: 14px;
+}
+.mc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.mc-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: 0.5;
+  flex: none;
+}
+.mc-dot.on {
+  background: var(--ok);
+  opacity: 1;
+}
+.mc-name {
+  color: var(--strong);
+  font-size: 16px;
+}
+.mc-seen {
+  color: var(--muted);
+  font-size: 13px;
+  margin-left: auto;
+}
+.mc-meta {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+.mc-host {
+  font-family: var(--mono, ui-monospace, monospace);
+}
+.mc-confirm {
+  margin-top: 12px;
+}
+.mc-empty {
+  margin-top: 12px;
+}
+
+/* ---- Page /approve (approbation forte d'une machine liée) ---- */
+.ra-machine {
+  color: var(--muted);
+  font-size: 14px;
+}
+.ra-final {
+  font-weight: 600;
+}
+.ra-approved {
+  color: var(--ok);
+}
+.ra-rejected,
+.ra-expired {
+  color: var(--muted);
+}
+.ra-card .ob-btn:last-child {
+  margin-top: 16px;
+/* ---- Bulle artefact (page créée en session) ---------------------------------------------- */
+.artifact-frame {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(var(--krgb), 0.25);
+  background: rgba(var(--glass), 0.7);
+}
+.artifact-iframe {
+  display: block;
+  width: 100%;
+  height: 220px;
+  border: 0;
+  background: #fff;
+}
+.artifact-fail {
+  margin: 0;
+  padding: 24px 12px;
+  text-align: center;
+}
+.artifact-writing {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: rgba(var(--glass), 0.9);
+  border: 1px solid rgba(var(--krgb), 0.35);
+}
+.artifact-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+.artifact-vis.is-public {
+  color: var(--ok, #4f6b0e);
+}
+.artifact-dl {
+  display: none;
+}
+.artifact-url {
+  width: 100%;
+  margin-top: 8px;
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+}

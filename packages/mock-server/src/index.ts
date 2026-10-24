@@ -8,6 +8,7 @@ import { MockState } from "./state.js";
 
 export { MOCK_TOTP_CODE } from "./server.js";
 export { accountMock } from "./account.js";
+export { linkMock } from "./link.js";
 export { MockState, MOCK_USER, KNOWN_USERS, LOCAL_OWNER } from "./state.js";
 export { isHardline } from "./local.js";
 export { seedDemo, sessionMessage, type DemoIds } from "./demo.js";

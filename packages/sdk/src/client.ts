@@ -53,6 +53,7 @@ import type {
   AccountUsage,
   BillingStatus,
 } from "./account.js";
+import type { LinkApproveResult, LinkDecision, LinkedMachines, LinkPending, RemoteApproval, RemoteDecision, RemoteDecisionProof } from "./link.js";
 import type { PatchThreadRequest } from "./bubbles.js";
 import type {
   Agent,
@@ -62,6 +63,7 @@ import type {
   BubbleActionResult,
   BubbleKind,
   CreateBubbleRequest,
+  PageLink,
   PatchBubbleRequest,
   Preview,
   SessionMessageRequest,
@@ -340,6 +342,27 @@ export class NokkerClient {
     return this.request<Bubble>(`/v1/bubbles/${encodeURIComponent(id)}/share`, { method: "POST", body: JSON.stringify(req) });
   }
 
+  /** BUBBLES.md §10.3 — lien d'une page, demandé au Lokkal sur l'origine courante. En local : lien signé
+   * `/v1/pages/{id}?exp=&sig=` (`embed` ignoré). Par la passerelle : le Lokkal obtient de nokker.ai un lien
+   * `https://<nom>--pages.nokker.app/_auth?token=…` à USAGE UNIQUE (`embed` pour l'`<iframe>`) ; 502 si nokker.ai est
+   * injoignable. Un lien par usage (iframe, onglet), redemandé à chaque montage et à chaque `bubble.updated`. */
+  async getPageLink(pageId: string, opts: { embed?: boolean; download?: boolean } = {}): Promise<PageLink> {
+    const body: Record<string, boolean> = { embed: opts.embed === true };
+    // `download` : la page revient en pièce jointe (`Content-Disposition: attachment`), proposé à dev le 24.10.
+    if (opts.download) body.download = true;
+    return this.request<PageLink>(`/v1/pages/${encodeURIComponent(pageId)}/link`, { method: "POST", body: JSON.stringify(body) });
+  }
+
+  /** Depuis app.nokker.ai (« mes machines ») : nokker.ai signe un jeton pages (60 s, usage unique) pour la page d'une
+   * machine liée ; `embed` pour l'`<iframe>` (le relais redirige vers une capacité d'URL, sans cookie tiers). Un lien
+   * par usage : jamais réutilisé entre l'iframe et l'onglet. */
+  async getGatewayPageLink(machineId: string, pageId: string, opts: { embed?: boolean } = {}): Promise<PageLink> {
+    return this.request<PageLink>(`/v1/link/machines/${encodeURIComponent(machineId)}/pages-token`, {
+      method: "POST",
+      body: JSON.stringify({ page_id: pageId, embed: opts.embed === true }),
+    });
+  }
+
   /** Déclenche une action (voir `BubbleActionResult`) : notify → fermée (+ `goto`) ; autre bulle → 202, un tour
    * du fil en tâche de fond. Action absente de la bulle → 404. */
   async bubbleAction(id: string, actionId: string): Promise<BubbleActionResult> {
@@ -384,6 +407,15 @@ export class NokkerClient {
 
   // -- Mon compte et abonnement (session requise) ----------------------------------------------
 
+  /** nokker.ai, page `/gateway/authorize` : code d'autorisation (60 s, usage unique, lié au compte, à l'hôte et au
+   * défi PKCE) pour se connecter à `<nom>.nokker.app`. 403 : cette machine n'est pas au compte. */
+  async gatewayAuthorize(host: string, codeChallenge: string): Promise<{ code: string; redirect: string; expires_in: number }> {
+    return this.request<{ code: string; redirect: string; expires_in: number }>("/v1/gateway/authorize", {
+      method: "POST",
+      body: JSON.stringify({ host, code_challenge: codeChallenge, code_challenge_method: "S256" }),
+    });
+  }
+
   async getAccount(): Promise<AccountInfo> {
     return this.request<AccountInfo>("/v1/account");
   }
@@ -394,6 +426,39 @@ export class NokkerClient {
 
   async getAccountUsage(): Promise<AccountUsage> {
     return this.request<AccountUsage>("/v1/account/usage");
+  }
+
+  /** Page `/link` : la machine derrière un code, SANS effet de bord (404 : code inconnu ou expiré, 429 : trop d'essais). */
+  async getLinkPending(code: string): Promise<LinkPending> {
+    return this.request<LinkPending>(`/v1/link/pending?code=${encodeURIComponent(code)}`);
+  }
+
+  /** Approuve ou refuse la liaison d'une machine au compte connecté (404 : code expiré entre-temps). */
+  async decideLink(userCode: string, decision: LinkDecision): Promise<LinkApproveResult> {
+    return this.request<LinkApproveResult>("/v1/link/approve", { method: "POST", body: JSON.stringify({ user_code: userCode, decision }) });
+  }
+
+  /** « Mes machines » : les machines Lokkal liées au compte connecté (les révoquées n'y sont plus). */
+  async listMachines(): Promise<LinkedMachines> {
+    return this.request<LinkedMachines>("/v1/link/machines");
+  }
+
+  /** Carte forte d'une machine liée, à signer depuis cet appareil (page `/approve/<machine>/<approbation>`). */
+  async getMachineApproval(machineId: string, approvalId: string): Promise<RemoteApproval> {
+    return this.request<RemoteApproval>(`/v1/link/machines/${encodeURIComponent(machineId)}/approvals/${encodeURIComponent(approvalId)}`);
+  }
+
+  /** Transmet la décision signée : 202 `{status: "forwarded"}` ; le statut final vient du Lokkal. */
+  async decideMachineApproval(machineId: string, approvalId: string, decision: RemoteDecision, proof: RemoteDecisionProof): Promise<{ status: string }> {
+    return this.request<{ status: string }>(
+      `/v1/link/machines/${encodeURIComponent(machineId)}/approvals/${encodeURIComponent(approvalId)}/decision`,
+      { method: "POST", body: JSON.stringify({ decision, proof }) },
+    );
+  }
+
+  /** Délie une machine : son jeton est révoqué, la passerelle se ferme (404 : machine inconnue de ce compte). */
+  async revokeMachine(machineId: string): Promise<{ revoked: true }> {
+    return this.request<{ revoked: true }>(`/v1/link/machines/${encodeURIComponent(machineId)}/revoke`, { method: "POST" });
   }
 
   /** Lance l'export (asynchrone, au plus un par jour : 429 `rate` sinon). */
@@ -525,7 +590,7 @@ export class NokkerClient {
     if (!this.token) throw new Error("subscribeEvents nécessite un jeton de session");
     return subscribeEvents({
       baseUrl: this.baseUrl,
-      token: this.token,
+      token: () => this.token ?? "",
       fetchImpl: this.fetchImpl,
       ...handlers,
     });

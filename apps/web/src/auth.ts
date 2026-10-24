@@ -6,11 +6,14 @@
  *    `VITE_NOKKER_AUTH=passkey` bascule sur la passkey WebAuthn (ADR 0001).
  * 2. Hors contexte sécurisé (http sur l'IP Tailscale en dev) : ni WebCrypto ni WebAuthn — si le serveur est le
  *    mock, jeton de démo `POST /v1/dev/demo-session` (extension mock, n'existe pas côté noyau) ; sinon erreur.
+ * 0. Servi par la passerelle `<nom>.nokker.app` (ou `VITE_NOKKER_GATEWAY=1` contre le mock) : connexion par nokker.ai
+ *    (code + PKCE, `gateway/auth.ts`), jeton d'accès en mémoire, aucune clé d'appareil sur cette origine.
  */
 import { NokkerApiError, NokkerClient, generateDeviceKeyPair, signChallenge, type AcceptInvitationResult } from "@nokker-apps/sdk";
 import { registerPasskey, signDecisionWithPasskey } from "./webauthn.js";
+import { AUTHORIZE_BASE, GatewayAuthError, RETRY_MS, beginLogin, completeCallback, gatewayHost, refreshDelayMs, refreshToken, type GatewayToken } from "./gateway/auth.js";
 
-export type AuthMode = "device-key" | "passkey" | "demo";
+export type AuthMode = "device-key" | "passkey" | "demo" | "gateway";
 
 export interface AuthResult {
   mode: AuthMode;
@@ -215,7 +218,109 @@ export async function isMockServer(baseUrl: string): Promise<boolean> {
 
 /** Reprend la session de cet appareil. Ne crée JAMAIS de compte ni d'appareil : sans appareil reconnu, `null`
  * (accueil « bêta privée »). L'enrôlement passe par une invitation (`acceptAndLogin`) ou un code mail (`loginWithEmailCode`). */
+/** Hôte de passerelle si cette page est servie par `<nom>.nokker.app` (ou forcée pour le mock). */
+export function gatewayContext(): string | null {
+  // La page d'autorisation est celle de nokker.ai : elle se connecte comme nokker.ai, jamais par la passerelle.
+  if (location.pathname === "/gateway/authorize") return null;
+  if (import.meta.env?.VITE_NOKKER_GATEWAY === "1") return location.host;
+  return gatewayHost(location.hostname);
+}
+
+/** `sub` du jeton d'accès (affichage seulement : la signature est vérifiée par le relais et par le Lokkal). */
+export function tokenSubject(token: string): string {
+  try {
+    const part = token.split(".")[1] ?? "";
+    const json = atob(part.replace(/-/g, "+").replace(/_/g, "/"));
+    const sub = (JSON.parse(json) as { sub?: unknown }).sub;
+    return typeof sub === "string" ? sub : "";
+  } catch {
+    return "";
+  }
+}
+
+let renewTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Garde le jeton frais : renouvellement à 80 % de sa durée ; 502 → nouvel essai ; refresh refusé → reconnexion. */
+function keepFresh(client: NokkerClient, host: string, tok: GatewayToken): void {
+  client.setToken(tok.access_token);
+  clearTimeout(renewTimer);
+  const schedule = (ms: number): void => {
+    renewTimer = setTimeout(() => {
+      refreshToken().then(
+        (next) => {
+          if (next) keepFresh(client, host, next);
+          else void beginLogin(host, location.pathname + location.search + location.hash, sessionStorage, authorizeBase()).then((u) => location.assign(u));
+        },
+        (err: unknown) => {
+          if (err instanceof GatewayAuthError && err.kind === "forbidden") {
+            console.error("passerelle : /_gw/refresh refusé (403, Origin ou Content-Type) — renouvellement arrêté");
+            return;
+          }
+          schedule(err instanceof GatewayAuthError && err.retryAfterMs ? err.retryAfterMs : RETRY_MS);
+        },
+      );
+    }, ms);
+  };
+  schedule(refreshDelayMs(tok.expires_in));
+}
+
+/** Page d'approbation d'app.nokker.ai pour une carte de cette machine (on ne connaît que l'hôte, pas le machine_id). */
+export function remoteApprovalUrl(host: string, approvalId: string): string {
+  const u = new URL("/approve", authorizeBase());
+  u.search = new URLSearchParams({ host, approval: approvalId }).toString();
+  return u.href;
+}
+
+const authorizeBase = (): string => (import.meta.env?.VITE_NOKKER_AUTHORIZE_URL as string | undefined) ?? AUTHORIZE_BASE;
+
+const GATEWAY_ERRORS: Record<string, string> = {
+  state: "La connexion n'a pas pu être vérifiée (lien périmé ou ouvert dans un autre onglet). Recharge la page.",
+  denied: "Connexion refusée sur nokker.ai.",
+  exchange: "La connexion a expiré en route. Recharge la page.",
+  unavailable: "Le service de connexion de nokker.ai est indisponible. Réessaie dans un instant.",
+  forbidden: "La connexion à la passerelle a été refusée (erreur de l'application). Recharge la page.",
+};
+
+/** Un seul passage par chargement de page : le code du callback est à usage unique, et React (StrictMode, ou un
+ * remontage) peut relancer l'effet de connexion — le second passage relancerait sinon une connexion en boucle. */
+let gatewayOnce: Promise<GatewayToken | null> | null = null;
+
+/** Adresse au chargement : le store réécrit l'URL (fil courant) dès son montage, avant que la connexion la lise. */
+const BOOT_URL = typeof location === "undefined" ? null : { path: location.pathname, search: location.search };
+
+function gatewayToken(): Promise<GatewayToken | null> {
+  gatewayOnce ??= (async () => {
+    if (BOOT_URL?.path !== "/auth/callback") return refreshToken();
+    const r = await completeCallback(BOOT_URL.search);
+    history.replaceState(null, "", r.back);
+    return r;
+  })();
+  return gatewayOnce;
+}
+
+let redirecting = false;
+
+async function gatewayLogin(client: NokkerClient, host: string): Promise<AuthResult> {
+  try {
+    const tok = await gatewayToken();
+    if (!tok) {
+      if (!redirecting) {
+        redirecting = true;
+        location.assign(await beginLogin(host, location.pathname + location.search + location.hash, sessionStorage, authorizeBase()));
+      }
+      return new Promise<never>(() => undefined); // la page part vers nokker.ai
+    }
+    keepFresh(client, host, tok);
+    return { mode: "gateway", user: tokenSubject(tok.access_token) };
+  } catch (err) {
+    if (err instanceof GatewayAuthError) throw new Error(GATEWAY_ERRORS[err.kind] ?? err.message);
+    throw err;
+  }
+}
+
 export async function restoreLogin(client: NokkerClient, mock: boolean): Promise<AuthResult | null> {
+  const gw = gatewayContext();
+  if (gw) return gatewayLogin(client, gw);
   if (isSecure()) {
     const stored = await readStoredDeviceKey();
     if (stored) return deviceKeyLogin(client, stored);

@@ -80,3 +80,25 @@ describe("bubbleLineModel", () => {
     expect(bubbleLineModel(monitorBubble("idle"), 0).shared).toBe(false);
   });
 });
+
+describe("bubbleLineModel — kind absent de ce client", () => {
+  it("ne plante pas et rend une ligne neutre", () => {
+    const b = { ...monitorBubble("idle"), kind: "hologramme", state: { x: 1 } } as unknown as Bubble;
+    const m = bubbleLineModel(b, 0);
+    expect(m.label).toBe("Bulle");
+    expect(m.title).toBe("Disque host-1 /");
+    expect(m.hint).toBeNull();
+  });
+
+  it("artifact : titre + « page <nom> »", () => {
+    const b = {
+      ...monitorBubble("done"),
+      kind: "artifact",
+      title: "Tarifs",
+      state: { page_id: "pg_0123456789abcdef", path: "tarifs.html", title: "Tarifs", mime: "text/html", version: 2, size: 120, public: false, updated_at: "2026-10-24T00:00:00Z" },
+    } as unknown as Bubble;
+    const m = bubbleLineModel(b, 0);
+    expect(m.label).toBe(BUBBLE_THEME.artifact.label);
+    expect(m.hint).toBe("page tarifs.html");
+  });
+});

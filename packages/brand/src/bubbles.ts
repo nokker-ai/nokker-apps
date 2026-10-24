@@ -1,7 +1,7 @@
 // Couleurs, icônes et libellés des bulles — côté client UNIQUEMENT (BUBBLES.md §2 : « couleurs côté client
 // (packages/brand), jamais dans l'API »). Couleur + icône + libellé ensemble : la couleur n'est jamais le seul signal.
 
-export type BubbleKindName = "monitor" | "search" | "notify" | "timer" | "script" | "media" | "agent_draft" | "approval";
+export type BubbleKindName = "monitor" | "search" | "notify" | "timer" | "script" | "media" | "artifact" | "agent_draft" | "approval";
 
 export interface BubbleKindTheme {
   label: string;
@@ -14,7 +14,7 @@ export interface BubbleKindTheme {
   light: string;
   lightRgb: string;
   /** Nom d'icône (le client fournit le dessin) */
-  icon: "disk" | "search" | "bell" | "timer" | "terminal" | "play" | "bot" | "shield";
+  icon: "disk" | "search" | "bell" | "timer" | "terminal" | "play" | "page" | "bot" | "shield";
 }
 
 export const BUBBLE_THEME: Record<BubbleKindName, BubbleKindTheme> = {
@@ -24,11 +24,26 @@ export const BUBBLE_THEME: Record<BubbleKindName, BubbleKindTheme> = {
   timer: { label: "Timer", color: "#5BD39A", rgb: "91,211,154", light: "#0F7340", lightRgb: "15,115,64", icon: "timer" },
   script: { label: "Script", color: "#6FA8FF", rgb: "111,168,255", light: "#1F5FD1", lightRgb: "31,95,209", icon: "terminal" },
   media: { label: "Aperçu", color: "#FF8BB5", rgb: "255,139,181", light: "#B02A6F", lightRgb: "176,42,111", icon: "play" },
+  artifact: { label: "Page", color: "#C3E26B", rgb: "195,226,107", light: "#4F6B0E", lightRgb: "79,107,14", icon: "page" },
   agent_draft: { label: "Nouvel agent", color: "#5FD4C8", rgb: "95,212,200", light: "#0B6E67", lightRgb: "11,110,103", icon: "bot" },
   approval: { label: "Approbation", color: "#FF6F61", rgb: "255,111,97", light: "#C8313A", lightRgb: "200,49,58", icon: "shield" },
 };
 
-/** Deck Crew (SOKKAN) : bleu = au repos, vert = armé, orange = en marche, rouge = en erreur. `light*` : sur fond clair. */
+/** Thème neutre d'un `kind` que ce client ne connaît pas (le noyau peut en ajouter avant nous). */
+export const UNKNOWN_BUBBLE_THEME: BubbleKindTheme = {
+  label: "Bulle",
+  color: "#9AA4B2",
+  rgb: "154,164,178",
+  light: "#4B5563",
+  lightRgb: "75,85,99",
+  icon: "page",
+};
+
+export function bubbleTheme(kind: string): BubbleKindTheme {
+  return (BUBBLE_THEME as Record<string, BubbleKindTheme | undefined>)[kind] ?? UNKNOWN_BUBBLE_THEME;
+}
+
+/** Deck Crew : bleu = au repos, vert = armé, orange = en marche, rouge = en erreur. `light*` : sur fond clair. */
 export const AGENT_STATUS_THEME = {
   idle: { label: "Au repos", color: "#6FA8FF", rgb: "111,168,255", light: "#1F5FD1", lightRgb: "31,95,209" },
   armed: { label: "Armé", color: "#5BD39A", rgb: "91,211,154", light: "#0F7340", lightRgb: "15,115,64" },

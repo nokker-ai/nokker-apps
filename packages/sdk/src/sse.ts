@@ -107,7 +107,7 @@ export function parseJsonData<T>(frame: RawSSEFrame): T | null {
     return JSON.parse(frame.data) as T;
   } catch {
     // CLIENT-API.md ne documente pas de frame malformé pour /v1/events, mais server.py (route
-    // /v1/chat/completions) tolère déjà ce cas côté proxy Hermes — même doctrine ici : on ignore
+    // /v1/chat/completions) tolère déjà ce cas côté noyau — même doctrine ici : on ignore
     // plutôt que de faire tomber la connexion sur un frame isolé.
     return null;
   }

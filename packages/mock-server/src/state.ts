@@ -3,6 +3,7 @@
  * Reproduit `docs/CLIENT-API.md`, `APPROVALS.md` et `BUBBLES.md` SAUF simplifications
  * explicitement commentées (le vrai serveur de ces routes n'existe pas encore côté noyau).
  */
+import type { MockPage } from "./pages.js";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -117,6 +118,7 @@ export class MockState {
   threads = new Map<string, MockThreadRecord>();
   bubbles = new Map<string, Bubble>();
   agents = new Map<string, Agent>();
+  pages = new Map<string, MockPage>();
   approvals = new Map<string, Approval>();
   /** clé = nonce */
   challenges = new Map<string, MockChallengeRecord>();

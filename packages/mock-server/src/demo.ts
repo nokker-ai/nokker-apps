@@ -17,6 +17,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 import { argsSha256, type Approval, type Bubble, type BubbleKind, type Preview, type SearchResult } from "@nokker-apps/sdk";
 import { backgroundTurn, closeBubble, createBubble, registerAction, registerNotifyAction, shareBubble, transferBubble, updateBubble } from "./bubbles.js";
 import { MockHttpError } from "./errors.js";
+import { createPage, updatePage } from "./pages.js";
 import { MOCK_USER, hexId, normalize, randomId, type MockState } from "./state.js";
 
 export interface DemoIds {
@@ -418,6 +419,23 @@ export function interpretDemo(
       state.later(400, () => sessionMessage(state, threadId, dest.thread.id, raw || say[2]!, { ask }));
       return { reply: `Message transmis à la session ${dest.thread.title}${ask ? " ; elle va répondre ici" : ""}.` };
     }
+  }
+
+  // 2b) Page (§10) : « crée/fais une page <titre> » → bulle artifact ; « modifie la page » → version suivante.
+  const pg = n.match(/^(?:peux-tu |tu peux )?(?:cree|creer|fais|faire|ecris|ecrire|genere)\s+(?:moi\s+)?(?:une?\s+)?page(?:\s+(?:web|html))?\s*(.*)$/);
+  if (pg) {
+    const raw = text.replace(/^.*?page(?:\s+(?:web|html))?\s*(?:de |sur |pour |:)?\s*/i, "").trim();
+    const title = capitalize(raw || "Page de démo").slice(0, 60);
+    const slug = normalize(title).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "page";
+    return {
+      reply: `Je prépare la page « ${title} » (${slug}.html) : elle s'affiche dans la bulle, privée tant que tu ne la publies pas.`,
+      after: () => void createPage(state, threadId, `${slug}.html`, title),
+    };
+  }
+  if (/^(?:modifie|mets a jour|change|refais)\s+(?:la\s+)?page/.test(n)) {
+    const page = [...state.pages.values()].filter((p) => p.thread_id === threadId).pop();
+    if (!page) return { reply: "Je n'ai pas encore de page dans cette session : demande-m'en une (« crée une page … »)." };
+    return { reply: `Je mets à jour « ${page.title} » : la bulle se rafraîchit toute seule.`, after: () => updatePage(state, page.id) };
   }
 
   // 3) Création d'agent → carte agent_draft

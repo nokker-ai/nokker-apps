@@ -81,7 +81,7 @@ export interface SessionMessageResult {
 // §2 — Bulle
 // ---------------------------------------------------------------------------
 
-export const BUBBLE_KINDS = ["monitor", "search", "notify", "timer", "script", "media", "agent_draft", "approval"] as const;
+export const BUBBLE_KINDS = ["monitor", "search", "notify", "timer", "script", "media", "artifact", "agent_draft", "approval"] as const;
 export type BubbleKind = (typeof BUBBLE_KINDS)[number];
 
 export const BUBBLE_STATUSES = ["idle", "working", "done", "failed"] as const;
@@ -170,6 +170,31 @@ export interface MediaState {
   preview?: Preview | null;
 }
 
+/** BUBBLES.md §10 — page HTML autonome écrite par une session (`page_create`). Jamais de HTML dans le state. */
+export interface ArtifactState {
+  /** `pg_` + 16 hex, jamais dérivé du chemin ; une page par (fil, chemin). */
+  page_id: string;
+  path: string;
+  title: string;
+  /** `text/html` seulement en v1. */
+  mime: string;
+  /** Version de la page (copie gardée par le noyau), distincte du `version` de la bulle. */
+  version: number;
+  size: number;
+  /** Publique : choix explicite page par page ; privée sinon. */
+  public: boolean;
+  updated_at: string;
+}
+
+/** `POST /v1/pages/{id}/link` (local) ou `pages-token` de nokker.ai (passerelle) — lien signé d'une page. */
+export interface PageLink {
+  url: string;
+  expires_at: string;
+  /** Adresse publique stable (`https://<nom>--pages.nokker.app/<page_id>`), présente seulement si la page est
+   * publique — à copier et partager. Proposé à dev le 24.10 (§10.3). */
+  public_url?: string;
+}
+
 export interface NotifyState {
   from_thread: string;
   from_title: string;
@@ -203,6 +228,7 @@ export interface BubbleStateByKind {
   timer: TimerState;
   script: ScriptState;
   media: MediaState;
+  artifact: ArtifactState;
   agent_draft: AgentDraftState;
   approval: ApprovalBubbleState;
 }
@@ -294,7 +320,7 @@ export type BubbleActionResult =
 // Agents (onglet Crew) — `agent.created` est au contrat (§2, §6) ; la LISTE ne l'est pas encore.
 // ---------------------------------------------------------------------------
 
-/** Couleur d'état côté client (deck SOKKAN) : idle = bleu, armed = vert, running = orange, error = rouge. */
+/** Couleur d'état côté client (deck Crew) : idle = bleu, armed = vert, running = orange, error = rouge. */
 export type AgentStatus = "idle" | "armed" | "running" | "error";
 
 /** Agent du Crew — forme du noyau (BUBBLES.md §9.4). `status` vaut toujours `armed` en P1 (pas d'exécution
@@ -451,11 +477,15 @@ export function summarizeState(bubble: Bubble): string {
       return `${bubble.state.command}${bubble.state.host ? ` sur ${bubble.state.host}` : ""} : ${bubble.state.log_tail.slice(-3).join(" | ")}`;
     case "media":
       return `${bubble.state.mime} ${bubble.state.url}`;
+    case "artifact":
+      return `page « ${bubble.state.title} » ${bubble.state.path} (v${bubble.state.version})`;
     case "notify":
       return `${bubble.state.from_title} : ${bubble.state.text}`;
     case "agent_draft":
       return `${bubble.state.name} (${bubble.state.role}, ${bubble.state.model}) outils ${bubble.state.tools.join(", ")}`;
     case "approval":
       return `approbation ${bubble.state.approval_id}`;
+    default:
+      return `bulle « ${(bubble as { kind: string }).kind} »`;
   }
 }

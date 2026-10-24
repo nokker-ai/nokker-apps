@@ -4,7 +4,7 @@
  * n'a pas de `backdrop-filter`/glow réel, on simule par un spinner tournant pendant que la bulle
  * travaille (seul signal dynamique disponible en texte).
  */
-import { BUBBLE_THEME, type BubbleKindTheme } from "@nokker-apps/brand";
+import { bubbleTheme, type BubbleKindTheme } from "@nokker-apps/brand";
 import type { Bubble } from "@nokker-apps/sdk";
 
 export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
@@ -18,6 +18,7 @@ const ICON_GLYPH: Record<BubbleKindTheme["icon"], string> = {
   timer: "◷",
   terminal: "▶",
   play: "►",
+  page: "▤",
   bot: "✦",
   shield: "◈",
 };
@@ -49,7 +50,7 @@ function statusGlyphFor(status: Bubble["status"], spinnerFrame: number): string 
 
 /** `spinnerFrame` : compteur qui avance tant qu'au moins une bulle `working` existe (voir `App.tsx`). */
 export function bubbleLineModel(bubble: Bubble, spinnerFrame: number): BubbleLineModel {
-  const theme = BUBBLE_THEME[bubble.kind];
+  const theme = bubbleTheme(bubble.kind);
   return {
     id: bubble.id,
     glyph: ICON_GLYPH[theme.icon],
@@ -57,7 +58,12 @@ export function bubbleLineModel(bubble: Bubble, spinnerFrame: number): BubbleLin
     label: theme.label,
     title: bubble.title,
     statusGlyph: statusGlyphFor(bubble.status, spinnerFrame),
-    hint: bubble.kind === "notify" ? `/goto ${bubble.state.from_thread}` : null,
+    hint:
+      bubble.kind === "notify"
+        ? `/goto ${bubble.state.from_thread}`
+        : bubble.kind === "artifact"
+          ? `page ${bubble.state.path}`
+          : null,
     shared: bubble.shared === true,
   };
 }

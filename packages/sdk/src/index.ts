@@ -7,4 +7,5 @@ export * from "./events.js";
 export * from "./client.js";
 export * from "./signing.js";
 export * from "./account.js";
+export * from "./link.js";
 export * from "./permissions.js";

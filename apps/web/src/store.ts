@@ -45,6 +45,8 @@ export interface NokkerStore {
   retryAccess(): void;
   mock: boolean;
   authMode: AuthResult["mode"] | null;
+  /** Signe un défi avec l'appareil de ce navigateur (approbations à distance, page `/approve/…`). */
+  signDecision: AuthResult["signDecision"] | null;
   threads: Thread[];
   current: Thread | null;
   messages: ThreadMessage[];
@@ -489,6 +491,7 @@ export function useNokker(): NokkerStore {
     retryAccess,
     mock,
     authMode: auth?.mode ?? null,
+    signDecision: auth?.signDecision ?? null,
     user: auth?.user ?? null,
     threads,
     current: threads.find((t) => t.id === currentId) ?? null,

@@ -64,6 +64,8 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/v1": { target, changeOrigin: true },
+      // Routes du relais de la passerelle (mock seulement : en vrai, le relais les sert lui-même).
+      "/_gw": { target, changeOrigin: true },
       "/healthz": { target, changeOrigin: true },
     },
   },

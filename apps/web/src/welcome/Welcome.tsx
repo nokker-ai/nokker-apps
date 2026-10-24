@@ -3,6 +3,7 @@ import { NokkerApiError } from "@nokker-apps/sdk";
 import { BRAND } from "@nokker-apps/brand";
 import { loginWithEmailCode, loginWithGoogleTicket } from "../auth.js";
 import { t, type Lang } from "../onboarding/i18n.js";
+import { takeLinkReturn } from "../link/code.js";
 import { InstallCard } from "../pwa/InstallCard.js";
 import type { NokkerStore } from "../store.js";
 
@@ -47,7 +48,11 @@ export function Welcome({ client, access, status, retryAccess, lang: L }: Props)
     if (back.ticket) {
       setBusy(true);
       loginWithGoogleTicket(client, back.ticket)
-        .then(retryAccess)
+        .then(() => {
+          const to = takeLinkReturn();
+          if (to) location.replace(to);
+          else retryAccess();
+        })
         .catch((err) => setError(t(L, failureKey(err))))
         .finally(() => setBusy(false));
     } else if (back.error) {

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Bubble as BubbleT, TransferMode } from "@nokker-apps/sdk";
-import { BUBBLE_THEME } from "@nokker-apps/brand";
+import { bubbleTheme } from "@nokker-apps/brand";
 import { useStore } from "../context.js";
 import { Icon } from "../icons.js";
 import { statusLabel } from "../bubbles/kinds.js";
@@ -360,7 +360,7 @@ export function BubbleLayer({
         {chips.length ? (
           <div className="chip-row" aria-label="Bulles réduites">
             {chips.map(({ b }) => {
-              const t = BUBBLE_THEME[b.kind];
+              const t = bubbleTheme(b.kind);
               return (
                 <button
                   key={b.id}
