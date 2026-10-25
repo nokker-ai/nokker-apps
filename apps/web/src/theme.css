@@ -381,6 +381,8 @@ button:disabled {
   align-items: center;
   gap: 8px;
   color: var(--text);
+  /* Un titre sans espace (l'URL du dépôt d'une session de code §7.28) se coupe au lieu d'élargir le tiroir. */
+  overflow-wrap: anywhere;
 }
 .session-working,
 .live-label {
@@ -452,6 +454,14 @@ button:disabled {
 .tabs-main {
   display: flex;
   gap: 6px;
+  /* Au téléphone, les onglets défilent au lieu de sortir de l'écran (inatteignables sinon). */
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs-main > .tab-main {
+  flex-shrink: 0;
 }
 .tab-main {
   height: 44px;
@@ -1442,7 +1452,8 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  z-index: 90;
+  /* Au-dessus du voile d'un popout (100) : le résultat d'une action lancée depuis le popout doit rester lisible. */
+  z-index: 110;
   pointer-events: none;
   width: min(460px, calc(100% - 32px));
 }
@@ -1540,6 +1551,11 @@ button:disabled {
   border-radius: 14px;
   background: var(--popover);
   border: 1px solid var(--line-strong);
+}
+/* La croix déborde du coin de la ligne : la liste lui laisse la place, sans barre de défilement horizontale. */
+.app.narrow .drawer-list {
+  overflow-x: hidden;
+  padding: 4px 2px 0;
 }
 .app.narrow .session-row {
   width: 48px;
@@ -1846,7 +1862,7 @@ button:disabled {
    visible seulement sur la session courante (tactile) ou au survol / focus (souris, clavier). */
 .app.narrow .session-wrap .session-del {
   top: -4px;
-  right: -4px;
+  right: -2px;
   width: 20px;
   height: 20px;
   min-width: 0;

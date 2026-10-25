@@ -426,6 +426,32 @@ export interface Agent {
   arm_approval_id?: string | null;
   /** Créé depuis un pack (§7.30) : le pack et le modèle. */
   origin?: { pack: string; template: string } | null;
+  /** Relève du courrier d'un agent `mail:<filtre>` (BUBBLES §9.5 « Courrier ») ; absent hors déclencheur mail ou sans
+   * relève sur l'instance. Jamais d'identifiant. */
+  mail_watch?: AgentMailWatch | null;
+}
+
+/** `mail_watch` (`MailWatcher.describe`) : `off` = agent au repos ; `waiting` = armé, première relève pas encore faite ;
+ * `ok` / `error` = dernière relève, avec ses dates et ce qui attend. */
+export interface AgentMailWatch {
+  state: "off" | "waiting" | "ok" | "error";
+  folder: string;
+  poll_s: number;
+  max_runs_per_hour: number;
+  runs_last_hour?: number;
+  /** Messages nouveaux qui attendent le prochain passage (un passage vivant, ou le plafond horaire). */
+  pending?: number;
+  /** Pourquoi ils attendent. */
+  held?: string | null;
+  /** Code et message caviardés de la dernière erreur de relève. */
+  error?: string | null;
+  last_poll_at?: string | null;
+  last_ok_at?: string | null;
+  next_poll_at?: string | null;
+  uidvalidity?: number | null;
+  /** Dossier reconstruit (UIDVALIDITY changée) : nouvelle ligne de base, aucun passage. */
+  resync_at?: string | null;
+  last_run_id?: string | null;
 }
 
 export interface AgentRun {
@@ -575,9 +601,13 @@ export const BUBBLE_EVENT_TYPES = [
 /** Applique un événement de bulle à une liste locale (fil courant), sans muter l'entrée. Les
  * bulles `notify` sans fil (`thread_id: null`) sont gardées : elles s'affichent dans le fil courant. */
 export function applyBubbleEvent(list: Bubble[], event: BubbleEvent, currentThread: string | null): Bubble[] {
+  // Une bulle d'un fil de sous-agent (`<fil>/sa-<id>`, ses cartes) se montre dans le fil racine (§7.22, §7.28.14).
   const visible = (b: Bubble): boolean =>
     b.closed_at === null &&
-    (b.thread_id === null || b.thread_id === currentThread || (currentThread !== null && b.shared_with.threads.includes(currentThread)));
+    (b.thread_id === null ||
+      b.thread_id === currentThread ||
+      (currentThread !== null && b.thread_id.startsWith(`${currentThread}/sa-`)) ||
+      (currentThread !== null && b.shared_with.threads.includes(currentThread)));
   switch (event.type) {
     case "bubble.created":
     case "bubble.updated": {

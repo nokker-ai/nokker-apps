@@ -7,16 +7,19 @@ import React, { useCallback, useEffect, useState } from "react";
 import { AGENT_STATUS_THEME } from "@nokker-apps/brand";
 import { NokkerApiError, type DeckAgent, type DeckMachine, type DeckView, type MoveMissing, type NokkerClient } from "@nokker-apps/sdk";
 import { Icon } from "../icons.js";
-import { SESSION_STATE_LABEL, ageLabel, agentBreathes, loadSummary, moveTargets } from "./deckModel.js";
+import { ageLabel, agentBreathes, loadSummary, moveTargets, sessionStateLabel } from "./deckModel.js";
+import { cw, statusLabel, type Lang } from "./i18n.js";
 
 const REFRESH_MS = 15_000;
 
 export function MachinesDeck({
   client,
+  lang,
   tick,
   toast,
 }: {
   client: NokkerClient;
+  lang: Lang;
   /** Change à chaque événement d'agent : relire le deck. */
   tick: string;
   toast(text: string, tone?: "ok" | "error"): void;
@@ -40,31 +43,31 @@ export function MachinesDeck({
     return () => clearInterval(t);
   }, [load, tick]);
 
-  if (!deck) return <p className="fine">{failed ? "Le deck des machines n'a pas pu se charger." : "Chargement du deck…"}</p>;
+  if (!deck) return <p className="fine">{failed ? cw(lang, "deckFailed") : cw(lang, "deckLoading")}</p>;
 
   return (
     <>
       <div className="mdeck">
         {deck.machines.map((m) => (
-          <MachineColumn key={m.machine_id} m={m} onMove={setMoving} />
+          <MachineColumn key={m.machine_id} m={m} lang={lang} onMove={setMoving} />
         ))}
         {deck.web.agents.length || deck.web.engine ? (
           <section className="mdeck-col" aria-label="nokker.ai">
             <header className="mdeck-head">
               <span className="mc-dot on" aria-hidden="true" />
               <strong>nokker.ai</strong>
-              <span className="fine">{deck.web.engine ? "hébergé" : "moteur éteint"}</span>
+              <span className="fine">{deck.web.engine ? cw(lang, "hosted") : cw(lang, "engineOff")}</span>
             </header>
-            <AgentList agents={deck.web.agents} onMove={setMoving} />
+            <AgentList agents={deck.web.agents} lang={lang} onMove={setMoving} />
           </section>
         ) : null}
         {deck.auto.agents.length ? (
-          <section className="mdeck-col" aria-label="Placement automatique">
+          <section className="mdeck-col" aria-label={cw(lang, "autoAria")}>
             <header className="mdeck-head">
-              <strong>Automatique</strong>
-              <span className="fine">la machine la moins chargée, à chaque passage</span>
+              <strong>{cw(lang, "auto")}</strong>
+              <span className="fine">{cw(lang, "autoNote")}</span>
             </header>
-            <AgentList agents={deck.auto.agents} onMove={setMoving} machines={deck.machines} />
+            <AgentList agents={deck.auto.agents} lang={lang} onMove={setMoving} machines={deck.machines} />
           </section>
         ) : null}
       </div>
@@ -73,9 +76,10 @@ export function MachinesDeck({
           agent={moving}
           machines={deck.machines}
           client={client}
+          lang={lang}
           onClose={() => setMoving(null)}
           onDone={(name, to) => {
-            toast(`« ${name} » déménage vers ${to}.`, "ok");
+            toast(cw(lang, "moving", { name, to }), "ok");
             setMoving(null);
             void load();
           }}
@@ -85,14 +89,14 @@ export function MachinesDeck({
   );
 }
 
-function MachineColumn({ m, onMove }: { m: DeckMachine; onMove: (a: DeckAgent) => void }): React.ReactElement {
-  const load = loadSummary(m.load);
+function MachineColumn({ m, lang, onMove }: { m: DeckMachine; lang: Lang; onMove: (a: DeckAgent) => void }): React.ReactElement {
+  const load = loadSummary(m.load, lang);
   return (
-    <section className={`mdeck-col ${m.online ? "" : "offline"}`} aria-label={`Machine ${m.name}, ${m.online ? "en ligne" : "hors ligne"}`}>
+    <section className={`mdeck-col ${m.online ? "" : "offline"}`} aria-label={cw(lang, "machineAria", { name: m.name, state: cw(lang, m.online ? "online" : "offline") })}>
       <header className="mdeck-head">
         <span className={`mc-dot ${m.online ? "on" : ""}`} aria-hidden="true" />
         <strong>{m.name}</strong>
-        <span className="fine">{m.online ? "en ligne" : `hors ligne · ${ageLabel(m.load_age_s)}`}</span>
+        <span className="fine">{m.online ? cw(lang, "online") : cw(lang, "offlineSeen", { age: ageLabel(m.load_age_s, lang) })}</span>
       </header>
       {load ? (
         <div className="mdeck-load" title={load.text}>
@@ -106,27 +110,27 @@ function MachineColumn({ m, onMove }: { m: DeckMachine; onMove: (a: DeckAgent) =
           {m.strong_approvals.map((a) => (
             <li key={a.approval_id}>
               <a className="btn btn-brass" href={a.url}>
-                <Icon name="shield" size={14} /> Carte forte à signer
+                <Icon name="shield" size={14} /> {cw(lang, "strongCard")}
               </a>
             </li>
           ))}
         </ul>
       ) : m.pending_approvals ? (
-        <p className="fine">{m.pending_approvals} carte(s) en attente sur la machine</p>
+        <p className="fine">{cw(lang, "pendingCards", { n: m.pending_approvals })}</p>
       ) : null}
       {m.sessions.length ? (
-        <ul className="mdeck-sessions" aria-label="Sessions">
+        <ul className="mdeck-sessions" aria-label={cw(lang, "sessionsAria")}>
           {m.sessions.map((s) => (
             <li key={s.thread_id} className={`mdeck-session st-${s.state}`}>
               <span className="mdeck-session-name">{s.title ?? s.name}</span>
-              <span className="fine">{SESSION_STATE_LABEL[s.state]}</span>
+              <span className="fine">{sessionStateLabel(s.state, lang)}</span>
             </li>
           ))}
         </ul>
       ) : m.online ? (
-        <p className="fine">Aucune session ouverte</p>
+        <p className="fine">{cw(lang, "noSession")}</p>
       ) : null}
-      <AgentList agents={m.agents} onMove={onMove} />
+      <AgentList agents={m.agents} lang={lang} onMove={onMove} />
     </section>
   );
 }
@@ -142,12 +146,13 @@ function Meter({ label, pct }: { label: string; pct: number }): React.ReactEleme
   );
 }
 
-function AgentList({ agents, onMove, machines = [] }: { agents: DeckAgent[]; onMove: (a: DeckAgent) => void; machines?: DeckMachine[] }): React.ReactElement | null {
+function AgentList({ agents, lang, onMove, machines = [] }: { agents: DeckAgent[]; lang: Lang; onMove: (a: DeckAgent) => void; machines?: DeckMachine[] }): React.ReactElement | null {
   if (!agents.length) return null;
   return (
     <div className="mdeck-agents">
       {agents.map((a) => {
         const th = AGENT_STATUS_THEME[a.status] ?? AGENT_STATUS_THEME.paused;
+        const label = statusLabel(lang, a.status);
         const where = a.live_run?.machine_id ? machines.find((m) => m.machine_id === a.live_run!.machine_id)?.name : null;
         return (
           <button
@@ -156,16 +161,16 @@ function AgentList({ agents, onMove, machines = [] }: { agents: DeckAgent[]; onM
             className={`agent-card mini s-${a.status} ${agentBreathes(a) ? "breathing" : ""}`}
             style={{ "--s-l": th.light, "--srgb-l": th.lightRgb, "--s-d": th.color, "--srgb-d": th.rgb } as React.CSSProperties}
             onClick={() => onMove(a)}
-            aria-label={`Agent ${a.name}, ${th.label}${a.defined_at === "machine" ? ", posé sur la machine" : ""} — déménager`}
+            aria-label={cw(lang, "agentAria", { name: a.name, state: label }) + (a.defined_at === "machine" ? `, ${cw(lang, "postedOnMachine")}` : "") + cw(lang, "moveAria")}
           >
             <span className="agent-top">
               <Icon name="bot" size={15} />
               <span className="agent-card-name">{a.name}</span>
             </span>
             <span className="fine">
-              {th.label}
-              {where ? ` · tourne sur ${where}` : ""}
-              {a.defined_at === "machine" ? " · posé sur la machine" : ""}
+              {label}
+              {where ? cw(lang, "runsOn", { where }) : ""}
+              {a.defined_at === "machine" ? ` · ${cw(lang, "postedOnMachine")}` : ""}
             </span>
           </button>
         );
@@ -178,16 +183,18 @@ function MoveDialog({
   agent,
   machines,
   client,
+  lang,
   onClose,
   onDone,
 }: {
   agent: DeckAgent;
   machines: DeckMachine[];
   client: NokkerClient;
+  lang: Lang;
   onClose: () => void;
   onDone: (name: string, to: string) => void;
 }): React.ReactElement {
-  const targets = moveTargets(machines, agent.placement?.machine ?? null);
+  const targets = moveTargets(machines, agent.placement?.machine ?? null, lang);
   const [to, setTo] = useState(targets[0]?.to ?? "web");
   const [busy, setBusy] = useState(false);
   const [missing, setMissing] = useState<MoveMissing[] | null>(null);
@@ -209,24 +216,24 @@ function MoveDialog({
     } catch (e) {
       const body = e instanceof NokkerApiError ? (e.body as { error?: { message?: string; missing?: MoveMissing[] } } | undefined) : undefined;
       if (body?.error?.missing?.length) setMissing(body.error.missing);
-      else setErr(body?.error?.message ?? "Le déménagement a échoué.");
+      else setErr(body?.error?.message ?? cw(lang, "moveFailed"));
     } finally {
       setBusy(false);
     }
   };
   return (
     <div className="popout-backdrop" onClick={onClose}>
-      <div className="popout" role="dialog" aria-modal="true" aria-label={`Déménager ${agent.name}`} onClick={(e) => e.stopPropagation()}>
+      <div className="popout" role="dialog" aria-modal="true" aria-label={cw(lang, "moveTitleAria", { name: agent.name })} onClick={(e) => e.stopPropagation()}>
         <header className="popout-head">
           <Icon name="bot" size={20} />
-          <h3>Déménager « {agent.name} »</h3>
-          <button type="button" className="icon-btn" aria-label="Fermer" onClick={onClose}>
+          <h3>{cw(lang, "moveTitle", { name: agent.name })}</h3>
+          <button type="button" className="icon-btn" aria-label={cw(lang, "close")} onClick={onClose}>
             <Icon name="close" />
           </button>
         </header>
         <div className="popout-body">
           <label className="fine" htmlFor="mv-to">
-            Vers
+            {cw(lang, "moveTo")}
           </label>
           <select id="mv-to" value={to} onChange={(e) => setTo(e.target.value)}>
             {targets.map((t) => (
@@ -235,10 +242,10 @@ function MoveDialog({
               </option>
             ))}
           </select>
-          <p className="fine">L'historique des passages reste là où ils ont tourné.</p>
+          <p className="fine">{cw(lang, "moveNote")}</p>
           {missing ? (
             <div role="alert">
-              <p className="error">Il manque, à destination :</p>
+              <p className="error">{cw(lang, "missing")}</p>
               <ul className="mdeck-missing">
                 {missing.map((x, i) => (
                   <li key={i}>{x.message}</li>
@@ -253,10 +260,10 @@ function MoveDialog({
           ) : null}
           <div className="crew-actions" style={{ padding: "12px 0 0" }}>
             <button type="button" className="btn btn-brass" disabled={busy} onClick={() => void go()}>
-              {busy ? "Vérification…" : "Déménager"}
+              {busy ? cw(lang, "checking") : cw(lang, "move")}
             </button>
             <button type="button" className="btn btn-ghost" onClick={onClose}>
-              Annuler
+              {cw(lang, "cancel")}
             </button>
           </div>
         </div>

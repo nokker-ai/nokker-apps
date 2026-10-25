@@ -50,8 +50,8 @@ import type {
 } from "./onboarding.js";
 import type {
   AccountDeleteResult,
-  AccountExportStart,
-  AccountExportStatus,
+  AccountExport,
+  AccountExportFile,
   AccountConsentResult,
   AccountInfo,
   AccountUsage,
@@ -102,6 +102,7 @@ import type {
 } from "./local-setup.js";
 import type { Household, HouseholdApproval, HouseholdAttestation, HouseholdConsentRecord, HouseholdConsentText, HouseholdInvitation, HouseholdMember, HouseholdNote, HouseholdPolicy, HouseholdProfile, HouseholdQuarantined, ReceivedHouseholdInvitation } from "./household.js";
 import type { PatchThreadRequest } from "./bubbles.js";
+import type { CodeCredential, CodeSession, CodeSessionClosed, CodeSessionCreate, CodeSessionList, CodeSkillsTrusted, CodeToolName } from "./code-sessions.js";
 import type {
   Agent,
   AgentRun,
@@ -139,6 +140,20 @@ export class NokkerApiError extends Error {
   get serverMessage(): string {
     const m = (this.body as { error?: { message?: unknown } } | undefined)?.error?.message;
     return typeof m === "string" ? m : this.message;
+  }
+
+  /** Code d'erreur machine : `{error: "<code>"}` (chaîne) ou `{error: {code}}`. */
+  get code(): string | undefined {
+    const e = (this.body as { error?: unknown } | undefined)?.error;
+    if (typeof e === "string") return e;
+    const c = (e as { code?: unknown } | null | undefined)?.code;
+    return typeof c === "string" ? c : undefined;
+  }
+
+  /** 429 `export_limit` : instant ISO où une nouvelle demande sera acceptée. */
+  get retryAt(): string | undefined {
+    const r = (this.body as { retry_at?: unknown } | undefined)?.retry_at;
+    return typeof r === "string" ? r : undefined;
   }
 
   /** 409 `if_version` périmé : version courante de la bulle (noyau §8), pour rejouer le PATCH. */
@@ -929,15 +944,33 @@ export class NokkerClient {
     return this.request<{ revoked: true }>(`/v1/link/machines/${encodeURIComponent(machineId)}/revoke`, { method: "POST" });
   }
 
-  /** Lance l'export (asynchrone, au plus un par jour : 429 `rate` sinon). */
-  async startAccountExport(): Promise<AccountExportStart> {
-    return this.request<AccountExportStart>("/v1/account/export", { method: "POST" });
+  /** Construit l'export tout de suite (202 `ready`) ; au plus un par 24 h : 429 `export_limit` + `retry_at`. */
+  async startAccountExport(): Promise<AccountExport> {
+    return this.request<AccountExport>("/v1/account/export", { method: "POST" });
   }
 
-  async getAccountExport(id: string): Promise<AccountExportStatus> {
-    return this.request<AccountExportStatus>(`/v1/account/exports/${encodeURIComponent(id)}`);
+  async getAccountExport(id: string): Promise<AccountExport> {
+    return this.request<AccountExport>(`/v1/account/exports/${encodeURIComponent(id)}`);
   }
 
+  /** Télécharge le JSON de l'export (route authentifiée : un simple lien ne porterait pas le jeton). 410 `export_expired` après 24 h. */
+  async downloadAccountExport(id: string): Promise<AccountExportFile> {
+    const path = `/v1/account/exports/${encodeURIComponent(id)}/download`;
+    const res = await this.fetchImpl(`${this.baseUrl}${path}`, { headers: this.headers() });
+    const text = await readAllText(res);
+    if (!res.ok) {
+      let parsed: unknown = text;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        /* corps non JSON conservé tel quel */
+      }
+      throw new NokkerApiError(`${path} → ${res.status}`, res.status, parsed);
+    }
+    return { filename: `nokker-export-${id}.json`, json: text };
+  }
+
+  /** Pose la carte d'approbation forte de suppression (202). L'effacement n'a lieu qu'une fois la carte accordée. */
   async deleteAccount(): Promise<AccountDeleteResult> {
     return this.request<AccountDeleteResult>("/v1/account/delete", { method: "POST" });
   }
@@ -1033,6 +1066,42 @@ export class NokkerClient {
     body: { member: string; decision: "approve" | "reject"; challenge: string; device_id: string; signature?: string; init_data?: string; webauthn?: { client_data_json: string; authenticator_data: string; signature: string } },
   ): Promise<HouseholdApproval["approval"]> {
     return this.request<HouseholdApproval["approval"]>(`/v1/household/approvals/${encodeURIComponent(id)}/decision`, { method: "POST", body: JSON.stringify(body) });
+  }
+
+  // ── LOKKAL §7.28 : sessions de code d'un compte. Drapeau `code.enabled` éteint = 404 partout ; le jeton local : 403
+  // `account_required`.
+  async listCodeSessions(): Promise<CodeSessionList> {
+    return this.request<CodeSessionList>("/v1/code/sessions");
+  }
+  /** 409 `session_limit` ; 400 `bad_mode`, `bad_repo`, `host_not_allowed`… ; 502 `clone_failed` ; 503 `git_missing`. */
+  async createCodeSession(body: CodeSessionCreate = {}): Promise<CodeSession> {
+    return this.request<CodeSession>("/v1/code/sessions", { method: "POST", body: JSON.stringify(body) });
+  }
+  async getCodeSession(id: string): Promise<CodeSession> {
+    return this.request<CodeSession>(`/v1/code/sessions/${encodeURIComponent(id)}`);
+  }
+  /** Ferme (bac à sable libéré, espace gardé) ; `purge` efface aussi l'espace de travail et les points de retour. */
+  async closeCodeSession(id: string, purge = false): Promise<CodeSessionClosed> {
+    return this.request<CodeSessionClosed>(`/v1/code/sessions/${encodeURIComponent(id)}${purge ? "?purge=1" : ""}`, { method: "DELETE" });
+  }
+  /** Confiance du propriétaire à l'arbre `.nokker/skills` de la session, pour CETTE empreinte (lue dans `skills.sha256`). */
+  async trustCodeSessionSkills(id: string, sha256: string): Promise<CodeSkillsTrusted> {
+    return this.request<CodeSkillsTrusted>(`/v1/code/sessions/${encodeURIComponent(id)}/skills/trust`, { method: "POST", body: JSON.stringify({ sha256 }) });
+  }
+  /** Points de retour de la session, hors tour, avec les portes de la boucle : 200 `{content, is_error}`, ou 202
+   * `{approval_id}` (une restauration : carte forte, décidée par `/v1/approvals/{id}/decision`). 409 `turn_running`. */
+  async callCodeSessionTool(id: string, name: CodeToolName, args: Record<string, unknown> = {}): Promise<LocalToolOutcome> {
+    return this.request<LocalToolOutcome>(`/v1/code/sessions/${encodeURIComponent(id)}/tools/call`, { method: "POST", body: JSON.stringify({ name, arguments: args }) });
+  }
+  async listCodeCredentials(): Promise<{ credentials: CodeCredential[] }> {
+    return this.request<{ credentials: CodeCredential[] }>("/v1/code/credentials");
+  }
+  /** Valeur `jeton` ou `utilisateur:jeton`, en écriture seule : rien ne la relit. */
+  async putCodeCredential(name: string, value: string): Promise<{ name: string; set: true }> {
+    return this.request<{ name: string; set: true }>(`/v1/code/credentials/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify({ value }) });
+  }
+  async deleteCodeCredential(name: string): Promise<{ name: string; deleted: true }> {
+    return this.request<{ name: string; deleted: true }>(`/v1/code/credentials/${encodeURIComponent(name)}`, { method: "DELETE" });
   }
 
   async billingCheckout(plan: string): Promise<{ url: string }> {

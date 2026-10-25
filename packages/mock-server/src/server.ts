@@ -50,12 +50,13 @@ import { approvalBubble, verifyImageSignature, fakePreview, interpretDemo, previ
 import { BUBBLE_KINDS, BUBBLE_STATUSES, type BubbleKind } from "@nokker-apps/sdk";
 import { verifyWebAuthnAssertion } from "./webauthn.js";
 import { handleAccount } from "./account.js";
-import { handleAgents } from "./agents.js";
+import { handleAgents, handleCrewMailDev } from "./agents.js";
 import { handleTeam } from "./team.js";
 import { handleHousehold } from "./household.js";
 import { handleLocalMirror } from "./mirror.js";
 import { handleLocalMail } from "./local-mail.js";
 import { handlePacks } from "./packs.js";
+import { handleCode } from "./code.js";
 import { handleSso, handleSsoPublic, type SsoSession } from "./sso.js";
 import { handleAlertReceive, handleOps, handleOpsDev } from "./ops.js";
 import { handleLocalMachine, handleLocalMachineDev, handlePreview } from "./local-machine.js";
@@ -69,9 +70,10 @@ export const MOCK_TOTP_CODE = "000000";
 const LOGIN_CHALLENGE_AUD = "nokker-login";
 const APPROVAL_CHALLENGE_AUD = "nokker-approval";
 
-function sendJson(res: ServerResponse, status: number, obj: unknown): void {
+function sendJson(res: ServerResponse, status: number, obj: unknown, extra: Record<string, string> = {}): void {
   const body = Buffer.from(JSON.stringify(obj, null, 0), "utf-8");
   res.writeHead(status, {
+    ...extra,
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": body.length,
     "Access-Control-Allow-Origin": "*",
@@ -386,6 +388,8 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   if (await handleLocalMachineDev(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleLocalMirror(state, authUser(state, req), method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleOpsDev(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleCrewMailDev(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (path === "/v1/dev/code-mock" && (await handleCode(state, null, method, url, readBody, (st, obj) => sendJson(res, st, obj)))) return;
   // X18 : réception d'alertes SANS session (signée HMAC ou Bearer selon la source) ; le corps brut sert à la signature.
   if (
     await handleAlertReceive(state, method, path, req.headers, async () => {
@@ -403,13 +407,14 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     return void sendJson(res, 401, { error: { message: "unauthorized" } });
   }
 
-  if (await handleAccount(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleAccount(state, method, path, readBody, (st, obj, h) => sendJson(res, st, obj, h))) return;
   if (user && (await handleLink(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj)))) return;
   if (await handleGatewayAuthorize(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleLocalMachine(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleLocalMail(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (user && (await handleSso(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj)))) return;
   if (await handlePacks(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleCode(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleHousehold(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleTeam(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj), sessionDevice(state, req))) return;
   if (await handleOps(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
@@ -792,7 +797,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     const body = await readJsonBody(req);
     // Appareil créé par code mail : il se connecte mais ne décide jamais (même corps que le noyau).
     if (state.devices.get(String(body.device_id ?? ""))?.approved_via === "email") {
-      return void sendJson(res, 403, { error: { message: "strong_device_required" } });
+      return void sendJson(res, 403, { error: { message: "strong_device_required", code: "strong_device_required" } });
     }
     const approval = state.approvals.get(approvalDecisionMatch[1]!);
     if (!approval) return void sendJson(res, 404, { error: { message: "approbation inconnue" } });
@@ -833,7 +838,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
 
     if (typeof body.totp === "string") {
       if (approval.strength === ("strong" as ApprovalStrength)) {
-        return void sendJson(res, 403, { error: { message: "TOTP refusé pour une approbation strong — APPROVALS.md §1" } });
+        return void sendJson(res, 403, { error: { message: "TOTP refusé pour une approbation strong — APPROVALS.md §1", code: "strong_device_required" } });
       }
       const totpUser = String(body.totp_user ?? body.user ?? "").trim();
       if (!totpUser) return void sendJson(res, 400, { error: { message: "totp_user manquant" } });

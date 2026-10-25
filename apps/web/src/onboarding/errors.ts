@@ -7,6 +7,9 @@ export function errorCode(err: unknown): string {
   if (err instanceof NokkerApiError) {
     const e = (err.body as { error?: unknown } | undefined)?.error;
     if (typeof e === "string" && e) return e;
+    // Forme objet avec code machine (`{error:{message, code}}`) : le code prime sur le texte.
+    const c = (e as { code?: unknown } | null | undefined)?.code;
+    if (typeof c === "string" && /^[a-z][a-z0-9_]*$/.test(c)) return c;
     // Forme objet `{error:{message:"strong_device_required"}}` (routes d'approbation) : seul un code snake_case compte.
     const m = (e as { message?: unknown } | null | undefined)?.message;
     if (typeof m === "string" && /^[a-z][a-z0-9_]*$/.test(m)) return m;
@@ -50,9 +53,12 @@ const KEYS: Record<string, Key> = {
   strong_device_required: "errStrongDevice",
   already_subscribed: "errAlreadySubscribed",
   no_customer: "errNoCustomer",
-  account_deleting: "errAccountDeleting",
   no_default_model: "lkErrNoDefault",
   bad_default: "lkErrNoDefault",
+  export_disabled: "errExportDisabled",
+  delete_disabled: "errDeleteDisabled",
+  export_expired: "errExportExpired",
+  export_limit: "errExportLimit",
 };
 
 /** Clé de traduction à afficher pour une erreur : jamais le texte brut du serveur ni une trace. */

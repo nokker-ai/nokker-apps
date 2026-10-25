@@ -109,6 +109,10 @@ export interface MockStateOptions {
   projectSkills?: boolean;
   /** Drapeau `household` (X23, §7.29) et rôle de la démo : `off` (défaut), `payer`, `member`, `minor`, `none`. */
   household?: "off" | "payer" | "member" | "minor" | "none";
+  /** Drapeau `code.enabled` (LOKKAL §7.28, sessions de code des comptes) : éteint par défaut, comme dans le noyau. */
+  code?: boolean;
+  /** Relève du courrier du Crew (déclencheur `mail:`) : `on` (défaut), `off` (NO_MAIL_TRIGGER), `nobox`. */
+  crewMail?: "on" | "off" | "nobox";
 }
 
 /** Suite d'un tour arrêté sur une carte (style `kernel`) : jouée après une approbation, verrou du fil tenu — l'outil
@@ -209,6 +213,8 @@ export class MockState {
   readonly devicePending: boolean;
   readonly sso: boolean;
   readonly packsWeb: boolean;
+  crewMail: "on" | "off" | "nobox";
+  readonly code: boolean;
   private memSettings: PermissionSettings = {};
   readonly speed: number;
   private timers = new Set<ReturnType<typeof setTimeout>>();
@@ -228,6 +234,8 @@ export class MockState {
     this.projectMemory = opts.projectMemory ?? true;
     this.projectSkills = opts.projectSkills ?? false;
     this.household = opts.household ?? "off";
+    this.crewMail = opts.crewMail ?? "on";
+    this.code = opts.code ?? false;
   }
 
   /** `trusted_project_skills: [{root, sha256}]` des réglages de l'utilisateur (jamais lus dans le dépôt). */

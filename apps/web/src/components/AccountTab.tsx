@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import type { AccountExportStatus, AccountInfo, AccountUsage, BillingStatus, Device, NokkerClient } from "@nokker-apps/sdk";
+import type { AccountExport, AccountInfo, AccountUsage, BillingStatus, Device, NokkerClient } from "@nokker-apps/sdk";
+import { deleteOutcome, exportIssue, fmtSize, fmtWhen, suspendedError, type ExportIssue } from "../account/lifecycle.js";
+import { forgetDevice } from "../auth.js";
 import { billingView, fmtReset, monthTurns, planCaps, planLabel, softOver, STATUS_KEYS, todayRows, usageLevel, usagePct, weekRows, type UsageRow } from "../account/usage.js";
 import { ConnectorsStep, TelegramStep } from "../onboarding/Connectors.js";
 import { errorCode, errorKey } from "../onboarding/errors.js";
@@ -274,8 +276,21 @@ function SubscriptionCard({ client, lang, billing }: { client: NokkerClient; lan
   );
 }
 
-function ExportCard({ client, lang, pollMs }: { client: NokkerClient; lang: Lang; pollMs: number }): React.ReactElement {
-  const [state, setState] = useState<"idle" | "pending" | AccountExportStatus>("idle");
+function saveFile(filename: string, json: string): void {
+  const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function ExportCard({ client, lang, onDownloaded }: { client: NokkerClient; lang: Lang; onDownloaded: () => void }): React.ReactElement {
+  const [exp, setExp] = useState<AccountExport | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [issue, setIssue] = useState<ExportIssue | null>(null);
   const [err, setErr] = useState<unknown>(null);
   const alive = useRef(true);
   useEffect(() => {
@@ -284,113 +299,207 @@ function ExportCard({ client, lang, pollMs }: { client: NokkerClient; lang: Lang
       alive.current = false;
     };
   }, []);
-  const poll = useCallback(
-    (id: string): void => {
-      client.getAccountExport(id).then(
-        (s) => {
-          if (!alive.current) return;
-          if (s.status === "pending") window.setTimeout(() => alive.current && poll(id), pollMs);
-          else setState(s);
-        },
-        (e) => {
-          if (!alive.current) return;
-          setErr(e);
-          setState("idle");
-        },
-      );
-    },
-    [client, pollMs],
-  );
-  const start = (): void => {
-    setErr(null);
-    setState("pending");
-    client.startAccountExport().then(
-      (r) => alive.current && poll(r.id),
-      (e) => {
-        if (!alive.current) return;
-        setErr(e);
-        setState("idle");
-      },
-    );
+  const fail = (e: unknown): void => {
+    if (!alive.current) return;
+    const i = exportIssue(e);
+    setIssue(i);
+    setErr(i.kind === "other" ? e : null);
+    setBusy(false);
   };
+  const start = (): void => {
+    setIssue(null);
+    setErr(null);
+    setBusy(true);
+    client.startAccountExport().then((r) => {
+      if (!alive.current) return;
+      setExp(r);
+      setBusy(false);
+    }, fail);
+  };
+  const download = (): void => {
+    if (!exp) return;
+    setIssue(null);
+    setErr(null);
+    setBusy(true);
+    client.downloadAccountExport(exp.id).then((f) => {
+      if (!alive.current) return;
+      saveFile(f.filename, f.json);
+      setBusy(false);
+      onDownloaded();
+    }, (e) => {
+      if (exportIssue(e).kind === "expired") setExp({ ...exp, status: "expired", download: null });
+      fail(e);
+    });
+  };
+  const ready = exp?.status === "ready" && exp.download;
   return (
-    <section className="ob-conn" aria-labelledby="acc-export">
+    <section className="ob-conn" id="acc-export-card" aria-labelledby="acc-export">
       <h3 id="acc-export">{t(lang, "accExport")}</h3>
       <p className="ob-note">{t(lang, "accExportIntro")}</p>
       <Fail lang={lang} err={err} />
-      {state === "idle" ? (
-        <button type="button" className="ob-btn" onClick={start}>
-          {t(lang, "accExportStart")}
-        </button>
-      ) : state === "pending" ? (
-        <p className="ob-status" role="status">
-          {t(lang, "accExportPending")}
+      {issue?.kind === "limit" ? (
+        <p className="ob-note" role="status" data-export-limit>
+          {issue.retryAt ? t(lang, "accExportLimit", { when: fmtWhen(lang, issue.retryAt) }) : t(lang, "errExportLimit")}
         </p>
-      ) : state.status === "ready" && state.download_url ? (
+      ) : null}
+      {ready && exp ? (
         <>
-          <p className="ob-okline">{t(lang, "accExportReady")}</p>
-          <a className="ob-btn primary" href={state.download_url} rel="noopener noreferrer">
+          <p className="ob-okline">{t(lang, "accExportReady", { size: fmtSize(lang, exp.size), when: fmtWhen(lang, exp.expires_at) })}</p>
+          <button type="button" className="ob-btn primary" disabled={busy} onClick={download}>
             {t(lang, "accExportDownload")}
-          </a>
+          </button>
         </>
-      ) : (
+      ) : exp || issue?.kind === "expired" ? (
         <>
           <p className="ob-muted">{t(lang, "accExportExpired")}</p>
-          <button type="button" className="ob-btn" onClick={start}>
+          <button type="button" className="ob-btn" disabled={busy} onClick={start}>
             {t(lang, "accExportStart")}
           </button>
         </>
+      ) : busy ? (
+        <p className="ob-status" role="status">
+          {t(lang, "accExportPending")}
+        </p>
+      ) : (
+        <button type="button" className="ob-btn" onClick={start}>
+          {t(lang, "accExportStart")}
+        </button>
       )}
     </section>
   );
 }
 
-function DeleteCard({ client, lang }: { client: NokkerClient; lang: Lang }): React.ReactElement {
+function DeleteCard({
+  client,
+  lang,
+  pollMs,
+  exported,
+  subscribed,
+  onGranted,
+}: {
+  client: NokkerClient;
+  lang: Lang;
+  pollMs: number;
+  exported: boolean;
+  subscribed: boolean;
+  onGranted: () => void;
+}): React.ReactElement {
   const [step, setStep] = useState<"idle" | "confirm" | "busy">("idle");
-  const [approvalId, setApprovalId] = useState<string | null>(null);
+  const [ask, setAsk] = useState<{ id: string; expires_at: string } | null>(null);
+  const [refused, setRefused] = useState<"dead" | "failed" | null>(null);
   const [err, setErr] = useState<unknown>(null);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  // Tant que la carte est en attente : on la relit ; accordée = compte suspendu, morte = on revient au début.
+  useEffect(() => {
+    if (!ask) return;
+    let stop = false;
+    const tick = (): void => {
+      client.getApproval(ask.id).then(
+        (a) => {
+          if (stop) return;
+          const o = deleteOutcome(a.status);
+          if (o === "granted") onGranted();
+          else if (o === "dead" || o === "failed") {
+            setAsk(null);
+            setStep("idle");
+            setRefused(o);
+          } else window.setTimeout(tick, pollMs);
+        },
+        (e) => {
+          if (stop) return;
+          if (suspendedError(e)) onGranted(); // compte suspendu : la carte a été accordée ailleurs
+          else window.setTimeout(tick, pollMs);
+        },
+      );
+    };
+    const h = window.setTimeout(tick, pollMs);
+    return () => {
+      stop = true;
+      window.clearTimeout(h);
+    };
+  }, [ask, client, pollMs, onGranted]);
   const send = (): void => {
     setErr(null);
+    setRefused(null);
     setStep("busy");
     client.deleteAccount().then(
-      (r) => setApprovalId(r.approval_id),
+      (r) => alive.current && setAsk({ id: r.approval_id, expires_at: r.expires_at }),
       (e) => {
+        if (!alive.current) return;
         setErr(e);
         setStep("idle");
       },
     );
   };
+  const toExport = (): void => document.getElementById("acc-export-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
   return (
     <section className="ob-conn acc-danger" aria-labelledby="acc-delete">
       <h3 id="acc-delete">{t(lang, "accDelete")}</h3>
       <p className="ob-note">{t(lang, "accDeleteIntro")}</p>
       <Fail lang={lang} err={err} />
-      {approvalId ? (
+      {refused ? (
+        <p className="ob-note" role="status" data-delete-refused={refused}>
+          {t(lang, refused === "failed" ? "accDeleteFailed" : "accDeleteRefused")}
+        </p>
+      ) : null}
+      {ask ? (
         <>
-          <p className="ob-okline">{t(lang, "accDeleteSent")}</p>
-          <a className="ob-btn primary" href={`/approvals/${encodeURIComponent(approvalId)}`}>
+          <p className="ob-okline">{t(lang, "accDeleteSent", { when: fmtWhen(lang, ask.expires_at) })}</p>
+          <a className="ob-btn primary" href={`/approvals/${encodeURIComponent(ask.id)}`}>
             {t(lang, "accDeleteOpen")}
           </a>
+          <p className="ob-status" role="status">
+            {t(lang, "accDeleteWaiting")}
+          </p>
+          <details className="acc-nostrong">
+            <summary>{t(lang, "accDeleteNoStrong")}</summary>
+            <p className="ob-note">{t(lang, "accDeleteNoStrongBody")}</p>
+          </details>
         </>
       ) : step === "idle" ? (
         <button type="button" className="ob-btn danger" onClick={() => setStep("confirm")}>
           {t(lang, "accDeleteStart")}
         </button>
       ) : (
-        <div className="acc-actions">
-          <button type="button" className="ob-btn danger" disabled={step === "busy"} onClick={send}>
-            {t(lang, "accDeleteConfirm")}
-          </button>
-          <button type="button" className="ob-btn" disabled={step === "busy"} onClick={() => setStep("idle")}>
-            {t(lang, "accDeleteCancel")}
-          </button>
-        </div>
+        <>
+          {!exported ? (
+            <div className="ob-note" data-export-first>
+              <p>{t(lang, "accDeleteExportFirst")}</p>
+              <button type="button" className="ob-btn" onClick={toExport}>
+                {t(lang, "accDeleteExportFirstBtn")}
+              </button>
+            </div>
+          ) : null}
+          {subscribed ? (
+            <p className="ob-note" data-delete-subscription>
+              {t(lang, "accDeleteSubscription")}
+            </p>
+          ) : null}
+          <div className="acc-actions">
+            <button type="button" className="ob-btn danger" disabled={step === "busy"} onClick={send}>
+              {t(lang, "accDeleteConfirm")}
+            </button>
+            <button type="button" className="ob-btn" disabled={step === "busy"} onClick={() => setStep("idle")}>
+              {t(lang, "accDeleteCancel")}
+            </button>
+          </div>
+        </>
       )}
     </section>
   );
 }
 
+/** Écran fixe après l'accord : le compte est suspendu, l'appareil est oublié (déconnexion) ; recharger mène à l'accueil. */
 export function DeletingScreen({ lang }: { lang: Lang }): React.ReactElement {
+  useEffect(() => {
+    void forgetDevice().catch(() => undefined);
+  }, []);
   return (
     <div className="ob ob-embedded">
       <div className="ob-card" role="status">
@@ -401,21 +510,22 @@ export function DeletingScreen({ lang }: { lang: Lang }): React.ReactElement {
   );
 }
 
-export function AccountTab({ client, lang, pollMs = 2000 }: { client: NokkerClient; lang: Lang; pollMs?: number }): React.ReactElement {
+export function AccountTab({ client, lang, pollMs = 2000, onGone }: { client: NokkerClient; lang: Lang; pollMs?: number; onGone?: () => void }): React.ReactElement {
   const [info, setInfo] = useState<AccountInfo | null>(null);
   const [usage, setUsage] = useState<AccountUsage | null>(null);
   const [billing, setBilling] = useState<BillingStatus | null>(null);
   const [loadErr, setLoadErr] = useState<unknown>(null);
   const [deleting, setDeleting] = useState(false);
+  const [exported, setExported] = useState(false);
+  const granted = useCallback(() => (onGone ? onGone() : setDeleting(true)), [onGone]);
 
   useEffect(() => {
     let live = true;
     const fail = (e: unknown): void => {
       if (!live) return;
-      if (errorCode(e) === "account_deleting") setDeleting(true);
-      else setLoadErr(e);
+      setLoadErr(e);
     };
-    client.getAccount().then((a) => live && (a.status === "deleting" ? setDeleting(true) : setInfo(a)), fail);
+    client.getAccount().then((a) => live && setInfo(a), fail);
     client.getAccountUsage().then((u) => live && setUsage(u), fail);
     // 404 = abonnement non activé côté noyau : la section n'existe pas, ce n'est pas une erreur.
     client.getBillingStatus().then((b) => live && setBilling(b), () => undefined);
@@ -438,8 +548,8 @@ export function AccountTab({ client, lang, pollMs = 2000 }: { client: NokkerClie
         <h3 className="ob-sub">{t(lang, "tabConnectors")}</h3>
         <ConnectorsStep client={client} lang={lang} embedded />
         <TelegramStep client={client} lang={lang} embedded />
-        <ExportCard client={client} lang={lang} pollMs={pollMs} />
-        <DeleteCard client={client} lang={lang} />
+        <ExportCard client={client} lang={lang} onDownloaded={() => setExported(true)} />
+        <DeleteCard client={client} lang={lang} pollMs={pollMs} exported={exported} subscribed={billing?.plan != null} onGranted={granted} />
       </div>
     </div>
   );

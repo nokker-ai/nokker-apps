@@ -17,8 +17,9 @@ describe("deck Crew (X14)", () => {
     expect(triggerLabel(undefined)).toBe("à la demande");
     expect(triggerLabel({ kind: "manual" })).toBe("à la demande");
     expect(triggerLabel({ kind: "event", event: "alert:disque-plein" })).toBe("sur alerte « disque-plein »");
-    // `mail:` est refusé par le noyau (400 NO_MAIL_TRIGGER) : aucun libellé dédié.
-    expect(triggerLabel({ kind: "event", event: "mail:from:factures@" })).toBe("sur événement mail:from:factures@");
+    // `mail:<filtre>` : la relève du courrier (BUBBLES §9.5 « Courrier »).
+    expect(triggerLabel({ kind: "event", event: "mail:from:factures@example.com" })).toBe("à la réception d'un mail (from:factures@example.com)");
+    expect(triggerLabel({ kind: "event", event: "mail:*" })).toBe("à chaque mail reçu");
     expect(triggerLabel({ kind: "schedule", cron: "0 7 * * 1-5", tz: "Europe/Zurich" })).toBe("chaque jour ouvré à 07:00");
   });
   const run = (id: string, status: AgentRun["status"]): AgentRun => ({

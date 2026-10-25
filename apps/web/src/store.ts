@@ -2,6 +2,7 @@
  * État applicatif du client web, branché sur le SDK (BUBBLES.md) : fils, messages du fil courant, bulles
  * visibles (fil courant + notify sans fil + bulles partagées), agents (Crew), flux d'événements §6.
  */
+import { deletionGranted } from "./account/lifecycle.js";
 import { messageContent } from "./composer/images.js";
 import { applyLiveInputEvent, formatCostLine, type LiveInputs } from "@nokker-apps/sdk";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -52,6 +53,11 @@ export interface NokkerStore {
   decideLocal(approval: Approval, decision: "approve" | "reject", scope?: "once" | "session"): Promise<void>;
   /** Signe un défi avec l'appareil de ce navigateur (approbations à distance, page `/approve/…`). */
   signDecision: AuthResult["signDecision"] | null;
+  /** Vrai dès que la carte de suppression du compte est accordée depuis ce navigateur : le compte est suspendu (toute
+   * requête suivante répond 403), l'app affiche l'écran fixe « suppression en cours ». */
+  accountGone: boolean;
+  /** Bascule l'app entière sur l'écran fixe (carte accordée vue depuis Mon compte, ou un 403 pendant l'attente). */
+  markAccountGone(): void;
   threads: Thread[];
   current: Thread | null;
   messages: ThreadMessage[];
@@ -88,6 +94,10 @@ export interface NokkerStore {
   flying: Set<string>;
   setSignature(p: SignaturePrefs): void;
   selectThread(id: string): void;
+  /** Relit la liste des fils (un fil né ailleurs, par exemple celui d'une session de code §7.28). */
+  refreshThreads(): Promise<void>;
+  /** Événements des sessions de code (§7.28 : `subagent.*`, `skill.untrusted`) pour l'onglet Code ; rend le désabonnement. */
+  onCodeEvent(fn: (e: NokkerEvent) => void): () => void;
   createThread(title: string): Promise<void>;
   deleteThread(id: string): Promise<void>;
   /** `images` : `data:` des images jointes (X7) ; le message part alors en parties texte + image. */
@@ -245,8 +255,15 @@ export function useNokker(): NokkerStore {
     [loadThread],
   );
 
+  const codeListeners = useRef(new Set<(e: NokkerEvent) => void>());
+  const onCodeEvent = useCallback((fn: (e: NokkerEvent) => void) => {
+    codeListeners.current.add(fn);
+    return () => void codeListeners.current.delete(fn);
+  }, []);
+
   const onEvent = useCallback(
     (e: NokkerEvent) => {
+      if (e.type.startsWith("subagent.") || e.type === "skill.untrusted") for (const fn of codeListeners.current) fn(e);
       // X22 : accumulation pure (SDK) ; la même fonction clôt un bloc au tool.result ou au turn.done.
       if (e.type === "tool.input.delta" || e.type === "tool.result" || e.type === "turn.done") setLiveInputs((l) => applyLiveInputEvent(l, e));
       switch (e.type) {
@@ -417,6 +434,8 @@ export function useNokker(): NokkerStore {
     [loadThread, toast],
   );
 
+  const refreshThreads = useCallback(async () => setThreads(sortThreads(await client.listThreads())), [client]);
+
   const deleteThread = useCallback(
     async (id: string) => {
       try {
@@ -561,6 +580,8 @@ export function useNokker(): NokkerStore {
 
   const getApproval = useCallback((id: string) => client.getApproval(id), [client]);
 
+  const [accountGone, setAccountGone] = useState(false);
+  const markAccountGone = useCallback(() => setAccountGone(true), []);
   const decide = useCallback(
     async (approval: Approval, decision: "approve" | "reject", totp?: string) => {
       if (totp !== undefined) {
@@ -576,13 +597,14 @@ export function useNokker(): NokkerStore {
       const { challenge } = await client.requestChallenge(approval.id);
       const proof = await auth.signDecision(challenge, decision);
       try {
-        await client.decideApproval(approval.id, {
+        const decided = await client.decideApproval(approval.id, {
           decision,
           device_id: proof.device_id,
           challenge,
           ...(proof.signature !== undefined ? { signature: proof.signature } : {}),
           ...(proof.webauthn ? { webauthn: proof.webauthn } : {}),
         } as Parameters<typeof client.decideApproval>[1]);
+        if (deletionGranted(decided)) setAccountGone(true);
       } catch (err) {
         if (err instanceof NokkerApiError && err.status === 403 && (err.serverMessage === "strong_device_required" || (err.body as { error?: unknown } | undefined)?.error === "strong_device_required")) {
           throw new Error(t(uiLang(), "strongRequired"));
@@ -615,6 +637,8 @@ export function useNokker(): NokkerStore {
     mock,
     authMode: auth?.mode ?? null,
     signDecision: auth?.signDecision ?? null,
+    accountGone,
+    markAccountGone,
     decideLocal,
     user: auth?.user ?? null,
     threads,
@@ -642,6 +666,8 @@ export function useNokker(): NokkerStore {
     flying,
     setSignature,
     selectThread,
+    refreshThreads,
+    onCodeEvent,
     createThread,
     deleteThread,
     send,

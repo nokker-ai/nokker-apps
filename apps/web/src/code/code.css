@@ -1,0 +1,187 @@
+/* Onglet Code (LOKKAL §7.28). Variables de theme.css ; une colonne, du téléphone au bureau. */
+.code-tab {
+  /* Comme les autres onglets : défilement propre, contenu centré sur 820 px. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px max(16px, calc((100% - 820px) / 2)) 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.code-tab h2 {
+  margin: 0 0 2px;
+}
+.code-tab h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.code-tab p {
+  margin: 0;
+}
+.code-list,
+.code-point-list,
+.code-cred-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.code-card {
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.code-session.idle {
+  border-style: dashed;
+}
+.code-open input,
+.code-open select,
+.code-fields input,
+.code-fields select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.code-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+}
+.code-fields > span {
+  flex: 1 1 200px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.code-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-width: 0;
+}
+.code-repo {
+  overflow-wrap: anywhere;
+}
+.code-meta {
+  overflow-wrap: anywhere;
+}
+.code-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.code-warn {
+  color: var(--hot);
+}
+.code-confirm {
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.code-points {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.code-point-list > li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.code-point {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  min-width: 0;
+}
+.code-point-reason {
+  overflow-wrap: anywhere;
+}
+.code-diff pre {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(var(--ov), 0.05);
+  font-size: 12px;
+  white-space: pre;
+}
+.code-diff pre + pre {
+  margin-top: 6px;
+}
+.code-diff .add {
+  color: var(--ok);
+}
+.code-diff .del {
+  color: var(--ko);
+}
+.code-diff .hunk {
+  color: var(--soft);
+}
+.code-creds summary {
+  cursor: pointer;
+  list-style-position: inside;
+}
+.code-creds summary h3 {
+  display: inline;
+}
+.code-cred-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.code-chip-warn {
+  background: rgba(var(--ov), 0.08);
+  color: var(--hot);
+}
+.code-skills-trust {
+  border-color: var(--hot);
+}
+.code-tab h4 {
+  margin: 0;
+  font-size: 14px;
+}
+.code-skills,
+.code-subagents,
+.code-sub-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.code-skill-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.code-skill-view {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(var(--ov), 0.05);
+  overflow-wrap: anywhere;
+}

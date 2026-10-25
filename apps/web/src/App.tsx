@@ -10,7 +10,7 @@ import { MachineTab } from "./components/MachineTab.js";
 import { TeamTab } from "./components/TeamTab.js";
 import { IncidentsTab } from "./components/IncidentsTab.js";
 import { PlanTab } from "./components/PlanTab.js";
-import { AccountTab } from "./components/AccountTab.js";
+import { AccountTab, DeletingScreen } from "./components/AccountTab.js";
 import { ConnectorsTab, uiLang } from "./components/ConnectorsTab.js";
 import { t } from "./onboarding/i18n.js";
 import { SoundToggle } from "./components/SoundToggle.js";
@@ -19,6 +19,7 @@ import { Icon } from "./icons.js";
 import { Welcome } from "./welcome/Welcome.js";
 import { PacksTab } from "./packs/PacksTab.js";
 import { HouseholdTab } from "./household/HouseholdTab.js";
+import { CodeTab } from "./code/CodeTab.js";
 import { h as hhText } from "./household/model.js";
 
 function useMedia(q: string): boolean {
@@ -44,7 +45,7 @@ function useMedia(q: string): boolean {
   return m;
 }
 
-type Tab = "chat" | "crew" | "incidents" | "plan" | "team" | "household" | "packs" | "connectors" | "account" | "machine";
+type Tab = "chat" | "crew" | "incidents" | "plan" | "team" | "household" | "packs" | "code" | "connectors" | "account" | "machine";
 
 /** Bureau Nokker : tiroir de sessions + chat ; les bulles flottent au-dessus ; Crew en onglet. */
 export function App(): React.ReactElement {
@@ -131,6 +132,26 @@ export function App(): React.ReactElement {
     };
   }, [store.ready, store.authMode, store.client]);
 
+  // §7.28 : Code si le noyau sert les sessions de code d'un compte (drapeau `code.enabled` ; sinon 404, onglet absent).
+  const [codeOn, setCodeOn] = useState(false);
+  useEffect(() => {
+    if (!store.ready || store.authMode === "local") return;
+    let live = true;
+    store.client.listCodeSessions().then(
+      () => live && setCodeOn(true),
+      () => live && setCodeOn(false),
+    );
+    return () => {
+      live = false;
+    };
+  }, [store.ready, store.authMode, store.client]);
+
+  // Barre d'onglets défilante (téléphone) : l'onglet actif, même restauré du stockage ou apparu après sa sonde, reste en
+  // vue.
+  useEffect(() => {
+    document.querySelector(".tabs-main .tab-main.on")?.scrollIntoView({ inline: "nearest", block: "nearest" });
+  }, [tab, store.access, codeOn, packsOn, planOn, liveIncidents === null, teamInvites === null, householdInvites === null]);
+
   useEffect(() => {
     if (!store.crewPulse) return;
     setCrewPulse(true);
@@ -142,6 +163,7 @@ export function App(): React.ReactElement {
 
   const onDropTarget = useCallback((id: string | null) => setDropTarget(id), []);
 
+  if (store.accountGone) return <DeletingScreen lang={uiLang()} />;
   if (store.access !== "ready") {
     return <Welcome {...store} lang={uiLang()} />;
   }
@@ -217,6 +239,11 @@ export function App(): React.ReactElement {
               {packsOn ? (
                 <button type="button" className={`tab-main ${tab === "packs" ? "on" : ""}`} aria-current={tab === "packs" ? "page" : undefined} onClick={() => setTab("packs")}>
                   Packs
+                </button>
+              ) : null}
+              {codeOn ? (
+                <button type="button" className={`tab-main ${tab === "code" ? "on" : ""}`} aria-current={tab === "code" ? "page" : undefined} onClick={() => setTab("code")}>
+                  Code
                 </button>
               ) : null}
               <button type="button" className={`tab-main ${tab === "connectors" ? "on" : ""}`} aria-current={tab === "connectors" ? "page" : undefined} onClick={() => setTab("connectors")}>
@@ -317,10 +344,27 @@ export function App(): React.ReactElement {
                 setTab("chat");
               }}
             />
+          ) : store.ready && tab === "code" && codeOn ? (
+            <CodeTab
+              client={store.client}
+              lang={uiLang()}
+              toast={store.toast}
+              decide={store.decide}
+              onCodeEvent={store.onCodeEvent}
+              onOpenThread={(id) =>
+                void store
+                  .refreshThreads()
+                  .catch(() => undefined)
+                  .then(() => {
+                    store.selectThread(id);
+                    setTab("chat");
+                  })
+              }
+            />
           ) : store.ready && tab === "machine" && store.authMode === "local" ? (
             <MachineTab client={store.client} toast={store.toast} />
           ) : store.ready && tab === "account" ? (
-            <AccountTab client={store.client} lang={uiLang()} />
+            <AccountTab client={store.client} lang={uiLang()} onGone={store.markAccountGone} />
           ) : store.ready ? (
             <ConnectorsTab client={store.client} lang={uiLang()} />
           ) : null}

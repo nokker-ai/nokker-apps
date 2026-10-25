@@ -169,6 +169,13 @@ describe("applyBubbleEvent", () => {
     list = applyBubbleEvent(list, { type: "bubble.created", bubble: bubble({ id: "bu_z", thread_id: "th_x" }) }, cur);
     expect(list.map((b) => b.id)).toEqual(["bu_n", "bu_s"]);
   });
+  it("les cartes d'un sous-agent (`<fil>/sa-<id>`) se montrent dans le fil racine, pas dans un autre", () => {
+    let list: Bubble[] = [];
+    list = applyBubbleEvent(list, { type: "bubble.created", bubble: bubble({ id: "bu_k", thread_id: `${cur}/sa-sa1` }) }, cur);
+    list = applyBubbleEvent(list, { type: "bubble.created", bubble: bubble({ id: "bu_o", thread_id: "th_other/sa-sa1" }) }, cur);
+    list = applyBubbleEvent(list, { type: "bubble.created", bubble: bubble({ id: "bu_p", thread_id: `${cur}x/sa-1` }) }, cur);
+    expect(list.map((b) => b.id)).toEqual(["bu_k"]);
+  });
 });
 
 describe("renderBubbleForContext", () => {

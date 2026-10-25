@@ -1,44 +1,47 @@
-/** Deck Crew (X14, BUBBLES.md §9.5) — libellés purs, testés. La couleur n'est jamais le seul signal. */
+/** Deck Crew (X14, BUBBLES.md §9.5) — libellés purs, testés. La couleur n'est jamais le seul signal. Langue de l'interface
+ * en dernier paramètre (le français par défaut). */
 import type { AgentRun, AgentRunStatus, AgentTrigger } from "@nokker-apps/sdk";
+import { DAYS, cw, type Lang } from "./i18n.js";
 
-const DAYS = ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"];
 const pad = (n: string): string => n.padStart(2, "0");
+const locale = (lang: Lang): string => (lang === "fr" ? "fr-CH" : "en-GB");
 
-/** Quelques formes de cron courantes en français ; sinon le cron brut (jamais faux, au pire technique). */
-export function cronLabel(cron: string): string {
+/** Quelques formes de cron courantes en clair ; sinon le cron brut (jamais faux, au pire technique). */
+export function cronLabel(cron: string, lang: Lang = "fr"): string {
   const f = cron.trim().split(/\s+/);
-  if (f.length !== 5) return `cron ${cron}`;
+  if (f.length !== 5) return cw(lang, "cron", { expr: cron });
   const [min, hour, dom, mon, dow] = f as [string, string, string, string, string];
   const fixed = /^\d+$/.test(min) && /^\d+$/.test(hour);
-  const at = fixed ? `à ${pad(hour)}:${pad(min)}` : "";
+  const at = fixed ? cw(lang, "atTime", { hh: pad(hour), mm: pad(min) }) : "";
   if (dom === "*" && mon === "*") {
-    if (min === "*" && hour === "*" && dow === "*") return "chaque minute";
-    if (/^\d+$/.test(min) && hour === "*" && dow === "*") return `chaque heure à :${pad(min)}`;
-    if (/^\*\/(\d+)$/.test(min) && hour === "*" && dow === "*") return `toutes les ${min.slice(2)} min`;
-    if (fixed && dow === "*") return `chaque jour ${at}`;
-    if (fixed && dow === "1-5") return `chaque jour ouvré ${at}`;
-    if (fixed && /^[0-6]$/.test(dow)) return `chaque ${DAYS[Number(dow)]} ${at}`;
+    if (min === "*" && hour === "*" && dow === "*") return cw(lang, "everyMinute");
+    if (/^\d+$/.test(min) && hour === "*" && dow === "*") return cw(lang, "everyHourAt", { m: pad(min) });
+    if (/^\*\/(\d+)$/.test(min) && hour === "*" && dow === "*") return cw(lang, "everyNMin", { n: min.slice(2) });
+    if (fixed && dow === "*") return cw(lang, "everyDay", { at });
+    if (fixed && dow === "1-5") return cw(lang, "everyWorkday", { at });
+    if (fixed && /^[0-6]$/.test(dow)) return cw(lang, "everyWeekday", { day: DAYS[lang][Number(dow)]!, at });
   }
-  if (fixed && /^\d+$/.test(dom) && mon === "*" && dow === "*") return `le ${dom} de chaque mois ${at}`;
-  return `cron ${cron}`;
+  if (fixed && /^\d+$/.test(dom) && mon === "*" && dow === "*") return cw(lang, "monthly", { dom, at });
+  return cw(lang, "cron", { expr: cron });
 }
 
-export function shortDate(iso: string, now = Date.now()): string {
+export function shortDate(iso: string, now = Date.now(), lang: Lang = "fr"): string {
   const d = new Date(iso);
   const sameDay = new Date(now).toDateString() === d.toDateString();
-  const time = d.toLocaleTimeString("fr-CH", { hour: "2-digit", minute: "2-digit" });
-  return sameDay ? `aujourd'hui ${time}` : `${d.toLocaleDateString("fr-CH", { day: "numeric", month: "short" })} ${time}`;
+  const time = d.toLocaleTimeString(locale(lang), { hour: "2-digit", minute: "2-digit" });
+  return sameDay ? cw(lang, "today", { time }) : `${d.toLocaleDateString(locale(lang), { day: "numeric", month: "short" })} ${time}`;
 }
 
 /** Ce qui déclenche l'agent, en une ligne. */
-export function triggerLabel(t: AgentTrigger | undefined): string {
-  if (!t || t.kind === "manual") return "à la demande";
-  if (t.kind === "schedule") return cronLabel(t.cron);
-  if (t.kind === "once") return `une fois, ${shortDate(t.at)}`;
+export function triggerLabel(t: AgentTrigger | undefined, lang: Lang = "fr"): string {
+  if (!t || t.kind === "manual") return cw(lang, "onDemand");
+  if (t.kind === "schedule") return cronLabel(t.cron, lang);
+  if (t.kind === "once") return cw(lang, "once", { at: shortDate(t.at, Date.now(), lang) });
   const [src, rest] = [t.event.slice(0, t.event.indexOf(":")), t.event.slice(t.event.indexOf(":") + 1)];
-  if (src === "alert") return `sur alerte « ${rest} »`;
-  if (src === "webhook") return `sur appel externe (${rest})`;
-  return `sur événement ${t.event}`;
+  if (src === "alert") return cw(lang, "onAlert", { name: rest });
+  if (src === "webhook") return cw(lang, "onWebhook", { id: rest });
+  if (src === "mail") return rest === "*" ? cw(lang, "onAnyMail") : cw(lang, "onMail", { filter: rest });
+  return cw(lang, "onEvent", { event: t.event });
 }
 
 export const RUN_STATUS_LABEL: Record<AgentRunStatus, string> = {
@@ -51,6 +54,20 @@ export const RUN_STATUS_LABEL: Record<AgentRunStatus, string> = {
   skipped: "sauté",
 };
 
+const RUN_STATUS_EN: Record<AgentRunStatus, string> = {
+  queued: "queued",
+  running: "running",
+  waiting_approval: "waiting for your go-ahead",
+  succeeded: "succeeded",
+  failed: "failed",
+  cancelled: "cancelled",
+  skipped: "skipped",
+};
+
+export function runStatusLabel(st: AgentRunStatus, lang: Lang = "fr"): string {
+  return (lang === "en" ? RUN_STATUS_EN : RUN_STATUS_LABEL)[st] ?? st;
+}
+
 export const runActive = (r: Pick<AgentRun, "status">): boolean => r.status === "queued" || r.status === "running" || r.status === "waiting_approval";
 
 /** Durée d'un passage, « 42 s », « 3 min », ou null si pas fini. */
@@ -60,14 +77,16 @@ export function runDuration(r: Pick<AgentRun, "started_at" | "ended_at">): strin
   return s < 60 ? `${s} s` : `${Math.round(s / 60)} min`;
 }
 
-export function runCost(r: Pick<AgentRun, "cost">): string | null {
+export function runCost(r: Pick<AgentRun, "cost">, lang: Lang = "fr"): string | null {
   if (!r.cost) return null;
   const money = (amount: number, cur: string): string => `${amount.toFixed(amount < 0.1 ? 3 : 2)} ${cur}`;
   // Plusieurs devises : `amounts` (jamais de conversion côté client).
   const amounts = r.cost.amounts && Object.keys(r.cost.amounts).length > 1
     ? Object.keys(r.cost.amounts).sort().map((c) => money(r.cost!.amounts![c]!, c)).join(" + ")
     : money(r.cost.amount, r.cost.currency);
-  return r.cost.calls !== undefined ? `${amounts} · ${r.cost.calls} appel${r.cost.calls > 1 ? "s" : ""}` : amounts;
+  if (r.cost.calls === undefined) return amounts;
+  const n = r.cost.calls;
+  return `${amounts} · ${n} ${lang === "en" ? (n > 1 ? "calls" : "call") : n > 1 ? "appels" : "appel"}`;
 }
 
 /** Fusionne un passage reçu par événement dans la liste affichée (le plus récent d'abord). */

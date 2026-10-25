@@ -35,29 +35,60 @@ describe("mon compte (contrat final de Nokker dev)", () => {
     expect((await c.getAccountUsage()).today.turns.cap).toBeNull();
   });
 
-  it("export asynchrone : pending puis ready ; un second export le même jour → 429 rate", async () => {
-    const s = await c.startAccountExport();
-    expect(s.status).toBe("pending");
-    expect((await c.getAccountExport(s.id)).status).toBe("pending");
-    const ready = await c.getAccountExport(s.id);
-    expect(ready.status).toBe("ready");
-    expect(ready.download_url).toContain(s.id);
-    const again = await c.startAccountExport().catch((e) => e);
+  it("export synchrone : 202 ready avec téléchargement ; un second dans les 24 h → 429 export_limit + retry_at", async () => {
+    const e = await c.startAccountExport();
+    expect(e).toMatchObject({ status: "ready", size: expect.any(Number), download: `/v1/account/exports/${e.id}/download` });
+    expect(Date.parse(e.expires_at) - Date.parse(e.created_at)).toBe(24 * 3600_000);
+    expect(await c.getAccountExport(e.id)).toEqual(e);
+    const file = await c.downloadAccountExport(e.id);
+    expect(file.filename).toBe(`nokker-export-${e.id}.json`);
+    expect(JSON.parse(file.json)).toMatchObject({ format: "nokker-account-export/1" });
+    const again = await c.startAccountExport().catch((x) => x);
     expect(again.status).toBe(429);
-    expect(again.body).toMatchObject({ error: "rate" });
+    expect(again.code).toBe("export_limit");
+    expect(again.retryAt).toBe(new Date(Date.parse(e.created_at) + 24 * 3600_000).toISOString());
   });
 
-  it("suppression : 202 avec une carte d'approbation account.delete forte", async () => {
+  it("export expiré : statut expired sans lien, téléchargement 410 export_expired, nouvelle demande acceptée", async () => {
+    const e = await c.startAccountExport();
+    accountMock(mock.state).exp = { id: e.id, created: Date.now() - 25 * 3600_000, expires: Date.now() - 3600_000 };
+    expect(await c.getAccountExport(e.id)).toMatchObject({ status: "expired", download: null });
+    const gone = await c.downloadAccountExport(e.id).catch((x) => x);
+    expect([gone.status, gone.code]).toEqual([410, "export_expired"]);
+    expect((await c.startAccountExport()).status).toBe("ready");
+  });
+
+  it("export d'un autre compte ou service non configuré", async () => {
+    expect((await c.getAccountExport("ex_autre").catch((x) => x)).status).toBe(404);
+    accountMock(mock.state).exportDisabled = true;
+    const off = await c.startAccountExport().catch((x) => x);
+    expect([off.status, off.code]).toEqual([503, "export_disabled"]);
+  });
+
+  it("suppression : 202 avec carte forte, une seule en attente (la même est rendue)", async () => {
     const r = await c.deleteAccount();
+    expect(r).toMatchObject({ strength: "strong", reason: expect.any(String) });
+    expect(Date.parse(r.expires_at)).toBeGreaterThan(Date.now());
     const ap = mock.state.approvals.get(r.approval_id);
-    expect(ap).toMatchObject({ tool_name: "account.delete", strength: "strong", status: "pending" });
+    expect(ap).toMatchObject({ tool_name: "account_delete", strength: "strong", status: "pending" });
+    expect((await c.deleteAccount()).approval_id).toBe(r.approval_id);
+    expect([...mock.state.approvals.values()].filter((a) => a.tool_name === "account_delete")).toHaveLength(1);
   });
 
-  it("compte en suppression : 403 account_deleting partout", async () => {
-    accountMock(mock.state).deleting = true;
+  it("carte de suppression accordée : le compte est suspendu tout de suite", async () => {
+    const r = await c.deleteAccount();
+    const ap = mock.state.approvals.get(r.approval_id)!;
+    ap.status = "executed";
     const e = await c.getAccountUsage().catch((x) => x);
-    expect(e.status).toBe(403);
-    expect(e.body).toEqual({ error: "account_deleting" });
+    expect([e.status, e.body]).toEqual([403, { error: { message: "forbidden" } }]);
+  });
+
+  it("compte suspendu : 403 forbidden partout, GET /v1/account et le reste de l'API compris (pas de code dédié)", async () => {
+    accountMock(mock.state).deleting = true;
+    for (const call of [() => c.getAccount(), () => c.getAccountUsage(), () => c.listThreads()]) {
+      const e = await call().catch((x) => x);
+      expect([e.status, e.body]).toEqual([403, { error: { message: "forbidden" } }]);
+    }
   });
 });
 

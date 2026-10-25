@@ -36,6 +36,8 @@ export interface HookUntrustedEvent {
 export interface SkillUntrustedEvent {
   type: "skill.untrusted";
   thread_id: string;
+  /** Session de code multi-utilisateur (§7.28.13) dont l'arbre a changé ; absent dans Lokkal. */
+  session_id?: string;
   root: string;
   sha256: string;
   count: number;

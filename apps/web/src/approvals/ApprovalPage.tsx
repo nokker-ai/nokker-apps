@@ -6,10 +6,13 @@ import { StoreContext } from "../context.js";
 import { useNokker } from "../store.js";
 import { uiLang } from "../components/ConnectorsTab.js";
 import { Welcome } from "../welcome/Welcome.js";
+import { DeletingScreen } from "../components/AccountTab.js";
 
 
 export function ApprovalPage({ id }: { id: string }): React.ReactElement {
   const store = useNokker();
+  // Suppression du compte accordée ici : plus aucune requête n'aboutit (compte suspendu), écran fixe et déconnexion.
+  if (store.accountGone) return <DeletingScreen lang={uiLang()} />;
   if (store.access !== "ready" && store.access !== "booting") return <Welcome {...store} lang={uiLang()} />;
   return (
     <StoreContext.Provider value={store}>

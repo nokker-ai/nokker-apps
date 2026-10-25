@@ -1,0 +1,69 @@
+/* Déclencheur d'un agent, « Nouvel agent » et relève du courrier (BUBBLES §9.5). Variables de theme.css. */
+.trig-fields,
+.trig-edit,
+.trig-new {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.trig-fields input,
+.trig-fields select,
+.trig-new input,
+.trig-new textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.trig-fields p {
+  margin: 0;
+}
+.trig-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+.trig-row > span {
+  flex: 1 1 160px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.trig-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.trig-check input {
+  width: auto;
+}
+.trig-edit {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+}
+/* Sous l'en-tête du Crew, sur toute la largeur ; le formulaire garde une largeur lisible. */
+.trig-new-wrap {
+  flex: 1 0 100%;
+}
+.trig-new {
+  max-width: 560px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.mail-watch {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+.mail-watch.mw-ok strong {
+  color: var(--ok);
+}
+.mail-watch.mw-error strong {
+  color: var(--ko);
+}
