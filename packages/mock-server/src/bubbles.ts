@@ -197,6 +197,13 @@ export type NotifyHandler = (state: MockState, bubble: Bubble) => void;
 const handlers = new Map<string, ActionHandler>();
 const notifyHandlers = new Map<string, NotifyHandler>();
 
+/** Actions décidées EN DIRECT (200), sans tour : `null` = action inconnue (404). */
+type DirectHandler = (state: MockState, b: Bubble, actionId: string) => Record<string, unknown> | null;
+const directHandlers = new Map<string, DirectHandler>();
+export function registerDirectAction(kind: string, handler: DirectHandler): void {
+  directHandlers.set(kind, handler);
+}
+
 export function registerAction(key: string, handler: ActionHandler): void {
   handlers.set(key, handler);
 }
@@ -221,10 +228,18 @@ export function runAction(state: MockState, id: string, actionId: string): { sta
     if (actionId !== "activate") throw new MockHttpError(404, `action inconnue : ${actionId}`);
     // §9.5 : la carte porte aussi instructions, trigger, secrets, budget, auto_approve (facultatifs).
     const st = b.state as typeof b.state & Partial<CreateAgentRequest>;
-    const agent = createAgent(state, { name: st.name, role: st.role, model: st.model, tools: st.tools, instructions: st.instructions, trigger: st.trigger, secrets: st.secrets, budget: st.budget, auto_approve: st.auto_approve }, MOCK_USER);
+    // §7.30 : une carte posée par un pack donne son origine à l'agent (retrait du pack → carte pack_agents).
+    const origin = st.pack && st.template ? { pack: st.pack, template: st.template } : null;
+    const agent = createAgent(state, { name: st.name, role: st.role, model: st.model, tools: st.tools, instructions: st.instructions, trigger: st.trigger, secrets: st.secrets, budget: st.budget, auto_approve: st.auto_approve }, MOCK_USER, origin);
     closeBubble(state, b.id);
     if (b.thread_id) state.appendTurn(b.thread_id, "", `Agent « ${agent.name} » créé et armé — il est dans l'onglet Crew.`, { sender: null, channel: "web" });
     return { status: 200, body: { activated: true, agent: clone(agent) } };
+  }
+  const direct = directHandlers.get(b.kind);
+  if (direct) {
+    const out = direct(state, b, actionId);
+    if (!out) throw new MockHttpError(404, `action inconnue : ${actionId}`);
+    return { status: 200, body: out as unknown as BubbleActionResult };
   }
   // X21 : décision de l'utilisateur sur un relais, en direct (200 `{handoff}`), jamais un tour.
   if (b.kind === "handoff") return decideHandoff(state, b, actionId) as unknown as { status: number; body: BubbleActionResult };
@@ -244,8 +259,8 @@ export function runAction(state: MockState, id: string, actionId: string): { sta
 
 /** Crée un agent du Crew (BUBBLES.md §9.4) : `status` toujours `armed`, `agent.created` diffusé à tous. */
 /** §9.4/§9.5 : création d'agent (POST /v1/agents ou activation d'une carte `agent_draft`). */
-export function createAgent(state: MockState, req: CreateAgentRequest, user: string): Agent {
-  return createAgentFull(state, req, user);
+export function createAgent(state: MockState, req: CreateAgentRequest, user: string, origin: Agent["origin"] = null): Agent {
+  return createAgentFull(state, req, user, origin);
 }
 
 export function clone<T>(v: T): T {

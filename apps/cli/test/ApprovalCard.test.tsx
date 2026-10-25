@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render } from "ink-testing-library";
 import type { Approval } from "@nokker-apps/sdk";
 import { ApprovalCard } from "../src/ui/ApprovalCard.js";
+import { setLang } from "../src/i18n/index.js";
 
 const base: Approval = {
   id: "appr_1", thread_id: "th_1", turn_index: 0, channel: "cli", tool_name: "terminal", arguments: { command: "rm -rf build" },
@@ -26,6 +27,23 @@ describe("ApprovalCard locale", () => {
     expect(f).toContain("3. Toujours cette commande");
     expect(f).toContain("3b. Toujours les commandes");
     expect(f).toContain("4. Refuser");
+  });
+
+  it("en anglais (langue par défaut)", () => {
+    setLang("en");
+    try {
+      const f = render(<ApprovalCard approval={base} local busy={false} message={null} />).lastFrame()!;
+      expect(f).toContain("⚠ Action to approve");
+      expect(f).toContain("Tool terminal · effect destructive");
+      expect(f).toContain("Command: rm -rf build");
+      expect(f).toContain("1. Once");
+      expect(f).toContain("2. For this session");
+      expect(f).toContain("3. Always this command");
+      expect(f).toContain("4. Reject");
+      expect(f).toMatch(/↑\/↓ or 1-4 · Enter validates · expires in \d/);
+    } finally {
+      setLang("fr");
+    }
   });
 
   it("un chiffre décide (1 = une fois, 4 = refuser)", async () => {

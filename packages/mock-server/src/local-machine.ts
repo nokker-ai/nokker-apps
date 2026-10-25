@@ -1,6 +1,7 @@
 /**
  * Routes locales de démo (jeton local) : processus et aperçu (X6, LOKKAL §7.7), coffre (X4, §7.10), confiance des
- * hooks (X3, §7.9). Réglage : `POST /v1/dev/local-machine-mock {process?, hooks_thread?, memory_thread?}` pose un
+ * hooks (X3, §7.9). Réglage : `POST /v1/dev/local-machine-mock {process?, hooks_thread?, memory_thread?,
+ * restart_subagents?}` pose un
  * processus de démo, émet `hook.untrusted` / `memory.noted` sur un fil. Les valeurs de secrets sont gardées en mémoire
  * et ne ressortent jamais.
  */
@@ -8,6 +9,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { LocalProcess } from "@nokker-apps/sdk";
 import { LOCAL_OWNER, type MockState } from "./state.js";
+import { addDemoNote, restartSubagents } from "./project.js";
 
 type Send = (status: number, payload: unknown) => void;
 
@@ -23,6 +25,8 @@ function lm(state: MockState): LM {
   if (!m) all.set(state, (m = { processes: [], secrets: new Map(), hooks: new Map(), sealed: false }));
   return m;
 }
+/** Noms du coffre local (la boîte mail de la machine désigne son mot de passe par l'un d'eux, §7.25). */
+export const localSecretNames = (state: MockState): Set<string> => new Set(lm(state).secrets.keys());
 const KEY = randomBytes(16);
 const sign = (id: string, exp: number): string => createHmac("sha256", KEY).update(`${id}:${exp}`).digest("hex").slice(0, 24);
 const NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$/;
@@ -41,9 +45,12 @@ export async function handleLocalMachineDev(state: MockState, method: string, pa
     state.publish({ type: "hook.untrusted", thread_id: b.hooks_thread, sha256: sha, count: 2, notice: "Relis .nokker/settings.json du dépôt avant de leur faire confiance." });
   }
   if (typeof b.memory_thread === "string") {
-    state.publish({ type: "memory.noted", thread_id: b.memory_thread, turn_index: 0, name: "rule-tests-avant-commit-1a2b", kind: "rule", scope: "project", title: "Lancer les tests avant chaque commit", derived_from: "user" });
+    const note = { name: "rule-tests-avant-commit-1a2b", kind: "rule", scope: "project", title: "Lancer les tests avant chaque commit", derived_from: "user" } as const;
+    addDemoNote(state, b.memory_thread, { ...note, origin: `${b.memory_thread}#0`, created: new Date().toISOString(), links: [], locality: "local", in_core: true, text: "L'utilisateur veut la suite de tests complète avant chaque commit." });
+    state.publish({ type: "memory.noted", thread_id: b.memory_thread, turn_index: 0, ...note });
   }
   if (typeof b.sealed === "boolean") m.sealed = b.sealed;
+  if (b.restart_subagents === true) restartSubagents(state); // redémarrage simulé du noyau (§7.22.9)
   send(200, { ok: true });
   return true;
 }

@@ -73,6 +73,11 @@ export async function storeDeviceKey(stored: StoredKey): Promise<void> {
   await idb((s) => s.put(stored, DEVICE_RECORD_KEY), "readwrite");
 }
 
+/** Rangement d'une valeur dans la même base (une CryptoKey non extractible ne survit qu'ici à une navigation). */
+export const idbPut = async (key: string, value: unknown): Promise<void> => void (await idb((s) => s.put(value, key), "readwrite"));
+export const idbGet = <T>(key: string): Promise<T | undefined> => idb<T>((s) => s.get(key) as IDBRequest<T>, "readonly");
+export const idbDelete = async (key: string): Promise<void> => void (await idb((s) => s.delete(key), "readwrite"));
+
 export function readStoredDeviceKey(): Promise<StoredKey | undefined> {
   return idb<StoredKey>((s) => s.get(DEVICE_RECORD_KEY) as IDBRequest<StoredKey>, "readonly");
 }
@@ -116,7 +121,7 @@ async function deviceKeyLogin(client: NokkerClient, stored: StoredKey): Promise<
   }
 }
 
-const deviceName = (): string => `web-${navigator.platform || "navigateur"}`;
+export const deviceName = (): string => `web-${navigator.platform || "navigateur"}`;
 
 /** Connexion par code reçu par mail : la clé NON extractible est générée ici, le serveur l'enregistre comme
  * appareil actif (le code prouve la boîte mail) ; la session se reprend ensuite par `restoreLogin`. */
@@ -172,7 +177,7 @@ async function passkeySession(client: NokkerClient, d: { deviceId: string; crede
 
 const PASSKEY_STORAGE = "nokker.web.device";
 
-function isSecure(): boolean {
+export function isSecure(): boolean {
   return window.isSecureContext && typeof crypto !== "undefined" && !!crypto.subtle;
 }
 

@@ -13,6 +13,7 @@
  * Les clés « ma propre clé » vont dans `vault` (le coffre local) et n'en sortent jamais : ni réponse, ni journal.
  */
 import { randomBytes } from "node:crypto";
+import { pagesPublicAllowed } from "./pages.js";
 import type { LocalLinkStart, LocalModelTestResult, LocalSetup } from "@nokker-apps/sdk";
 import { cardOf, KINDS } from "./onboarding.js";
 import type { MockState } from "./state.js";
@@ -226,7 +227,7 @@ export async function handleLocal(
 
   if (method === "GET" && path === "/v1/local/link/status") {
     // Comme le noyau : clé du Router au coffre → approuvé ; rien en cours → non relié ; flux échu → expiré ; sinon on interroge nokker.ai.
-    if (m.vault.has("router")) return send(200, { state: "approved", account: m.account }), true;
+    if (m.vault.has("router")) return send(200, { state: "approved", account: m.account, pages_public: pagesPublicAllowed(state) }), true;
     const l = m.link;
     if (!l) return send(200, { state: "unlinked" }), true;
     if (Date.now() > l.expiresAt) {
@@ -245,7 +246,7 @@ export async function handleLocal(
     m.account = LINK_ACCOUNT;
     m.link = null;
     if (!m.default) m.default = "router";
-    send(200, { state: "approved", account: LINK_ACCOUNT });
+    send(200, { state: "approved", account: LINK_ACCOUNT, pages_public: pagesPublicAllowed(state) });
     return true;
   }
 

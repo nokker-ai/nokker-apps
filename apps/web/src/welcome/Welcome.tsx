@@ -5,6 +5,7 @@ import { loginWithEmailCode, loginWithGoogleTicket } from "../auth.js";
 import { t, type Lang } from "../onboarding/i18n.js";
 import { takeLinkReturn } from "../link/code.js";
 import { InstallCard } from "../pwa/InstallCard.js";
+import { SsoLogin } from "../sso/SsoLogin.js";
 import type { NokkerStore } from "../store.js";
 
 export const BETA_URL = "https://nokker.ai/beta";
@@ -133,6 +134,7 @@ export function Welcome({ client, access, status, retryAccess, lang: L }: Props)
                 {busy ? t(L, "loginSending") : t(L, "loginEmailGo")}
               </button>
             </form>
+            <SsoLogin client={client} lang={L} />
           </section>
         ) : null}
         {access === "signed-out" && step === "code" ? (

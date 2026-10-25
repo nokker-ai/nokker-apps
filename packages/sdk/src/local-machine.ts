@@ -32,6 +32,16 @@ export interface HookUntrustedEvent {
   notice: string;
 }
 
+/** Skills du dépôt non fiables (LOKKAL.md §7.21.3, .5) : à l'ouverture, ou quand l'arbre change pendant la session. */
+export interface SkillUntrustedEvent {
+  type: "skill.untrusted";
+  thread_id: string;
+  root: string;
+  sha256: string;
+  count: number;
+  notice: string;
+}
+
 export interface HookRanEvent {
   type: "hook.ran";
   thread_id: string;

@@ -16,7 +16,18 @@ nokker update [--check]         met à jour le noyau (install.sh --update, sinon
 nokker acp                      agent ACP (Agent Client Protocol v1) sur stdio, pour un éditeur : Zed, JetBrains, Neovim…
 nokker --server <url>           serveur (priorité : --server > $NOKKER_SERVER_URL > api_url de lokkal.json > http://127.0.0.1:8742)
 nokker --sound                  sonnette terminal sur les bulles (coupée par défaut)
+nokker --lang en|fr             langue de l'interface (sinon NOKKER_LANG, LC_ALL, LC_MESSAGES, LANG ; anglais par défaut)
 ```
+
+### Langue
+
+Libellés en **anglais par défaut**, en français quand la langue commence par `fr` : `--lang` > `NOKKER_LANG` > `LC_ALL` >
+`LC_MESSAGES` > `LANG` (la première variable non vide l'emporte, comme POSIX ; `C`/`POSIX` = anglais). Lignes d'outils,
+cartes, ligne de coût (`12.4k tokens · €0.03` / `12,4 k jetons · 0,03 €`), aides, `doctor`, `update`, `logs` et le pont
+ACP suivent. Le texte source est l'anglais (`t("Once")`, `src/i18n/index.ts`) ; les traductions vivent dans un seul
+catalogue (`src/i18n/fr.ts` et `fr-ops.ts`). `test/i18n.test.ts` refuse une clé sans traduction, une clé morte, des
+marqueurs `{n}` différents, une clé non littérale, et toute chaîne ou texte JSX français écrit en dur hors du catalogue.
+La suite de tests tourne en français (`NOKKER_LANG=fr` dans `vitest.config.ts`) ; les tests de l'anglais posent la langue.
 
 `doctor`, `logs` et `update` expliquent proprement l'absence de docker ou de compose connu (pas de trace de pile) ;
 `logs --component cli` et `doctor` marchent sans docker.
@@ -59,21 +70,46 @@ nokker --sound                  sonnette terminal sur les bulles (coupée par d�
   | `/diff [hash\|n]` | `checkpoint_diff` | diff vert/rouge dans le fil, tronqué à 300 lignes (mention du reste) |
   | `/checkpoints` | `checkpoint_list` | hash court, heure, raison, fichiers (n°1 = le plus récent) |
   | `/rollback [hash\|n]` | `checkpoint_restore {safe:true}` | carte « Action à approuver » (même carte qu'une commande destructive), puis fichiers restaurés / conservés ; sans argument : le dernier point |
-  | `/skills [nom]` | `skill_list` / `skill_view` | tableau par famille / corps Markdown rendu |
+  | `/skills [nom]` | `skill_list` / `skill_view` | confiance des skills du dépôt en tête, puis tableau par famille (`[project]` = skill du dépôt) / corps Markdown rendu |
+  | `/skills trust` | `POST /v1/local/skills/trust` | rouvre la carte de confiance (voir plus bas) |
   | `/plan` | `todo` | liste à puces avec état (`[x]` fait, `[~]` en cours, `[ ]` à faire) |
-  | `/agents` | (événements `subagent.*`) | child_id, état, but tronqué, dernier outil, durée |
+  | `/agents [id]` | `delegate_status` + événements `subagent.*` | id, état, (arrière-plan), but tronqué, dernier outil, durée, commits, résultat ; avec un id (ou un préfixe) : tout, résultat complet compris |
+  | `/agents cancel <id\|all>` | `delegate_cancel` / `POST /v1/threads/{id}/cancel` | `all` arrête tous les sous-agents du fil (et le tour en cours) ; un seul : voir « Limites » |
+  | `/memory [note]` | `memory {action: list\|view}` + `GET /v1/local/memory` | notes apprises (type, portée, origine, toujours dans le contexte ou rappelée), sections des fichiers d'instructions, état de la mémoire longue / une note ou une section |
+  | `/memory forget <note>` | `memory {action: forget}` | carte de confirmation (y/o/Entrée, n/Échap), puis l'oubli ; en mode `default` l'oubli (WRITE) passe aussi par une carte du noyau ; une section d'un fichier ne s'oublie pas (on modifie le fichier) |
 
-### Route locale d'appel d'outil (PROPOSÉE au noyau)
+### Skills du dépôt : carte de confiance
+
+Les skills d'un dépôt (`.nokker/skills/<famille>/<skill>/SKILL.md`) sont des consignes écrites par un tiers : le noyau les
+ignore tant que l'utilisateur n'a pas fait confiance à CE dossier et à CETTE empreinte (sha256 de l'arbre entier). Quand
+la réponse de `POST /v1/local/sessions` porte `skills.project: "untrusted"`, ou à l'événement `skill.untrusted` (l'arbre a
+changé pendant la session), la CLI ouvre une carte « Faire confiance aux skills de ce dépôt ? » : racine, nombre de skills,
+empreinte complète. `y` (ou `o`) = `POST /v1/local/skills/trust {thread_id, sha256}` (409 : l'arbre a changé depuis la
+lecture, une nouvelle carte suit) ; Entrée ne vaut JAMAIS confiance, et la carte ignore les touches de ses 500 premières
+ms (une commande en train d'être tapée ne lui répond pas) ; `n`/Échap = rien (les skills restent ignorés, `/skills trust` plus tard). Une carte par
+empreinte. Noyau sans skills de dépôt (drapeau `local.project_skills` éteint : pas de clé `skills`) ou session reprise
+(le noyau ne donne l'état qu'à l'ouverture) : `/skills` le dit.
+
+### Route locale d'appel d'outil
 
 `POST /v1/local/tools/call {thread_id, name, arguments}` (jeton local ; fil de session locale seulement, sinon 404).
-Liste blanche `checkpoint_list|checkpoint_diff|checkpoint_create|checkpoint_restore|skill_list|skill_view|todo` (autre nom : 403 ; `todo` est en lecture seule : `arguments` doit être `{}`, sinon 400 ; 409 si un tour est en cours sur le fil, la CLI affiche « un tour est en cours, réessayez après »).
+Liste blanche du noyau `checkpoint_list|checkpoint_diff|checkpoint_create|checkpoint_restore|skill_list|skill_view|todo`,
+plus `memory` (drapeau `local.project_memory`) et `delegate_status` (serveur local) ; autre nom (dont `delegate_cancel`) :
+403 ; `todo` est en lecture seule : `arguments` doit être `{}`, sinon 400 ; `delegate_status` sans `wait_s`, sinon 400 ;
+409 si un tour est en cours sur le fil, la CLI affiche « un tour est en cours, réessayez après » (pour `/agents`, l'état
+vient alors des événements).
 `200 {content, is_error}` si l'outil est autorisé (READ/WRITE) ; un refus par règle ou par le mode plan est aussi un `200 {content, is_error: true}` ; `202 {approval_id}` si l'effet exige une carte
 (`checkpoint_restore` : DESTRUCTIVE) : la carte suit le chemin normal (`approval.requested`, `GET /v1/local/approvals`,
 `decide`) et le résultat (rejet de la carte compris : `is_error: true`) arrive dans UN événement `tool.result {thread_id, approval_id, content, is_error}`, sans tour modèle ni autre événement.
 `content` est le texte du résultat tel quel (formes mesurées sur le noyau) : `checkpoint_list` = liste JSON NUE
-`[{hash, short_hash, timestamp, reason, files_changed, insertions, deletions}]` (la CLI tolère aussi `{checkpoints}`) ;
+`[{hash, short_hash, timestamp, reason, files_changed, insertions, deletions, thread_id?, turn_index?, tool?}]` (les trois
+derniers : noyau du 25.10, quand le point est relié à un tour ; `/checkpoints` affiche alors « tour n ») (la CLI tolère aussi `{checkpoints}`) ;
 `checkpoint_diff` = `{stat, diff, message?}` ; `checkpoint_restore` = `{success, restored_files, skipped_user_edits}` ;
-`skill_list` = `{skills:[…]}` ; `skill_view` = Markdown ; `todo` = `{todos, revision, summary}`. `checkpoint_create` répond
+`skill_list` = `{skills:[…]}` ; `skill_view` = Markdown ; `todo` = `{todos, revision, summary}` ; `memory list` =
+`{project, notes:[{name, kind, scope, title, origin, derived_from, created, links, in_core}], sources:[{path, sections:[{name,
+title, in_core}]}]}`, `view` = la note (`text`) ou la section (`source`), `forget` = `{forgotten}` ; `delegate_status` =
+`{children:[{child_id, thread_id, goal, elapsed_s, status: queued|running|stopping|completed|failed|interrupted,
+last_tool?, exit_reason?, summary?, worktree?, tokens?, cost?}], running, finished, unknown?}`. `checkpoint_create` répond
 202 (carte) en attendant un 200 en accept_edits : la CLI gère les deux. La carte d'un appel direct a `channel: "local-direct"` ;
 le `tool.result` n'a pas de `call_id` (apparié par `approval_id`). Erreurs : 400 `arguments invalides (todo : lecture seule,
 sans argument)`, 403 `outil non appelable directement : <nom>` (la CLI affiche `error.message` tel quel). Le chemin vit dans
@@ -212,9 +248,20 @@ pnpm -C apps/cli typecheck && pnpm -C apps/cli test
 ```
 
 Mock : `MOCK_LOCAL_ROOTS` (racines séparées par `:`, défaut tout accepter), `MOCK_MIN_CLIENT_VERSION`,
-`MOCK_DEVICE_PENDING=1` (appareils `pending` jusqu'au TOTP `000000`). Dans une session locale, « corrige le test X »
-déclenche read_file → search_files → patch → pytest → `rm -rf build` (carte) ; « rm -rf / » déclenche une carte
-hardline ; « sous-agent » déclenche `subagent.*`.
+`MOCK_DEVICE_PENDING=1` (appareils `pending` jusqu'au TOTP `000000`), `MOCK_PROJECT_MEMORY=0` (outil `memory` éteint, comme
+le drapeau du noyau), `MOCK_PROJECT_SKILLS=1` (skills du dépôt lus, empreinte calculée comme le noyau, confiance dans
+`settings.json`). Dans une session locale, « corrige le test X » déclenche read_file → search_files → patch → pytest →
+`rm -rf build` (carte) ; « rm -rf / » déclenche une carte hardline ; « sous-agent » déclenche un sous-agent de premier
+plan, « en arrière-plan » / « background » deux sous-agents de fond (`delegate_status`, annulation du fil).
+
+### Limites (routes du noyau manquantes)
+
+- Arrêter UN sous-agent de fond : `delegate_cancel` n'est pas dans la liste blanche de `POST /v1/local/tools/call` (403),
+  et `POST /v1/threads/{id}/cancel` ne reconnaît pas un fil `<parent>/sa-<id>` (l'id contient un `/`). La CLI essaie
+  `delegate_cancel`, puis propose `/agents cancel all`.
+- État de confiance des skills d'une session reprise : donné seulement par la réponse d'ouverture. Rouvrir le fil
+  (`POST /v1/local/sessions {cwd, resume}`, accepté par le noyau du 25.10) le rendrait, mais remplace la source de code du
+  fil (bac à sable) : la CLI ne le fait pas et l'affiche « inconnu ».
 
 ### Pilote pty de mesure (`test/pty_drive.py`)
 

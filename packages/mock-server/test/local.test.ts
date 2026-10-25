@@ -76,11 +76,23 @@ describe("sessions locales", () => {
     const raw = await (await fetch(`${mock.url}/v1/local/sessions`, { headers: { Authorization: `Bearer ${mock.localToken}` } })).json();
     expect(Array.isArray((raw as { sessions: unknown }).sessions)).toBe(true); // forme du noyau
     const list = await client.listLocalSessions();
-    expect(list.find((s) => s.thread_id === a.thread_id)).toMatchObject({ cwd: "/work/proj", title: "proj", last_turn_at: null });
+    // Forme du noyau (§7.4.1) : titre null avant le premier tour, rien en cours, aucune carte.
+    expect(list.find((s) => s.thread_id === a.thread_id)).toEqual({ thread_id: a.thread_id, cwd: "/work/proj", title: null, last_turn_at: null, working: false, pending_approvals: 0 });
     const again = await client.createLocalSession({ cwd: "/work/proj", resume: a.thread_id });
     expect(again.thread_id).toBe(a.thread_id);
+    expect((await client.createLocalSession({ cwd: "/work/proj", thread_id: a.thread_id })).thread_id).toBe(a.thread_id);
+    expect((await client.createLocalSession({ cwd: "/work/proj", thread_id: a.thread_id, resume: a.thread_id })).thread_id).toBe(a.thread_id);
+    await expect(client.createLocalSession({ cwd: "/work/proj", thread_id: a.thread_id, resume: "th_autre" })).rejects.toMatchObject({ status: 400 });
+    await expect(client.createLocalSession({ cwd: "/work/proj", resume: 12 as never })).rejects.toMatchObject({ status: 400 });
     await expect(client.createLocalSession({ cwd: "/etc" })).rejects.toMatchObject({ status: 403 });
-    await expect(client.createLocalSession({ cwd: "/work/proj", resume: "th_inconnu" })).rejects.toMatchObject({ status: 404 });
+    // Fil inconnu : le noyau l'ouvre sous cet id.
+    expect((await client.createLocalSession({ cwd: "/work/proj", resume: "th_inconnu" })).thread_id).toBe("th_inconnu");
+    // Après un tour : titre, date ISO.
+    await client.streamChatCompletion(a.thread_id, [{ role: "user", content: "bonjour" }], () => {});
+    const row = (await client.listLocalSessions()).find((s) => s.thread_id === a.thread_id)!;
+    expect(row.title).toBeTruthy();
+    expect(row.last_turn_at).toMatch(/^\d{4}-\d\d-\d\dT/);
+    expect(row.working).toBe(false);
   });
 });
 
@@ -202,12 +214,12 @@ describe("hardline, annulation", () => {
     const th = await newSession();
     const t = startTurn(th, "corrige le test add");
     const card = await until(() => pendingCard(th));
-    expect(await client.cancelTurn(th)).toEqual({ cancelled: true, approvals_cancelled: 1 });
+    expect(await client.cancelTurn(th)).toEqual({ cancelled: true, approvals_cancelled: 1, subagents_cancelled: 0 });
     await t;
     const done = (await until(() => events.filter((e) => e.type === "turn.done" && e.thread_id === th).at(-1))) as { cancelled?: boolean };
     expect(done.cancelled).toBe(true);
     expect((await client.getApproval(card.id)).status).toBe("rejected");
-    expect(await client.cancelTurn(th)).toEqual({ cancelled: false, approvals_cancelled: 0 });
+    expect(await client.cancelTurn(th)).toEqual({ cancelled: false, approvals_cancelled: 0, subagents_cancelled: 0 });
   });
 
   it("routes : /v1/approvals/{id}/decision refuse le jeton local ; /v1/local/approvals/{id}/decide : 400 strong≠once, 409 déjà décidée, 404 inconnue", async () => {
@@ -302,7 +314,7 @@ describe("POST /v1/local/tools/call", () => {
     expect((await call(th, "terminal", { command: "ls" })).status).toBe(403);
     const ordinary = await client.createThread("ordinaire");
     expect((await call(ordinary.id, "checkpoint_list")).status).toBe(404);
-    expect((await call("th_inconnu", "todo")).status).toBe(404);
+    expect((await call("th_jamais_ouvert", "todo")).status).toBe(404);
     const user = await fetch(`${mock.url}/v1/dev/demo-session`, { method: "POST" }).then((r) => r.json() as Promise<{ token: string }>);
     expect((await call(th, "todo", {}, user.token)).status).toBe(403);
   });
@@ -362,7 +374,7 @@ describe("POST /v1/local/tools/call", () => {
     await client.decideLocalApproval(approval_id, { decision: "approve", scope: "once" });
     const ev = (await until(() => events.find((e) => e.type === "tool.result" && e.approval_id === approval_id))) as { content: string; call_id?: string };
     expect(ev.call_id).toBeUndefined();
-    expect(JSON.parse(ev.content)).toMatchObject({ success: true });
+    expect(JSON.parse(ev.content)).toMatchObject({ created: true, tool: "checkpoint_create" }) // forme du noyau : {created, …point, thread_id, turn_index, tool};
   });
 
   it("messages d'erreur du noyau : 403 et 400 exacts", async () => {

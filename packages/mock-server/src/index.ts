@@ -52,6 +52,19 @@ export async function startMockServer(
     devicePending?: boolean;
     /** Cartes locales : `inline` (défaut) ou `kernel` (comme le noyau, voir `MockStateOptions.approvalStyle`). */
     approvalStyle?: "inline" | "kernel";
+    /** Drapeau `sso` (LOKKAL §7.24) ; défaut `MOCK_SSO=1`, sinon éteint. */
+    sso?: boolean;
+    /** Drapeau `packs_web` (LOKKAL §7.30) ; défaut `MOCK_PACKS_WEB=1`, sinon éteint. */
+    packsWeb?: boolean;
+    /** Écritures réelles du scénario local et points de retour photographiés (voir `MockStateOptions.localWrites`) ;
+     * défaut : `MOCK_LOCAL_WRITES=1`. */
+    localWrites?: boolean;
+    /** Drapeau `local.project_memory` (défaut : allumé ; `MOCK_PROJECT_MEMORY=0` l'éteint). */
+    projectMemory?: boolean;
+    /** Drapeau `local.project_skills` (défaut : éteint ; `MOCK_PROJECT_SKILLS=1` l'allume). */
+    projectSkills?: boolean;
+    /** Foyer (X23) : `MOCK_HOUSEHOLD=payer|member|minor|none` (défaut `off` : 404 comme le noyau sans drapeau). */
+    household?: "off" | "payer" | "member" | "minor" | "none";
   } = {},
 ): Promise<MockServerHandle> {
   const configDir = opts.configDir !== undefined ? opts.configDir : process.env.NOKKER_CONFIG_DIR_OVERRIDE || null;
@@ -62,7 +75,13 @@ export async function startMockServer(
     localRoots: opts.localRoots !== undefined ? opts.localRoots : envRoots,
     minClientVersion: opts.minClientVersion ?? process.env.MOCK_MIN_CLIENT_VERSION ?? null,
     devicePending: opts.devicePending ?? process.env.MOCK_DEVICE_PENDING === "1",
+    sso: opts.sso ?? process.env.MOCK_SSO === "1",
+    packsWeb: opts.packsWeb ?? process.env.MOCK_PACKS_WEB === "1",
     ...(opts.approvalStyle ? { approvalStyle: opts.approvalStyle } : {}),
+    localWrites: opts.localWrites ?? process.env.MOCK_LOCAL_WRITES === "1",
+    projectMemory: opts.projectMemory ?? process.env.MOCK_PROJECT_MEMORY !== "0",
+    projectSkills: opts.projectSkills ?? process.env.MOCK_PROJECT_SKILLS === "1",
+    household: opts.household ?? (["payer", "member", "minor", "none"].includes(process.env.MOCK_HOUSEHOLD ?? "") ? (process.env.MOCK_HOUSEHOLD as "payer" | "member" | "minor" | "none") : "off"),
   });
   if (configDir) {
     mkdirSync(configDir, { recursive: true, mode: 0o700 });

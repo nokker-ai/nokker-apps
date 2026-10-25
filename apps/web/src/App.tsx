@@ -17,6 +17,9 @@ import { SoundToggle } from "./components/SoundToggle.js";
 import { readJson, writeJson } from "./viewState.js";
 import { Icon } from "./icons.js";
 import { Welcome } from "./welcome/Welcome.js";
+import { PacksTab } from "./packs/PacksTab.js";
+import { HouseholdTab } from "./household/HouseholdTab.js";
+import { h as hhText } from "./household/model.js";
 
 function useMedia(q: string): boolean {
   const get = (): boolean => {
@@ -41,7 +44,7 @@ function useMedia(q: string): boolean {
   return m;
 }
 
-type Tab = "chat" | "crew" | "incidents" | "plan" | "team" | "connectors" | "account" | "machine";
+type Tab = "chat" | "crew" | "incidents" | "plan" | "team" | "household" | "packs" | "connectors" | "account" | "machine";
 
 /** Bureau Nokker : tiroir de sessions + chat ; les bulles flottent au-dessus ; Crew en onglet. */
 export function App(): React.ReactElement {
@@ -80,6 +83,21 @@ export function App(): React.ReactElement {
     };
   }, [store.ready, store.authMode, store.client]);
 
+  // X23 : l'onglet Foyer n'existe que si nokker.ai sert les foyers (drapeau `household` ; sinon 404). Le nombre affiché =
+  // invitations reçues quand on n'a pas encore de foyer.
+  const [householdInvites, setHouseholdInvites] = useState<number | null>(null);
+  useEffect(() => {
+    if (!store.ready || store.authMode === "local") return;
+    let live = true;
+    store.client.listReceivedHouseholdInvitations().then(
+      (r) => live && setHouseholdInvites(r.invitations.length),
+      () => live && setHouseholdInvites(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [store.ready, store.authMode, store.client]);
+
   // X18 : Incidents (drapeau `operate`) et Plan (drapeau `plan`) n'existent que si leurs routes répondent.
   const [liveIncidents, setLiveIncidents] = useState<number | null>(null);
   const [planOn, setPlanOn] = useState(false);
@@ -98,6 +116,20 @@ export function App(): React.ReactElement {
       live = false;
     };
   }, [store.ready, store.client]);
+
+  // §7.30 : Packs si nokker.ai les sert (drapeau `packs_web`), ou dans Lokkal (jeton local).
+  const [packsOn, setPacksOn] = useState(false);
+  useEffect(() => {
+    if (!store.ready) return;
+    let live = true;
+    (store.authMode === "local" ? store.client.listLocalPacks() : store.client.listPacks()).then(
+      () => live && setPacksOn(true),
+      () => live && setPacksOn(false),
+    );
+    return () => {
+      live = false;
+    };
+  }, [store.ready, store.authMode, store.client]);
 
   useEffect(() => {
     if (!store.crewPulse) return;
@@ -170,6 +202,21 @@ export function App(): React.ReactElement {
                       {teamInvites}
                     </span>
                   ) : null}
+                </button>
+              ) : null}
+              {householdInvites !== null ? (
+                <button type="button" className={`tab-main ${tab === "household" ? "on" : ""}`} aria-current={tab === "household" ? "page" : undefined} onClick={() => setTab("household")}>
+                  {hhText(uiLang(), "tab")}
+                  {householdInvites ? (
+                    <span className="tab-count" aria-label={`${householdInvites} invitation(s)`}>
+                      {householdInvites}
+                    </span>
+                  ) : null}
+                </button>
+              ) : null}
+              {packsOn ? (
+                <button type="button" className={`tab-main ${tab === "packs" ? "on" : ""}`} aria-current={tab === "packs" ? "page" : undefined} onClick={() => setTab("packs")}>
+                  Packs
                 </button>
               ) : null}
               <button type="button" className={`tab-main ${tab === "connectors" ? "on" : ""}`} aria-current={tab === "connectors" ? "page" : undefined} onClick={() => setTab("connectors")}>
@@ -257,6 +304,19 @@ export function App(): React.ReactElement {
             <PlanTab client={store.client} tick={store.opsTick} toast={store.toast} currentThread={store.current ? { id: store.current.id, title: store.current.title } : null} />
           ) : store.ready && tab === "team" && teamInvites !== null ? (
             <TeamTab client={store.client} toast={store.toast} onInvitations={setTeamInvites} />
+          ) : store.ready && tab === "household" && householdInvites !== null ? (
+            <HouseholdTab client={store.client} lang={uiLang()} toast={store.toast} signDecision={store.signDecision ?? null} onReceived={setHouseholdInvites} />
+          ) : store.ready && tab === "packs" && packsOn ? (
+            <PacksTab
+              client={store.client}
+              local={store.authMode === "local"}
+              currentThread={store.current ? { id: store.current.id, title: store.current.title } : null}
+              toast={store.toast}
+              onOpenThread={(id) => {
+                store.selectThread(id);
+                setTab("chat");
+              }}
+            />
           ) : store.ready && tab === "machine" && store.authMode === "local" ? (
             <MachineTab client={store.client} toast={store.toast} />
           ) : store.ready && tab === "account" ? (

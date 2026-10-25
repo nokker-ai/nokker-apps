@@ -3711,3 +3711,165 @@ code.wrap {
   color: var(--text);
   font: inherit;
 }
+
+/* ── Foyer (X23, LOKKAL §7.29) ── */
+.hh-tab {
+  /* Le fil principal ne défile pas : l'onglet porte son propre défilement, contenu centré sur 820 px. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px max(16px, calc((100% - 820px) / 2)) 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hh-tab h2 {
+  margin: 0 0 4px;
+}
+.hh-list,
+.hh-members {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hh-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.hh-member,
+.hh-card,
+.hh-note {
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hh-member.suspended {
+  opacity: 0.75;
+  border-style: dashed;
+}
+.hh-member-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+.hh-member-stats {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 14px;
+}
+.hh-member-stats dt {
+  color: var(--muted);
+}
+.hh-member-stats dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.hh-cap-form {
+  margin-top: 4px;
+}
+.hh-cap-form input:not([type="checkbox"]) {
+  flex: 0 0 7em;
+  width: 7em;
+}
+.hh-minor {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hh-remove {
+  justify-self: start;
+  align-self: flex-start;
+}
+.hh-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 0;
+}
+.hh-invite,
+.hh-note-form {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 6px;
+}
+.hh-invite input:not([type="checkbox"]),
+.hh-invite select,
+.hh-note-form input,
+.hh-note-form select,
+.hh-note-form textarea,
+.hh-tab #hh-agents {
+  width: 100%;
+  max-width: 460px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.hh-attest {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--panel);
+  padding: 10px 12px;
+}
+.hh-attest h4 {
+  margin: 0 0 6px;
+}
+.hh-attest-text {
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.5;
+  max-height: 260px;
+  overflow: auto;
+  margin-bottom: 8px;
+}
+.hh-policy {
+  border: 0;
+  padding: 0;
+  margin: 6px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+.hh-note p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.hh-note .chip,
+.hh-note > button {
+  align-self: flex-start;
+}
+.hh-history {
+  margin-top: 10px;
+}
+.hh-danger {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.hh-tab label[for="hh-agents"],
+.hh-tab #hh-agents {
+  display: block;
+}
+.hh-tab #hh-agents {
+  margin: 4px 0 10px;
+}

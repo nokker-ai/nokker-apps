@@ -157,7 +157,7 @@ describe("App (commandes d'outils du noyau)", () => {
     await type(r, "/agents");
     await frameHas(r, "Aucun sous-agent");
     await type(r, "lance un sous-agent");
-    await frameHas(r, "terminé (ok)", 8000);
+    await frameHas(r, "terminé — 1 commit(s)", 8000);
     await type(r, "/agents");
     await frameHas(r, "Sous-agents :");
     expect(r.lastFrame()).toContain("dernier outil : patch");

@@ -65,7 +65,7 @@ describe("abonnement", () => {
   it("sans abonnement : plans proposés, checkout, pas de portail", async () => {
     const b = await c.getBillingStatus();
     expect(b.plan).toBeNull();
-    expect(b.plans.map((p) => p.id)).toEqual(["essentiel", "solo"]);
+    expect(b.plans.map((p) => p.id)).toEqual(["solo", "famille", "large"]);
     expect((await c.billingCheckout("solo")).url).toContain("solo");
     expect((await c.billingPortal().catch((e) => e)).status).toBe(404);
     expect((await c.billingCheckout("nope").catch((e) => e)).status).toBe(400);

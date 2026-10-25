@@ -5,11 +5,13 @@
  * fichiers AppRole, seules la présence et la taille.
  */
 import { readFileSync, statSync } from "node:fs";
+import { t } from "./i18n/index.js";
 import { composeArgs, hostCommand, type LokkalConfig } from "./lokkal.js";
 import type { Runner } from "./proc.js";
 
 export interface VaultCheck {
-  name: "coffre";
+  /** Nom de la ligne (traduit : « coffre » en français). */
+  name: string;
   status: "ok" | "ko";
   detail: string;
 }
@@ -45,8 +47,8 @@ async function readSettings(c: LokkalConfig, run: Runner): Promise<{ provider?: 
 
 async function nonEmpty(c: LokkalConfig, path: string, run: Runner): Promise<boolean> {
   if (c.wsl_distro) {
-    const t = hostCommand(c, "test", ["-s", path]);
-    return (await run(t.cmd, t.args, { timeoutMs: 10_000 })).code === 0;
+    const probe = hostCommand(c, "test", ["-s", path]);
+    return (await run(probe.cmd, probe.args, { timeoutMs: 10_000 })).code === 0;
   }
   try {
     const s = statSync(path);
@@ -60,7 +62,8 @@ async function nonEmpty(c: LokkalConfig, path: string, run: Runner): Promise<boo
 export async function checkVault(c: LokkalConfig, run: Runner): Promise<VaultCheck | null> {
   const settings = await readSettings(c, run);
   if (!settings || settings.provider !== "openbao") return null;
-  const ko = (detail: string): VaultCheck => ({ name: "coffre", status: "ko", detail });
+  const name = t("vault");
+  const ko = (detail: string): VaultCheck => ({ name, status: "ko", detail });
 
   const args = [...composeArgs(c)];
   args.splice(3, 0, "--env-file", c.env_file); // compose -p <projet> --env-file <env> -f <compose>
@@ -73,19 +76,19 @@ export async function checkVault(c: LokkalConfig, run: Runner): Promise<VaultChe
     status = null;
   }
   const p = c.project;
-  if (!status) return ko(`OpenBao ne répond pas (docker compose -p ${p} ps openbao)`);
-  if (status.initialized !== true) return ko("OpenBao n'est pas initialisé (relance install.sh avec le profil vault)");
+  if (!status) return ko(t("OpenBao does not respond (docker compose -p {0} ps openbao)", p));
+  if (status.initialized !== true) return ko(t("OpenBao is not initialised (rerun install.sh with the vault profile)"));
   if (status.sealed !== false) {
     return ko(
       settings.unseal === "manual"
-        ? `coffre scellé : docker compose -p ${p} exec openbao bao operator unseal`
-        : `vault-unseal ne descelle pas : docker compose -p ${p} logs vault-unseal`,
+        ? t("vault sealed: docker compose -p {0} exec openbao bao operator unseal", p)
+        : t("vault-unseal does not unseal: docker compose -p {0} logs vault-unseal", p),
     );
   }
-  if (!c.install_dir) return ko("install_dir absent de lokkal.json : identifiants AppRole introuvables");
+  if (!c.install_dir) return ko(t("install_dir is missing from lokkal.json: AppRole credentials not found"));
   const dir = `${c.install_dir.replace(/\/+$/, "")}/vault/approle`;
   const missing: string[] = [];
   for (const f of ["role_id", "secret_id"]) if (!(await nonEmpty(c, `${dir}/${f}`, run))) missing.push(f);
-  if (missing.length) return ko(`identifiants AppRole absents ou vides : ${missing.join(", ")} (dans ${dir})`);
-  return { name: "coffre", status: "ok", detail: "OpenBao initialisé et descellé, identifiants AppRole en place" };
+  if (missing.length) return ko(t("AppRole credentials missing or empty: {0} (in {1})", missing.join(", "), dir));
+  return { name, status: "ok", detail: t("OpenBao initialised and unsealed, AppRole credentials in place") };
 }

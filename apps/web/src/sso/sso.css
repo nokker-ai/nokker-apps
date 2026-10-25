@@ -1,0 +1,84 @@
+/* SSO OIDC (LOKKAL §7.24) : réglages du propriétaire, section projet, accueil. Variables de theme.css. */
+.sso-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 10px;
+  align-items: center;
+  margin: 8px 0;
+}
+.sso-grid input,
+.sso-grid select {
+  min-width: 0;
+}
+@media (max-width: 560px) {
+  .sso-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.sso-copy-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.sso-copy-row code {
+  overflow-wrap: anywhere;
+}
+.sso-domains li {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.sso-domains li > div {
+  min-width: 0;
+}
+.sso-mappings {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sso-audit summary {
+  cursor: pointer;
+  color: var(--soft);
+  margin-top: 10px;
+}
+.sso-audit-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow: auto;
+}
+.sso-audit-list li.ko strong {
+  color: var(--ko);
+}
+.sso-conn + .sso-conn {
+  margin-top: 16px;
+}
+.sso-login {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.sso-login .ob-title {
+  font-size: 1.15rem;
+}
+.sso-grid input,
+.sso-grid select,
+.sso-mappings input,
+.sso-mappings select {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.sso-domains li code {
+  flex: initial;
+}

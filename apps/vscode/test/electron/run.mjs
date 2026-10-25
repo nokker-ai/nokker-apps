@@ -15,17 +15,46 @@ const ext = join(here, "..", "..");
 const dir = await mkdtemp(join(tmpdir(), "nokker-vscode-e2e-"));
 const proj = join(dir, "projets", "calc");
 await mkdir(join(proj, "src"), { recursive: true });
-await writeFile(join(proj, "src", "app.py"), "def add(a, b):\n    return a + b\n");
+await writeFile(join(proj, "src", "app.py"), "def add(a, b):\n    return a - b\n");
 const config = join(dir, "config");
-const mock = await startMockServer({ port: 0, seed: false, speed: 0.02, configDir: config, localRoots: [join(dir, "projets")] });
+// Écritures réelles : le patch du scénario modifie src/app.py et les points de retour photographient le dossier.
+const mock = await startMockServer({ port: 0, seed: false, speed: 0.02, configDir: config, localRoots: [join(dir, "projets")], localWrites: true });
+// `NOKKER_E2E_LOCALE=fr` : VS Code en français (libellés de l'extension par son paquet l10n).
+const locale = process.env.NOKKER_E2E_LOCALE || "";
 let code = 0;
 try {
+  const version = process.env.NOKKER_VSCODE_VERSION || "stable";
+  if (locale) {
+    await runTests({
+      version,
+      extensionDevelopmentPath: ext,
+      extensionTestsPath: join(here, "warmup.cjs"),
+      launchArgs: [proj, "--no-sandbox", "--disable-gpu", "--disable-workspace-trust", `--user-data-dir=${join(dir, "user")}`, `--extensions-dir=${join(ext, ".vscode-test", `extensions-${locale}`)}`],
+      extensionTestsEnv: { NOKKER_E2E_USER_DIR: join(dir, "user"), NOKKER_SERVER_URL: mock.url, NOKKER_CONFIG_DIR_OVERRIDE: config },
+    });
+  }
   await runTests({
-    version: process.env.NOKKER_VSCODE_VERSION || "stable",
+    version,
     extensionDevelopmentPath: ext,
     extensionTestsPath: join(here, "suite.cjs"),
-    launchArgs: [proj, "--disable-extensions", "--no-sandbox", "--disable-gpu", "--disable-workspace-trust", `--user-data-dir=${join(dir, "user")}`],
-    extensionTestsEnv: { NOKKER_CONFIG_DIR_OVERRIDE: config, NOKKER_SERVER_URL: mock.url, NOKKER_E2E_PROJ: proj, NOKKER_E2E_SHOT: process.env.NOKKER_E2E_SHOT ?? "" },
+    launchArgs: [
+      proj,
+      ...(locale ? [] : ["--disable-extensions"]),
+      "--no-sandbox",
+      "--disable-gpu",
+      "--disable-workspace-trust",
+      `--user-data-dir=${join(dir, "user")}`,
+      // Une langue autre que l'anglais demande son module linguistique (installé une fois dans
+      // .vscode-test/extensions-<langue>, voir le README) ; sans lui, VS Code reste en anglais.
+      ...(locale ? [`--locale=${locale}`, `--extensions-dir=${join(ext, ".vscode-test", `extensions-${locale}`)}`] : []),
+    ],
+    extensionTestsEnv: {
+      NOKKER_CONFIG_DIR_OVERRIDE: config,
+      NOKKER_SERVER_URL: mock.url,
+      NOKKER_E2E_PROJ: proj,
+      NOKKER_E2E_SHOT: process.env.NOKKER_E2E_SHOT ?? "",
+      NOKKER_E2E_LOCALE: locale,
+    },
   });
 } catch (err) {
   console.error(`échec : ${err instanceof Error ? err.message : String(err)}`);

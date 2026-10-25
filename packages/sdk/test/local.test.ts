@@ -119,7 +119,7 @@ describe("callLocalTool", () => {
     expect(JSON.parse(calls[0]!.body!)).toEqual({ thread_id: "th_1", name: "todo", arguments: { x: 1 } });
     expect(await c.callLocalTool("th_1", "checkpoint_restore", { hash: "h", safe: true })).toEqual({ approval_id: "appr_1" });
     expect(LOCAL_TOOL_CALL_PATH).toBe("/v1/local/tools/call");
-    expect(LOCAL_TOOL_NAMES).toHaveLength(7);
+    expect(LOCAL_TOOL_NAMES).toHaveLength(9);
     expect(parseToolJson<{ a: number }>("{\"a\":1}")).toEqual({ a: 1 });
     expect(parseToolJson("pas du json")).toBeNull();
   });
@@ -128,5 +128,27 @@ describe("callLocalTool", () => {
     const fetchImpl = (async () => jsonResponse(403, { error: { message: "outil interdit" } })) as unknown as FetchLike;
     const c = new NokkerClient({ baseUrl: "http://x", token: "t", fetchImpl });
     await expect(c.callLocalTool("th_1", "todo")).rejects.toMatchObject({ status: 403 });
+  });
+});
+
+describe("skills du dépôt et sous-agents (LOKKAL §7.21, §7.22)", () => {
+  it("trustProjectSkills : POST /v1/local/skills/trust {thread_id, sha256}", async () => {
+    const calls: Array<{ url: string; method?: string; body?: string }> = [];
+    const fetchImpl = vi.fn(async (url: string, init: { method?: string; body?: string }) => {
+      calls.push({ url, method: init.method, body: init.body });
+      return jsonResponse(200, { thread_id: "th_1", root: "/w/p", sha256: "ab", trusted: true });
+    }) as unknown as FetchLike;
+    const c = new NokkerClient({ baseUrl: "http://x", token: "t", fetchImpl });
+    expect(await c.trustProjectSkills("th_1", "ab")).toEqual({ thread_id: "th_1", root: "/w/p", sha256: "ab", trusted: true });
+    expect(calls[0]).toMatchObject({ url: "http://x/v1/local/skills/trust", method: "POST" });
+    expect(JSON.parse(calls[0]!.body!)).toEqual({ thread_id: "th_1", sha256: "ab" });
+  });
+
+  it("subagentParent : parent_thread_id, sinon thread_id", async () => {
+    const { subagentParent, NOKKER_EVENT_TYPES } = await import("../src/types.js");
+    expect(subagentParent({ parent_thread_id: "th_p", thread_id: "th_x" })).toBe("th_p");
+    expect(subagentParent({ thread_id: "th_x" })).toBe("th_x");
+    expect(subagentParent({})).toBeUndefined();
+    expect(NOKKER_EVENT_TYPES).toContain("skill.untrusted");
   });
 });

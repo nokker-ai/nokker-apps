@@ -36,6 +36,8 @@ export function rootThreadOf(threadId: string): string {
 export class LocalEventHub {
   private sub: EventSubscription | null = null;
   private listeners = new Map<string, Set<(e: NokkerEvent) => void>>();
+  /** Abonnés à TOUS les fils (liste des sessions d'un éditeur). */
+  private everyone = new Set<(e: NokkerEvent) => void>();
   private reconnectListeners = new Set<() => void>();
   private connected = false;
   private waiters: Array<() => void> = [];
@@ -76,6 +78,16 @@ export class LocalEventHub {
     };
   }
 
+  /** Tous les événements, tous fils confondus (vue « sessions » d'un éditeur) ; `onReconnect` à chaque reconnexion. */
+  listenAll(fn: (e: NokkerEvent) => void, onReconnect?: () => void): () => void {
+    this.everyone.add(fn);
+    if (onReconnect) this.reconnectListeners.add(onReconnect);
+    return () => {
+      this.everyone.delete(fn);
+      if (onReconnect) this.reconnectListeners.delete(onReconnect);
+    };
+  }
+
   close(): void {
     this.sub?.close();
     this.sub = null;
@@ -83,6 +95,7 @@ export class LocalEventHub {
   }
 
   private dispatch(e: NokkerEvent): void {
+    for (const fn of this.everyone) fn(e);
     const tid = eventThread(e);
     if (tid === null) {
       // `approval.decided` ne porte pas de fil : à tout le monde, chacun filtre par id de carte.
@@ -96,7 +109,8 @@ export class LocalEventHub {
 
 function eventThread(e: NokkerEvent): string | null {
   if (e.type === "approval.requested") return e.approval.thread_id;
-  const t = (e as { thread_id?: unknown }).thread_id;
+  // `subagent.progress|finished` du noyau ne portent que `parent_thread_id`.
+  const t = (e as { thread_id?: unknown }).thread_id ?? (e as { parent_thread_id?: unknown }).parent_thread_id;
   return typeof t === "string" ? t : null;
 }
 
@@ -161,6 +175,28 @@ export interface EditorFs {
   /** Contenu du fichier, `null` s'il n'existe pas ou ne se lit pas. */
   read(path: string): Promise<string | null>;
 }
+
+/** Textes que la session produit elle-même (notices, aperçu d'un appel fermé par sa carte). Français par défaut ; un
+ * éditeur traduit les siens (extension VS Code : anglais par défaut). */
+export interface EditorTexts {
+  subagentStarted(goal: string): string;
+  subagentFinished(status: string, commits: number | null): string;
+  imageSkipped: string;
+  approvedExecuted: string;
+  executionFailed: string;
+  cardExpired: string;
+  rejected: string;
+}
+
+export const EDITOR_TEXTS_FR: EditorTexts = {
+  subagentStarted: (goal) => `Sous-agent lancé : ${goal}`,
+  subagentFinished: (status, commits) => `Sous-agent terminé (${status})${commits ? ` : ${commits} commit(s)` : ""}`,
+  imageSkipped: "Image non lue : le modèle n'a pas la vision.",
+  approvedExecuted: "Approuvée : exécutée par le noyau.",
+  executionFailed: "Échec de l'exécution.",
+  cardExpired: "Carte expirée : non exécutée.",
+  rejected: "Refusée : non exécutée.",
+};
 
 export interface TurnOutcome {
   stopReason: "end_turn" | "cancelled";
@@ -242,6 +278,7 @@ export class EditorSession {
     public readonly threadId: string,
     public readonly cwd: string,
     private readonly fs: EditorFs,
+    private readonly texts: EditorTexts = EDITOR_TEXTS_FR,
   ) {}
 
   /** Session de code sur `cwd` : `resume: true` reprend le fil le plus récent de ce dossier (comme le client terminal),
@@ -251,7 +288,7 @@ export class EditorSession {
     hub: LocalEventHub,
     cwd: string,
     fs: EditorFs,
-    opts: { resume?: boolean; threadId?: string } = {},
+    opts: { resume?: boolean; threadId?: string; texts?: EditorTexts } = {},
   ): Promise<EditorSession> {
     let threadId = opts.threadId;
     if (!threadId && opts.resume) {
@@ -260,7 +297,7 @@ export class EditorSession {
       threadId = best?.thread_id;
     }
     if (!threadId) threadId = (await client.createLocalSession({ cwd })).thread_id;
-    const s = new EditorSession(client, hub, threadId, cwd, fs);
+    const s = new EditorSession(client, hub, threadId, cwd, fs, opts.texts);
     s.attach();
     return s;
   }
@@ -515,12 +552,12 @@ export class EditorSession {
             preview:
               summary ??
               (ok
-                ? "Approuvée : exécutée par le noyau."
+                ? this.texts.approvedExecuted
                 : status === "failed"
-                  ? "Échec de l'exécution."
+                  ? this.texts.executionFailed
                   : status === "expired"
-                    ? "Carte expirée : non exécutée."
-                    : "Refusée : non exécutée."),
+                    ? this.texts.cardExpired
+                    : this.texts.rejected),
           };
           this.tools.set(callId, end);
           this.sink.onToolEnd?.(end);
@@ -609,13 +646,13 @@ export class EditorSession {
         this.closeCard(e.approval_id, e.decision);
         return;
       case "subagent.started":
-        this.sink.onNotice?.(`Sous-agent lancé : ${e.goal}`);
+        this.sink.onNotice?.(this.texts.subagentStarted(e.goal));
         return;
       case "subagent.finished":
-        this.sink.onNotice?.(`Sous-agent terminé (${e.status})${e.commits ? ` : ${e.commits} commit(s)` : ""}`);
+        this.sink.onNotice?.(this.texts.subagentFinished(e.status, e.commits ?? null));
         return;
       case "attachment.skipped":
-        if (e.thread_id === this.threadId) this.sink.onNotice?.("Image non lue : le modèle n'a pas la vision.");
+        if (e.thread_id === this.threadId) this.sink.onNotice?.(this.texts.imageSkipped);
         return;
       case "turn.started":
         if (e.thread_id !== this.threadId) return;

@@ -6,6 +6,8 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { NokkerApiError, type LocalProcess, type LocalSecrets, type NokkerClient } from "@nokker-apps/sdk";
 import { Icon } from "../icons.js";
+import { MirrorPanel } from "../mirror/MirrorPanel.js";
+import { LocalMailbox } from "../localmail/LocalMailbox.js";
 
 const POLL_MS = 5000;
 const NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$/;
@@ -28,6 +30,8 @@ export function MachineTab({ client, toast }: { client: NokkerClient; toast(text
     <section className="machine-tab" aria-label="Machine">
       <Processes client={client} toast={toast} />
       <Vault client={client} toast={toast} />
+      <LocalMailbox client={client} toast={toast} />
+      <MirrorPanel client={client} toast={toast} />
     </section>
   );
 }

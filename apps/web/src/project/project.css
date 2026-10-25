@@ -1,0 +1,98 @@
+/* Sections §7.27 d'un projet d'équipe (budget, agents des membres, journal) et livraison du brief (§7.18.5). */
+.budget-bar {
+  margin: 8px 0;
+}
+.budget-bar-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 10px;
+}
+.budget-track {
+  height: 8px;
+  border-radius: 6px;
+  background: var(--line);
+  overflow: hidden;
+  margin: 4px 0;
+}
+.budget-track span {
+  display: block;
+  height: 100%;
+  background: var(--ok);
+}
+.budget-bar.st-warning .budget-track span {
+  background: var(--hot);
+}
+.budget-bar.st-over .budget-track span {
+  background: var(--ko);
+}
+.budget-bar.st-over .budget-bar-head .fine,
+.budget-warn {
+  color: var(--ko);
+}
+.budget-members {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 0.92em;
+}
+.budget-members th,
+.budget-members td {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+}
+.budget-form label {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.budget-form input {
+  width: 7em;
+}
+.budget-form-note {
+  flex-basis: 100%;
+}
+.project-agents li {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.project-agents li > div {
+  min-width: 0;
+}
+.project-agent-note {
+  flex-basis: 100%;
+}
+.brief-delivery {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.brief-delivery .team-inline-form input {
+  min-width: 14em;
+}
+.plan-brief .brief-delivery {
+  flex-basis: 100%;
+}
+.brief-delivery .team-inline-form {
+  align-items: center;
+}
+.brief-delivery .team-inline-form .team-check {
+  flex: none;
+}
+.brief-delivery .bd-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  width: auto;
+}
+.brief-delivery .team-inline-form input[type="email"] {
+  flex: 0 1 22em;
+}
+.brief-delivery input[type="checkbox"] {
+  flex: none;
+  width: auto;
+  min-width: 0;
+}

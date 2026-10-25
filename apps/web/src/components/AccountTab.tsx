@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { AccountExportStatus, AccountInfo, AccountUsage, BillingStatus, Device, NokkerClient } from "@nokker-apps/sdk";
-import { billingView, fmtReset, monthTurns, planLabel, softOver, STATUS_KEYS, todayRows, weekRows, type UsageRow } from "../account/usage.js";
+import { billingView, fmtReset, monthTurns, planCaps, planLabel, softOver, STATUS_KEYS, todayRows, usageLevel, usagePct, weekRows, type UsageRow } from "../account/usage.js";
 import { ConnectorsStep, TelegramStep } from "../onboarding/Connectors.js";
 import { errorCode, errorKey } from "../onboarding/errors.js";
 import { t, type Key, type Lang } from "../onboarding/i18n.js";
@@ -38,7 +38,7 @@ function UsageBar({ lang, r }: { lang: Lang; r: UsageRow }): React.ReactElement 
   );
 }
 
-function ConsentCard({ client, lang, initial }: { client: NokkerClient; lang: Lang; initial: boolean }): React.ReactElement {
+function ConsentCard({ client, lang, initial, locked }: { client: NokkerClient; lang: Lang; initial: boolean; locked: boolean }): React.ReactElement {
   const [on, setOn] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
@@ -61,14 +61,47 @@ function ConsentCard({ client, lang, initial }: { client: NokkerClient; lang: La
       <h3 id="acc-consent">{t(lang, "accConsent")}</h3>
       <p className="ob-note">{t(lang, "accConsentIntro")}</p>
       <label className="ob-check">
-        <input type="checkbox" checked={on} disabled={busy} data-consent="training" onChange={(e) => toggle(e.target.checked)} />
+        <input type="checkbox" checked={on && !locked} disabled={busy || locked} data-consent="training" onChange={(e) => toggle(e.target.checked)} />
         <span>{t(lang, "accConsentLabel")}</span>
       </label>
       <p className="ob-status" role="status">
-        {t(lang, on ? "accConsentOn" : "accConsentOff")}
+        {t(lang, locked ? "accConsentLocked" : on ? "accConsentOn" : "accConsentOff")}
       </p>
       <Fail lang={lang} err={err} />
     </section>
+  );
+}
+
+function capsLine(lang: Lang, caps: Record<string, number>): string {
+  const c = planCaps(caps);
+  if (c.day === null) return "";
+  const base = c.week === null ? t(lang, "accPlanCapsDay", { day: String(c.day) }) : t(lang, "accPlanCaps", { day: String(c.day), week: String(c.week) });
+  return c.seats ? t(lang, "accPlanSeats", { caps: base, n: String(c.seats) }) : base;
+}
+
+/** X23 : membre d'un foyer — le quota commun (jour, semaine) et sa propre part du jour. */
+function HouseholdUsage({ lang, hh }: { lang: Lang; hh: NonNullable<AccountUsage["household"]> }): React.ReactElement {
+  const soft = hh.mode === "soft";
+  const bar = (used: number, cap: number | null): UsageRow => {
+    const pct = usagePct(used, cap);
+    const level = usageLevel(pct);
+    return { key: "turns", used, cap, pct, level: soft && level === "full" ? "warn" : level, over: cap !== null && used > cap };
+  };
+  const mine = hh.member;
+  return (
+    <div data-usage-household>
+      <h4 className="ob-sub">{t(lang, "accHousehold")}</h4>
+      <p className="ob-note">{t(lang, "accToday")}</p>
+      <UsageBar lang={lang} r={bar(hh.today.used, hh.today.cap)} />
+      <p className="ob-note">{t(lang, "accWeek")}</p>
+      <UsageBar lang={lang} r={bar(hh.week.used, hh.week.cap)} />
+      <p className="ob-note">
+        {t(lang, "accHouseholdMine")} :{" "}
+        {mine.cap === null
+          ? t(lang, "accHouseholdNoCap", { used: String(mine.today) })
+          : t(lang, "accHouseholdCap", { used: String(mine.today), cap: String(mine.cap), source: t(lang, mine.source === "custom" ? "accSrcCustom" : "accSrcDefault") })}
+      </p>
+    </div>
   );
 }
 
@@ -116,6 +149,7 @@ function UsageCard({ lang, usage }: { lang: Lang; usage: AccountUsage }): React.
           {weekReset ? <p className="ob-note">{t(lang, "accResetWeek", { when: weekReset })}</p> : null}
         </>
       ) : null}
+      {usage.household ? <HouseholdUsage lang={lang} hh={usage.household} /> : null}
       {softOver(usage) ? (
         <p className="ob-note" role="status" data-usage-soft>
           {t(lang, "accOverSoft")}
@@ -226,7 +260,7 @@ function SubscriptionCard({ client, lang, billing }: { client: NokkerClient; lan
               <li key={p.id} data-plan={p.id}>
                 <div>
                   <strong>{planLabel(p.id)}</strong>
-                  <div className="ob-note">{t(lang, "accPlanCaps", { turns: String(p.caps.turns ?? "?"), deep: String(p.caps.deep ?? "?") })}</div>
+                  <div className="ob-note">{capsLine(lang, p.caps)}</div>
                 </div>
                 <button type="button" className="ob-btn primary" disabled={busy} onClick={() => go(client.billingCheckout(p.id))}>
                   {t(lang, "accSubscribe", { plan: planLabel(p.id) })}
@@ -397,7 +431,7 @@ export function AccountTab({ client, lang, pollMs = 2000 }: { client: NokkerClie
         <h2 className="ob-title">{t(lang, "accTitle")}</h2>
         <Fail lang={lang} err={loadErr} />
         {info ? <ProfileCard lang={lang} info={info} /> : null}
-        {info?.consents ? <ConsentCard client={client} lang={lang} initial={info.consents.training} /> : null}
+        {info?.consents ? <ConsentCard client={client} lang={lang} initial={info.consents.training} locked={info.consents.training_locked === "minor"} /> : null}
         {billing ? <SubscriptionCard client={client} lang={lang} billing={billing} /> : null}
         {usage ? <UsageCard lang={lang} usage={usage} /> : null}
         <DevicesCard client={client} lang={lang} />

@@ -1,10 +1,11 @@
 /**
  * « Mon compte » en démo : `/v1/account*` (contrat final de Nokker dev, 22.10.2026) et `/v1/billing/*`
  * (nokker/billing). Le réglage de la démo passe par `POST /v1/dev/account-mock` (mock seulement) :
- * `{billing: bool, plan: "essentiel"|"solo"|null, status, deleting: bool, internal: bool}`.
+ * `{billing: bool, plan: "solo"|"famille"|"large"|null, status, deleting: bool, internal: bool}`.
  */
 import { argsSha256, type Approval, type BillingStatus } from "@nokker-apps/sdk";
 import { MOCK_USER, randomId, type MockState } from "./state.js";
+import { householdMinor, householdUsage } from "./household.js";
 
 type Send = (status: number, payload: unknown) => void;
 
@@ -31,9 +32,11 @@ export function accountMock(state: MockState): AccountMock {
   return m;
 }
 
-const PLANS = [
-  { id: "essentiel", caps: { turns: 50, turns_per_week: 250 } },
-  { id: "solo", caps: { turns: 40, turns_per_week: 200 } },
+// Paliers du noyau (nokker/billing/plans.py, 25.10) : mêmes clés que `GET /v1/billing/plan`.
+const PLANS: { id: string; caps: Record<string, number> }[] = [
+  { id: "solo", caps: { turns_per_day: 40, turns_per_week: 200 } },
+  { id: "famille", caps: { turns_per_day: 110, turns_per_week: 550, household_members: 6 } },
+  { id: "large", caps: { turns_per_day: 230, turns_per_week: 1150, household_members: 6 } },
 ];
 
 /** Prochain midi UTC. */
@@ -86,7 +89,7 @@ export async function handleAccount(
       created_at: "2026-10-12T08:30:00+02:00",
       status: "active",
       terms: { version: "2026-10-28", accepted_at: "2026-10-12T08:31:10+02:00" },
-      consents: { training: m.training },
+      consents: householdMinor(state, MOCK_USER) ? { training: false, training_locked: "minor" } : { training: m.training },
     });
     return true;
   }
@@ -94,6 +97,7 @@ export async function handleAccount(
   if (method === "PUT" && path === "/v1/account/consent") {
     const b = await readBody();
     if (b.scope !== "training" || typeof b.granted !== "boolean") return send(400, { error: "invalid" }), true;
+    if (b.granted && householdMinor(state, MOCK_USER)) return send(403, { error: { code: "minor_training_refused", message: "profil mineur : jamais d'entraînement" } }), true;
     m.training = b.granted;
     send(200, { scope: "training", granted: m.training });
     return true;
@@ -101,9 +105,9 @@ export async function handleAccount(
 
   if (method === "GET" && path === "/v1/account/usage") {
     const plan = m.billing ? m.plan : null;
-    const caps = m.internal ? null : (PLANS.find((p) => p.id === plan)?.caps ?? { turns: 40, turns_per_week: 200 });
-    const dayCap = caps ? caps.turns : null;
-    const weekCap = caps ? (caps.turns_per_week as number) : null;
+    const caps = m.internal ? null : (PLANS.find((p) => p.id === plan)?.caps ?? { turns_per_day: 40, turns_per_week: 200 });
+    const dayCap = caps ? (caps.turns_per_day ?? null) : null;
+    const weekCap = caps ? (caps.turns_per_week ?? null) : null;
     const weekUsed = m.turnsToday + 173;
     send(200, {
       tz: "Europe/Zurich",
@@ -120,6 +124,7 @@ export async function handleAccount(
         turns: { used: weekUsed, cap: weekCap, over: weekCap !== null && weekUsed > weekCap },
       },
       month: { turns: { used: 412 } },
+      ...(householdUsage(state, MOCK_USER) ? { household: householdUsage(state, MOCK_USER) } : {}),
     });
     return true;
   }

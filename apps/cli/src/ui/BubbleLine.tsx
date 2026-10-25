@@ -6,6 +6,7 @@
  */
 import React from "react";
 import { Box, Text } from "ink";
+import { t } from "../i18n/index.js";
 import type { Bubble } from "@nokker-apps/sdk";
 import { bubbleLineModel } from "./bubbleLineModel.js";
 
@@ -19,7 +20,7 @@ export function BubbleLine({ bubble, spinnerFrame }: { bubble: Bubble; spinnerFr
         {" "}
         [{m.label}] {m.statusGlyph}
       </Text>
-      {m.shared ? <Text dimColor> (partagée)</Text> : null}
+      {m.shared ? <Text dimColor> {t("(shared)")}</Text> : null}
       {m.hint ? <Text dimColor> — {m.hint}</Text> : null}
     </Box>
   );

@@ -1,0 +1,47 @@
+/* Publication d'une page (LOKKAL §7.26), dans la bulle artifact. Variables de theme.css. */
+.publish-panel {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.publish-url {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.publish-url .artifact-url {
+  flex: 1;
+  min-width: 0;
+}
+.publish-pending {
+  color: var(--hot);
+  margin: 0;
+}
+.publish-confirm {
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.publish-confirm p {
+  margin: 0;
+}
+.publish-what {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 10px;
+  margin: 0;
+}
+.publish-what dt {
+  color: var(--soft);
+}
+.publish-what dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.publish-local {
+  margin-top: 6px;
+}

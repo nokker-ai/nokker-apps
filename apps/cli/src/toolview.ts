@@ -12,6 +12,7 @@
  * par un second `tool.result` du même `call_id` (avec `approval_id`) ; refusée ou expirée, `approval.decided` la ferme.
  */
 import { liveTail, type LocalToolEffect, type NokkerEvent } from "@nokker-apps/sdk";
+import { t } from "./i18n/index.js";
 
 export interface ToolLine {
   callId: string;
@@ -46,14 +47,25 @@ const PENDING_MARKER = /\[approval:([\w-]+)\]/;
 /** Nombre de lignes écrites qui défilent sous la ligne de l'outil. */
 export const LIVE_WINDOW = 6;
 
-export const EFFECT_LABEL: Record<LocalToolEffect, string> = {
-  read: "lecture",
-  write: "écriture",
-  destructive: "destructif",
-  send_external: "envoi",
-  spend: "dépense",
-  secret: "secret",
-};
+/** Effet en clair, dans la langue de l'interface ; `null` pour un effet inconnu. */
+export function effectName(effect: LocalToolEffect | string): string | null {
+  switch (effect) {
+    case "read":
+      return t("read");
+    case "write":
+      return t("write");
+    case "destructive":
+      return t("destructive");
+    case "send_external":
+      return t("send");
+    case "spend":
+      return t("spend");
+    case "secret":
+      return t("secret");
+    default:
+      return null;
+  }
+}
 
 export const EFFECT_COLOR: Record<LocalToolEffect, string> = {
   read: "gray",
@@ -76,12 +88,12 @@ export function toolTarget(name: string, args: Record<string, unknown>): string 
 }
 
 /** `⟳ patch src/app.py (écriture)` en cours ; `✓ patch src/app.py 120 ms` à la fin ; `✗ …` en échec. */
-export function formatToolLine(t: ToolLine): string {
-  const target = toolTarget(t.name, t.args);
-  const head = `${t.name}${target ? ` ${target}` : ""}`;
-  if (t.ok === null && t.approvalId) return t.approved ? `⟳ ${head} (approuvé, exécution…)` : `⏸ ${head} (en attente d'approbation)`;
-  if (t.ok === null) return `⟳ ${head}${t.effect ? ` (${EFFECT_LABEL[t.effect]})` : ""}`;
-  return `${t.ok ? "✓" : "✗"} ${head}${t.ms !== null ? ` ${t.ms} ms` : ""}`;
+export function formatToolLine(l: ToolLine): string {
+  const target = toolTarget(l.name, l.args);
+  const head = `${l.name}${target ? ` ${target}` : ""}`;
+  if (l.ok === null && l.approvalId) return l.approved ? t("⟳ {0} (approved, running…)", head) : t("⏸ {0} (waiting for approval)", head);
+  if (l.ok === null) return `⟳ ${head}${l.effect ? ` (${effectName(l.effect) ?? l.effect})` : ""}`;
+  return `${l.ok ? "✓" : "✗"} ${head}${l.ms !== null ? ` ${l.ms} ms` : ""}`;
 }
 
 export function previewLines(preview: string | null): string[] {
@@ -89,8 +101,8 @@ export function previewLines(preview: string | null): string[] {
 }
 
 /** Les dernières lignes du bloc vivant (au plus `n`, coupées à `width`) ; vide sans bloc. */
-export function liveLines(t: ToolLine, n = LIVE_WINDOW, width = Infinity): string[] {
-  return t.live ? liveTail(t.live, n, width) : [];
+export function liveLines(line: ToolLine, n = LIVE_WINDOW, width = Infinity): string[] {
+  return line.live ? liveTail(line.live, n, width) : [];
 }
 
 /** Applique un événement au tableau de lignes d'outils (immuable). Renvoie le même tableau si l'événement
@@ -125,7 +137,7 @@ export function applyToolEvent(lines: ToolLine[], e: NokkerEvent): ToolLine[] {
       return prev ? lines.map((l, k) => (k === i ? next : l)) : [...lines, next];
     }
     case "tool.call": {
-      const args = e.args ?? (e.args_preview ? { aperçu: e.args_preview } : {});
+      const args = e.args ?? (e.args_preview ? { preview: e.args_preview } : {});
       const i = lines.findIndex((l) => l.callId === e.call_id);
       if (i >= 0) {
         // Ligne née du direct : on la complète (arguments caviardés du noyau, effet) au lieu d'en ajouter une.
@@ -158,7 +170,7 @@ export function applyToolEvent(lines: ToolLine[], e: NokkerEvent): ToolLine[] {
       if (!lines.some((l) => l.approvalId === e.approval_id && l.ok === null)) return lines;
       if (e.decision === "approved") return lines.map((l) => (l.approvalId === e.approval_id && l.ok === null ? { ...l, approved: true } : l));
       // Refus, expiration, annulation : rien n'a été exécuté, et le noyau ne publie pas de `tool.result`.
-      const why = e.decision === "expired" ? "approbation expirée — non exécuté" : e.decision === "rejected" ? "refusé — non exécuté" : "non exécuté";
+      const why = e.decision === "expired" ? t("approval expired — not run") : e.decision === "rejected" ? t("rejected — not run") : t("not run");
       return lines.map((l) => (l.approvalId === e.approval_id && l.ok === null ? { ...l, ok: false, preview: why, approvalId: null, approved: false } : l));
     }
     case "turn.done": {

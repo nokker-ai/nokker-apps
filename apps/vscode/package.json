@@ -1,8 +1,8 @@
 {
   "name": "nokker-vscode",
   "displayName": "Nokker",
-  "description": "Nokker Lokkal dans VS Code : une session de code sur le dossier ouvert, contre le noyau de votre machine.",
-  "version": "0.1.0",
+  "description": "%description%",
+  "version": "0.2.0",
   "publisher": "nokker",
   "license": "Apache-2.0",
   "private": true,
@@ -17,20 +17,27 @@
   },
   "categories": [
     "AI",
-    "Chat"
+    "Chat",
+    "Other"
   ],
   "keywords": [
     "nokker",
     "lokkal",
     "agent",
-    "local"
+    "local",
+    "ai",
+    "coding",
+    "checkpoints",
+    "approvals"
   ],
   "main": "./dist/extension.cjs",
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": false,
-      "description": "Nokker agit sur les fichiers du dossier : il exige un dossier de confiance."
+      "description": "%untrusted%"
     },
     "virtualWorkspaces": false
   },
@@ -49,41 +56,170 @@
         {
           "type": "webview",
           "id": "nokker.chat",
-          "name": "Session"
+          "name": "%view.chat%"
+        },
+        {
+          "id": "nokker.changes",
+          "name": "%view.changes%",
+          "icon": "media/activity.svg"
+        },
+        {
+          "id": "nokker.sessions",
+          "name": "%view.sessions%",
+          "icon": "media/activity.svg",
+          "visibility": "collapsed"
         }
       ]
     },
     "commands": [
       {
         "command": "nokker.sendSelection",
-        "title": "Envoyer la sélection à Nokker",
+        "title": "%cmd.sendSelection%",
+        "category": "Nokker"
+      },
+      {
+        "command": "nokker.addFile",
+        "title": "%cmd.addFile%",
+        "category": "Nokker",
+        "icon": "$(mention)"
+      },
+      {
+        "command": "nokker.addProblems",
+        "title": "%cmd.addProblems%",
+        "category": "Nokker"
+      },
+      {
+        "command": "nokker.fixProblems",
+        "title": "%cmd.fixProblems%",
+        "category": "Nokker"
+      },
+      {
+        "command": "nokker.addTerminalOutput",
+        "title": "%cmd.addTerminalOutput%",
         "category": "Nokker"
       },
       {
         "command": "nokker.newThread",
-        "title": "Nouveau fil",
+        "title": "%cmd.newThread%",
         "category": "Nokker",
         "icon": "$(add)"
       },
       {
         "command": "nokker.cancel",
-        "title": "Arrêter le tour",
+        "title": "%cmd.cancel%",
         "category": "Nokker",
         "icon": "$(debug-stop)"
       },
       {
         "command": "nokker.reconnect",
-        "title": "Se reconnecter au noyau",
+        "title": "%cmd.reconnect%",
         "category": "Nokker",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "nokker.refreshSessions",
+        "title": "%cmd.refreshSessions%",
+        "category": "Nokker",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "nokker.openSession",
+        "title": "%cmd.openSession%",
+        "category": "Nokker"
+      },
+      {
+        "command": "nokker.openLive",
+        "title": "%cmd.openLive%",
+        "category": "Nokker"
+      },
+      {
+        "command": "nokker.review.openDiff",
+        "title": "%cmd.reviewOpenDiff%",
+        "category": "Nokker",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "nokker.review.accept",
+        "title": "%cmd.reviewAccept%",
+        "category": "Nokker",
+        "icon": "$(check)"
+      },
+      {
+        "command": "nokker.review.refuse",
+        "title": "%cmd.reviewRefuse%",
+        "category": "Nokker",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "nokker.review.acceptAll",
+        "title": "%cmd.reviewAcceptAll%",
+        "category": "Nokker",
+        "icon": "$(check-all)"
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "nokker.openSession",
+          "when": "false"
+        },
+        {
+          "command": "nokker.openLive",
+          "when": "false"
+        },
+        {
+          "command": "nokker.review.openDiff",
+          "when": "false"
+        },
+        {
+          "command": "nokker.review.accept",
+          "when": "nokker.reviewFileOpen"
+        },
+        {
+          "command": "nokker.review.refuse",
+          "when": "nokker.reviewFileOpen"
+        }
+      ],
       "editor/context": [
         {
           "command": "nokker.sendSelection",
           "when": "editorHasSelection",
           "group": "nokker@1"
+        },
+        {
+          "command": "nokker.addFile",
+          "when": "resourceScheme == file",
+          "group": "nokker@2"
+        },
+        {
+          "command": "nokker.addProblems",
+          "when": "resourceScheme == file",
+          "group": "nokker@3"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "nokker.addFile",
+          "when": "resourceScheme == file && !explorerResourceIsFolder",
+          "group": "nokker@1"
+        }
+      ],
+      "terminal/context": [
+        {
+          "command": "nokker.addTerminalOutput",
+          "group": "nokker@1"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "nokker.review.accept",
+          "when": "nokker.reviewFileOpen",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nokker.review.refuse",
+          "when": "nokker.reviewFileOpen",
+          "group": "navigation@2"
         }
       ],
       "view/title": [
@@ -96,6 +232,38 @@
           "command": "nokker.reconnect",
           "when": "view == nokker.chat",
           "group": "navigation@2"
+        },
+        {
+          "command": "nokker.review.acceptAll",
+          "when": "view == nokker.changes",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nokker.newThread",
+          "when": "view == nokker.sessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nokker.refreshSessions",
+          "when": "view == nokker.sessions",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "nokker.review.accept",
+          "when": "view == nokker.changes && viewItem == nokker.change.open",
+          "group": "inline@1"
+        },
+        {
+          "command": "nokker.review.refuse",
+          "when": "view == nokker.changes && viewItem == nokker.change.open",
+          "group": "inline@2"
+        },
+        {
+          "command": "nokker.review.openDiff",
+          "when": "view == nokker.changes",
+          "group": "inline@3"
         }
       ]
     },
@@ -114,17 +282,33 @@
           "type": "string",
           "default": "",
           "scope": "machine",
-          "markdownDescription": "Adresse du noyau local. Vide : `api_url` de `~/.config/nokker/lokkal.json` (écrit par l'installeur), sinon `http://127.0.0.1:8742`. Le jeton local n'est jamais un réglage : il est lu au même endroit que la CLI `nokker`."
+          "markdownDescription": "%config.serverUrl%"
+        },
+        "nokker.liveWrite.openEditor": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%config.liveWrite%"
         }
       }
-    }
+    },
+    "viewsWelcome": [
+      {
+        "view": "nokker.changes",
+        "contents": "%welcome.changes%"
+      },
+      {
+        "view": "nokker.sessions",
+        "contents": "%welcome.sessions%"
+      }
+    ]
   },
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:electron": "node scripts/build.mjs && xvfb-run -a node test/electron/run.mjs",
-    "package": "node scripts/package.mjs"
+    "package": "node scripts/package.mjs",
+    "publish:check": "node scripts/package.mjs --check"
   },
   "devDependencies": {
     "@nokker-apps/brand": "workspace:*",
@@ -139,5 +323,14 @@
     "tsx": "^4.19.1",
     "typescript": "^5.6.3",
     "vitest": "^2.1.4"
+  },
+  "l10n": "./l10n",
+  "galleryBanner": {
+    "color": "#1b1b1f",
+    "theme": "dark"
+  },
+  "homepage": "https://github.com/nokker-ai/nokker-apps/tree/main/apps/vscode#readme",
+  "bugs": {
+    "url": "https://github.com/nokker-ai/nokker-apps/issues"
   }
 }

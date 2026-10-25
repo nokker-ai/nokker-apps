@@ -12,7 +12,8 @@ import React, { useEffect, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import TextInput from "ink-text-input";
 import type { Approval, ApprovalScope } from "@nokker-apps/sdk";
-import { approvalTarget, choiceToDecision, effectLabel, localChoices, formatRemaining, remainingSeconds, type LocalChoice } from "../approval-model.js";
+import { approvalTarget, choiceLabel, choiceToDecision, effectLabel, localChoices, formatRemaining, remainingSeconds, type LocalChoice } from "../approval-model.js";
+import { t } from "../i18n/index.js";
 
 export interface LocalDecisionHandler {
   (decision: "approve" | "reject", scope: ApprovalScope, rule?: string): void;
@@ -118,29 +119,29 @@ function LocalCard({
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginY={1}>
       <Text bold color="yellow">
-        ⚠ Action à approuver
+        {t("⚠ Action to approve")}
       </Text>
       <Text>
-        Outil <Text bold>{approval.tool_name}</Text> · effet <Text color="redBright">{effectLabel(approval.effect)}</Text>
+        {t("Tool")} <Text bold>{approval.tool_name}</Text> · {t("effect")} <Text color="redBright">{effectLabel(approval.effect)}</Text>
       </Text>
       <Text>
-        {approval.tool_name === "terminal" ? "Commande" : "Cible"} : <Text bold>{target}</Text>
+        {approval.tool_name === "terminal" ? t("Command:") : t("Target:")} <Text bold>{target}</Text>
       </Text>
       <Text dimColor>{approval.reason}</Text>
       <Box flexDirection="column" marginTop={1}>
         {choices.map((c, i) => (
           <Text key={c.key} color={i === index ? "cyanBright" : undefined} bold={i === index}>
             {i === index ? "› " : "  "}
-            {c.key}. {c.label}
+            {c.key}. {choiceLabel(c, approval.tool_name)}
           </Text>
         ))}
       </Box>
       {current.rule ? (
         <Text color="yellow">
-          Règle écrite dans vos réglages Nokker (settings.json du dossier d'état) : <Text bold>{current.rule}</Text> — Entrée pour confirmer
+          {t("Rule written to your Nokker settings (settings.json in the state folder):")} <Text bold>{current.rule}</Text> {t("— Enter to confirm")}
         </Text>
       ) : null}
-      <Text dimColor>↑/↓ ou 1-4 · Entrée valide · expire dans {mm}</Text>
+      <Text dimColor>{t("↑/↓ or 1-4 · Enter validates · expires in {0}", mm)}</Text>
       {busy ? <Text dimColor>…</Text> : null}
       {message ? <Text color="red">{message}</Text> : null}
     </Box>
@@ -186,23 +187,23 @@ function RemoteCard({
   return (
     <Box flexDirection="column" borderStyle="double" borderColor="yellow" paddingX={1} marginY={1}>
       <Text bold color="yellow">
-        ⚠ Approbation demandée — niveau {approval.strength === "strong" ? "FORT" : "STANDARD"}
+        {approval.strength === "strong" ? t("⚠ Approval requested — STRONG level") : t("⚠ Approval requested — STANDARD level")}
       </Text>
       <Text>
-        Outil <Text bold>{approval.tool_name}</Text> · effet <Text color="redBright">{effectLabel(approval.effect)}</Text>
+        {t("Tool")} <Text bold>{approval.tool_name}</Text> · {t("effect")} <Text color="redBright">{effectLabel(approval.effect)}</Text>
       </Text>
       <Text dimColor>{JSON.stringify(approval.arguments)}</Text>
       <Text>{approval.reason}</Text>
-      {approval.advice ? <Text italic dimColor>Avis de Nina : {approval.advice}</Text> : null}
-      <Text dimColor>expire : {approval.expires_at}</Text>
+      {approval.advice ? <Text italic dimColor>{t("Reviewer's advice: {0}", approval.advice)}</Text> : null}
+      <Text dimColor>{t("expires: {0}", approval.expires_at)}</Text>
 
       {strong ? (
         <Box marginTop={1} flexDirection="column">
-          <Text color="yellow">Approbation forte : décide-la sur ton téléphone (biométrie). Ce terminal attend la décision.</Text>
+          <Text color="yellow">{t("Strong approval: decide it on your phone (biometrics). This terminal waits for the decision.")}</Text>
         </Box>
       ) : totpMode ? (
         <Box flexDirection="column" marginTop={1}>
-          <Text>Code TOTP pour {totpDecision === "approve" ? "approuver" : "refuser"} (Entrée pour valider) :</Text>
+          <Text>{totpDecision === "approve" ? t("TOTP code to approve (Enter to validate):") : t("TOTP code to reject (Enter to validate):")}</Text>
           <TextInput
             value={totpValue}
             onChange={setTotpValue}
@@ -217,10 +218,13 @@ function RemoteCard({
       ) : (
         <Box marginTop={1}>
           <Text>
-            <Text color="green">[p]</Text> approuver avec cet appareil{"  "}
-            <Text color="red">[r]</Text> refuser{"  "}
-            <Text color="green">[t]</Text> TOTP approuver{"  "}
-            <Text color="red">[x]</Text> TOTP refuser
+            <Text color="green">[p]</Text> {t("approve with this device")}
+            {"  "}
+            <Text color="red">[r]</Text> {t("reject")}
+            {"  "}
+            <Text color="green">[t]</Text> {t("TOTP approve")}
+            {"  "}
+            <Text color="red">[x]</Text> {t("TOTP reject")}
           </Text>
         </Box>
       )}

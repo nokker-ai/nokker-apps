@@ -60,7 +60,9 @@ const SKILL_SOURCE_RE = /^(github:[\w.-]+\/[\w.-]+(\/[\w./-]+)?|https:\/\/[^\s@/
 export const validSkillSource = (s: string): boolean => SKILL_SOURCE_RE.test(s);
 
 export function budgetLabel(b: Project["budget"]): string {
-  return b ? `${b.monthly} ${b.currency} / mois (affiché, pas encore décompté)` : "aucun";
+  if (!b) return "aucun";
+  const parts = [b.daily !== undefined ? `${b.daily} ${b.currency} / jour` : "", b.monthly !== undefined ? `${b.monthly} ${b.currency} / mois` : ""].filter(Boolean);
+  return parts.join(", ") || "aucun";
 }
 
 export function fmtWhen(v: string | number): string {

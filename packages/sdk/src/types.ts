@@ -330,30 +330,56 @@ export interface ToolInputDeltaEvent {
   discarded?: boolean;
 }
 
-/** Sous-agents (LOKKAL.md §7.4.4). */
+/** Sous-agents (LOKKAL.md §7.4.4, arrière-plan §7.22). Formes publiées par le noyau : `subagent.started {thread_id,
+ * parent_thread_id, parent_turn, child_id, child_thread_id, goal, background?}`, `subagent.progress {parent_thread_id,
+ * child_id, tool, ms}`, `subagent.finished {parent_thread_id, child_id, status, commits, dirty, kept, background?,
+ * exit_reason?, resumed?}`. `parent_thread_id` relie l'événement au fil parent (seul `started` porte `thread_id`). */
 export interface SubagentStartedEvent {
   type: "subagent.started";
   thread_id: string;
-  parent_turn: string;
+  parent_thread_id?: string;
+  /** Numéro du tour du parent (noyau) ; les anciens mocks envoyaient l'id du tour. */
+  parent_turn: number | string;
   child_id: string;
+  /** `<parent>/sa-<id>` : le fil de l'enfant (ses cartes y sont posées). */
+  child_thread_id?: string;
   goal: string;
+  /** Enfant de fond (`delegate(background: true)`, §7.22) : le tour du parent n'attend pas. */
+  background?: boolean;
 }
 
 export interface SubagentProgressEvent {
   type: "subagent.progress";
   thread_id?: string;
+  parent_thread_id?: string;
   child_id: string;
   tool: string;
   ms: number;
 }
 
+/** `status` : `completed | failed | interrupted` (noyau). */
+export type SubagentStatus = "completed" | "failed" | "interrupted" | (string & {});
+
 export interface SubagentFinishedEvent {
   type: "subagent.finished";
   thread_id?: string;
+  parent_thread_id?: string;
   child_id: string;
-  status: string;
+  status: SubagentStatus;
   commits: number;
   dirty: boolean;
+  /** Worktree conservé (commits, arbre modifié, annulé ou en attente d'une carte). */
+  kept?: boolean;
+  background?: boolean;
+  /** `completed | error | approval_pending | escalated | cancelled | …` (enfants de fond et repris). */
+  exit_reason?: string | null;
+  /** Fin d'un enfant repris après sa carte (§7.22.7). */
+  resumed?: boolean;
+}
+
+/** Fil parent d'un événement `subagent.*` (`parent_thread_id`, sinon `thread_id`). */
+export function subagentParent(e: { parent_thread_id?: string; thread_id?: string }): string | undefined {
+  return e.parent_thread_id ?? e.thread_id;
 }
 
 export interface ApprovalRequestedEvent {
@@ -474,7 +500,7 @@ export function parseTurnId(turnId: string): { thread_id: string; index: number 
   return Number.isInteger(index) ? { thread_id: turnId.slice(0, i), index } : null;
 }
 
-import type { HookRanEvent, HookUntrustedEvent, MemoryForgottenEvent, MemoryNotedEvent } from "./local-machine.js";
+import type { HookRanEvent, HookUntrustedEvent, MemoryForgottenEvent, MemoryNotedEvent, SkillUntrustedEvent } from "./local-machine.js";
 import type { IncidentUpdatedEvent, PlanCardDeletedEvent, PlanCardUpdatedEvent, PlanProposalUpdatedEvent } from "./ops.js";
 
 export type NokkerEvent =
@@ -484,6 +510,7 @@ export type NokkerEvent =
   | PlanProposalUpdatedEvent
   | HookUntrustedEvent
   | HookRanEvent
+  | SkillUntrustedEvent
   | MemoryNotedEvent
   | MemoryForgottenEvent
   | AttachmentSkippedEvent
@@ -492,6 +519,7 @@ export type NokkerEvent =
   | ToolCallEvent
   | ToolResultEvent
   | ToolInputDeltaEvent
+  | CheckpointCreatedEvent
   | SubagentStartedEvent
   | SubagentProgressEvent
   | SubagentFinishedEvent
@@ -505,6 +533,7 @@ export type NokkerEvent =
 export const NOKKER_EVENT_TYPES = [
   "hook.untrusted",
   "hook.ran",
+  "skill.untrusted",
   "memory.noted",
   "memory.forgotten",
   "attachment.skipped",
@@ -513,6 +542,7 @@ export const NOKKER_EVENT_TYPES = [
   "tool.call",
   "tool.result",
   "tool.input.delta",
+  "checkpoint.created",
   "subagent.started",
   "subagent.progress",
   "subagent.finished",
@@ -614,28 +644,63 @@ export interface ChatCompletion {
 export interface CreateLocalSessionRequest {
   /** Dossier de travail ; doit être sous une racine déclarée du compose (403 sinon). */
   cwd: string;
-  /** Reprise d'un fil local existant. */
+  /** Reprise d'un fil local existant (alias de `thread_id` côté noyau depuis le 25.10 ; les deux, différents : 400). */
   resume?: string;
+  thread_id?: string;
 }
 
-/** `POST /v1/local/sessions` → 201 `{thread_id, cwd}`. */
+/** `POST /v1/local/sessions` → 201 `{thread_id, cwd}` ; `skills` quand le noyau lit les skills du dépôt (§7.21). */
 export interface LocalSession {
   thread_id: string;
   cwd: string;
+  /** Drapeau `local.project_skills` allumé seulement (sinon absent). */
+  skills?: ProjectSkillsStatus;
 }
 
-/** `GET /v1/local/sessions` → `{sessions: [{thread_id, cwd}]}` ; `title` et `last_turn_at` ne sont pas garantis. */
+/** Skills du dépôt d'une session (LOKKAL.md §7.21.3) : `untrusted` = invisibles tant que l'utilisateur ne fait pas
+ * confiance à CE dossier et CETTE empreinte (`POST /v1/local/skills/trust`). */
+export interface ProjectSkillsStatus {
+  enabled: boolean;
+  project: "absent" | "trusted" | "untrusted" | "invalid" | (string & {});
+  /** Racine du dépôt (chemin réel côté noyau). */
+  root: string;
+  /** Empreinte de l'arbre `.nokker/skills` entier ; `null` sans arbre lisible. */
+  sha256: string | null;
+  count: number;
+  notice: string | null;
+}
+
+/** `POST /v1/local/skills/trust` → 200. 409 : empreinte différente ; 404 : fil sans skills de dépôt (ou drapeau
+ * éteint) ; 403 par la passerelle (jeton local seulement). */
+export interface SkillsTrustResult {
+  thread_id: string;
+  root: string;
+  sha256: string;
+  trusted: true;
+}
+
+/** `GET /v1/local/sessions` → `{sessions: [{thread_id, cwd, title, last_turn_at, working, pending_approvals}]}` (§7.4.1).
+ * Un noyau d'avant le 25.10 ne rend que `{thread_id, cwd}` : les autres champs sont facultatifs ici. */
 export interface LocalSessionSummary {
   thread_id: string;
   cwd: string;
-  title?: string;
+  /** `null` avant le premier tour. */
+  title?: string | null;
+  /** ISO 8601 UTC, fin du dernier tour rangé ; `null` sans tour. */
   last_turn_at?: string | null;
+  /** Un tour tourne ou attend dans la file du fil (une décision de carte en file compte). */
+  working?: boolean;
+  /** Cartes en attente du fil ET de ses sous-agents `<fil>/sa-…`. */
+  pending_approvals?: number;
 }
 
-/** Réponse (202) de `POST /v1/threads/{id}/cancel` : cartes en attente du fil et de ses `/sa-` retirées. */
+/** Réponse (202) de `POST /v1/threads/{id}/cancel` : cartes en attente du fil et de ses `/sa-` retirées ; sous-agents
+ * (fond et premier plan) arrêtés (`subagents_cancelled`, §7.22.4). */
 export interface CancelResult {
-  cancelled: boolean;
+  /** Le noyau rend l'id du fil annulé ; les anciens mocks, un booléen. */
+  cancelled: boolean | string;
   approvals_cancelled: number;
+  subagents_cancelled?: number;
 }
 
 /** `GET /healthz` — champs optionnels annoncés par le serveur. */
@@ -660,7 +725,13 @@ export type LocalToolName =
   | "checkpoint_restore"
   | "skill_list"
   | "skill_view"
-  | "todo";
+  | "todo"
+  /** Mémoire du projet (§7.11.7) : drapeau `local.project_memory` allumé seulement (sinon 403). */
+  | "memory"
+  /** Sous-agents en arrière-plan (§7.22.3) : sans `wait_s` hors tour (400 sinon). */
+  | "delegate_status"
+  /** §7.22.4 — PAS dans la liste blanche du noyau aujourd'hui (403) : `cancelSubagents` replie sur l'annulation du fil. */
+  | "delegate_cancel";
 
 export interface LocalToolCallRequest {
   thread_id: string;
@@ -690,6 +761,21 @@ export interface CheckpointInfo {
   files_changed: number;
   insertions?: number;
   deletions?: number;
+  /** Tour qui a pris le point (§7.4.7, depuis le 25.10) : absents si le lien n'est pas connu (point d'avant, d'un autre
+   * programme, ou noyau plus ancien) — jamais inventés. */
+  thread_id?: string;
+  turn_index?: number;
+  /** Outil avant lequel la photo a été prise (`patch`, `checkpoint_create`, `checkpoint_restore`…). */
+  tool?: string;
+}
+
+/** Point de retour nouveau (§7.4.7) : avant un outil non READ, `checkpoint_create`, point « avant retour ». */
+export interface CheckpointCreatedEvent {
+  type: "checkpoint.created";
+  thread_id: string;
+  turn_index: number;
+  hash: string;
+  tool: string;
 }
 
 /** `content` de `checkpoint_diff`. */
@@ -713,6 +799,21 @@ export interface CheckpointRestoreResult {
   error?: string;
 }
 
+/** `checkpoint_restore {hash, file}` (un fichier) : `{success, restored_to, reason?, directory?, file}` ; fichier ABSENT
+ * du point (créé depuis, noyau du 25.10) : supprimé après un point « avant retour » vérifié — `deleted` (faux s'il
+ * était déjà absent) et `snapshot` (le point « avant retour », d'où le faire revenir). */
+export interface CheckpointFileRestoreResult {
+  success: boolean;
+  restored_to?: string;
+  reason?: string;
+  directory?: string;
+  file?: string;
+  deleted?: boolean;
+  snapshot?: string;
+  message?: string;
+  error?: string;
+}
+
 export interface SkillInfo {
   name: string;
   category: string;
@@ -724,4 +825,75 @@ export interface TodoItem {
   id: string;
   content: string;
   status: "pending" | "in_progress" | "completed" | "cancelled";
+}
+
+// ---------------------------------------------------------------------------
+// Mémoire de projet (LOKKAL.md §7.11.7) : outil `memory {action: list|view|forget, name?}` par la route d'appel d'outil
+// ---------------------------------------------------------------------------
+
+export interface ProjectMemoryNote {
+  name: string;
+  kind: "rule" | "feedback" | "fact" | (string & {});
+  scope: "project" | "user" | (string & {});
+  title: string;
+  /** `fil#tour` d'où vient la note. */
+  origin?: string;
+  derived_from?: "user" | "repo" | "agent" | (string & {});
+  created?: string;
+  links?: string[];
+  locality?: string;
+  /** Dans le noyau du message système (sinon rappelée par pertinence). */
+  in_core?: boolean;
+}
+
+export interface ProjectMemorySection {
+  name: string;
+  title: string;
+  in_core: boolean;
+}
+
+/** `memory {action: "list"}`. `project` : `null` sur un fil sans session de code. */
+export interface ProjectMemoryList {
+  project: string | null;
+  notes: ProjectMemoryNote[];
+  sources: { path: string; sections: ProjectMemorySection[] }[];
+}
+
+/** `memory {action: "view"}` : une note apprise (`text` en plus), ou une section d'un fichier d'instructions (`source`). */
+export type ProjectMemoryView = (ProjectMemoryNote & { text: string }) | { name: string; source: string; title: string; text: string };
+
+// ---------------------------------------------------------------------------
+// Sous-agents en arrière-plan (LOKKAL.md §7.22.3) : `delegate_status` par la route d'appel d'outil
+// ---------------------------------------------------------------------------
+
+/** Vue d'un enfant : en cours (`queued|running|stopping`, `last_tool`) ou fini (résultat complet d'un `delegate`). */
+export interface SubagentView {
+  child_id: string;
+  thread_id: string;
+  task_index: number;
+  goal: string;
+  elapsed_s: number;
+  status: "queued" | "running" | "stopping" | SubagentStatus;
+  last_tool?: string;
+  exit_reason?: string;
+  summary?: string;
+  error?: string;
+  worktree?: { path: string; branch: string; commits?: number; dirty?: boolean; kept?: boolean; note?: string };
+  isolated?: boolean;
+  note?: string;
+  tokens?: number;
+  /** Montant en CHF (comptes du ledger du noyau). */
+  cost?: number;
+}
+
+export interface DelegateStatusResult {
+  children: SubagentView[];
+  running: number;
+  finished: number;
+  unknown?: string[];
+}
+
+export interface DelegateCancelResult {
+  cancelled: string[];
+  unknown?: string[];
 }

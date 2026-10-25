@@ -114,6 +114,8 @@ export interface LocalLinkStart {
 export interface LocalLinkStatus {
   state: "pending" | "approved" | "expired" | "denied" | "unlinked";
   account?: string | null;
+  /** Le compte peut publier des pages (§7.26 ; abonné ou compte vérifié, dit par nokker.ai). Absent : inconnu. */
+  pages_public?: boolean;
 }
 
 /** `DELETE /v1/local/link` : la clé du Router est révoquée au mieux puis effacée du coffre. */

@@ -178,7 +178,7 @@ describe("lokkal.json et serveur", () => {
     expect(resolveServer({ serverUrl: "http://e:2", serverExplicit: true }, { NOKKER_SERVER_URL: "http://e:2" })).toEqual({ url: "http://e:2", source: "NOKKER_SERVER_URL" });
     expect(resolveServer({ serverUrl: "http://127.0.0.1:8742", serverExplicit: false }, {})).toEqual({ url: "http://127.0.0.1:9001", source: "lokkal.json" });
     await rm(join(dir, "lokkal.json"));
-    expect(resolveServer({ serverUrl: "http://127.0.0.1:8742", serverExplicit: false }, {})).toEqual({ url: "http://127.0.0.1:8742", source: "défaut" });
+    expect(resolveServer({ serverUrl: "http://127.0.0.1:8742", serverExplicit: false }, {})).toEqual({ url: "http://127.0.0.1:8742", source: "default" });
   });
 
   it("le jeton local se lit à token_path", async () => {
@@ -204,7 +204,7 @@ describe("lokkal.json et serveur", () => {
   });
 
   it("doctor dit d'où vient le serveur", async () => {
-    const { checks } = await runDoctor({ serverUrl: "http://127.0.0.1:1", serverSource: "défaut", fix: false, run: noDocker, candidates: [] });
+    const { checks } = await runDoctor({ serverUrl: "http://127.0.0.1:1", serverSource: "default", fix: false, run: noDocker, candidates: [] });
     expect(checks.find((c) => c.name === "serveur")!.detail).toContain("(défaut)");
   });
 });

@@ -5,6 +5,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { BRAND } from "@nokker-apps/brand";
+import { t } from "../i18n/index.js";
 
 /** Heurtoir discret (identité « Knocks for you », packages/brand/src/signature.ts) — un seul glyphe,
  * pas un ASCII art multi-lignes : ce bandeau doit tenir sur ≥ 60 colonnes. */
@@ -28,9 +29,9 @@ export function Header({
           {BRAND.productName}
         </Text>
         {folder ? <Text bold> {folder}</Text> : null}
-        <Text dimColor> — fil {shortLabel(threadLabel)} · modèle : routage auto</Text>
+        <Text dimColor> — {t("thread {0} · model: auto routing", shortLabel(threadLabel))}</Text>
       </Box>
-      <Text dimColor>statut : {status}</Text>
+      <Text dimColor>{t("status: {0}", status)}</Text>
     </Box>
   );
 }

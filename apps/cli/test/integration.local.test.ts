@@ -113,7 +113,7 @@ describe("session locale", () => {
     const again = await s2.openLocal("/work/projet-a");
     expect(again.resumed).toBe(true);
     expect(s2.threadId).toBe(id);
-    expect((await session.listLocalSessions()).some((s) => s.thread_id === id && s.title === "projet-a")).toBe(true);
+    expect((await session.listLocalSessions()).some((s) => s.thread_id === id && s.title === null && s.working === false && s.pending_approvals === 0)).toBe(true); // forme du noyau : titre null avant le premier tour
   });
 
   it("403 hors racines", async () => {

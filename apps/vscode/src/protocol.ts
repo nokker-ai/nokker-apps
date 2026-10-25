@@ -6,6 +6,7 @@
 export interface ViewChoice {
   /** Index dans les choix de la carte (renvoyé tel quel par le panneau). */
   index: number;
+  id: "once" | "session" | "always" | "reject";
   key: string;
   label: string;
   rule?: string;
@@ -51,6 +52,17 @@ export interface ViewContextItem {
   label: string;
 }
 
+/** Bloc vivant d'une écriture en direct (X22) : les dernières lignes proposées par le modèle. */
+export interface ViewLive {
+  callId: string;
+  name: string;
+  path: string | null;
+  tail: string[];
+  truncated: boolean;
+  done: boolean;
+  discarded: boolean;
+}
+
 export type ToView =
   | { type: "state"; connected: boolean; busy: boolean; folder: string | null; server: string; threadId: string | null; error: string | null }
   | { type: "history"; messages: Array<{ role: "user" | "assistant"; text: string }> }
@@ -64,6 +76,9 @@ export type ToView =
   | { type: "notice"; text: string }
   | { type: "turnEnd"; stopReason: "end_turn" | "cancelled" | "error" }
   | { type: "context"; items: ViewContextItem[] }
+  | { type: "live"; live: ViewLive }
+  | { type: "review"; files: number; pending: number }
+  | { type: "prefill"; text: string }
   | { type: "error"; text: string };
 
 export type FromView =
@@ -74,4 +89,7 @@ export type FromView =
   | { type: "openDiff"; id: string }
   | { type: "removeContext"; id: string }
   | { type: "newThread" }
-  | { type: "reconnect" };
+  | { type: "reconnect" }
+  | { type: "openLive"; callId: string }
+  | { type: "pickFile" }
+  | { type: "openReview" };

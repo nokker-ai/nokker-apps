@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { NokkerClient } from "../src/client.js";
-import { EditorSession, LocalEventHub, rootThreadOf, suffixAfter } from "../src/editor-session.js";
+import { EDITOR_TEXTS_FR, EditorSession, LocalEventHub, rootThreadOf, suffixAfter } from "../src/editor-session.js";
 import type { FetchLike, ResponseLike } from "../src/events.js";
 
 function sse(frames: string[], hold = false): ResponseLike {
@@ -109,4 +109,52 @@ describe("EditorSession : carte forte, où elle attend (LOKKAL.md §7.3)", () =>
   it("déjà déposée à la lecture : « téléphone » d'emblée", async () => {
     expect(await run(true, [])).toEqual([{ forwarded: true, choices: null }]);
   }, 10_000);
+});
+
+describe("LocalEventHub.listenAll et textes de l'éditeur", () => {
+  const frame = (id: number, data: Record<string, unknown>): string => `id: ${id}\nevent: ${String(data.type)}\ndata: ${JSON.stringify(data)}\n\n`;
+
+  it("listenAll reçoit les événements de tous les fils ; listen seulement les siens", async () => {
+    const fetchImpl: FetchLike = async () =>
+      sse(
+        [
+          frame(1, { type: "turn.started", thread_id: "th_a", turn_id: "th_a:0" }),
+          frame(2, { type: "turn.started", thread_id: "th_b", turn_id: "th_b:0" }),
+          frame(3, { type: "approval.decided", approval_id: "ap_1", decision: "approved", by: "x", via: "local" }),
+        ],
+        true,
+      );
+    const client = new NokkerClient({ baseUrl: "http://127.0.0.1:1", token: "t", fetchImpl });
+    const hub = new LocalEventHub(client);
+    const all: string[] = [];
+    const mine: string[] = [];
+    const off = hub.listenAll((e) => all.push(`${e.type}:${(e as { thread_id?: string }).thread_id ?? "-"}`));
+    hub.listen("th_a", (e) => mine.push(e.type));
+    await hub.ready();
+    for (let i = 0; i < 100 && all.length < 3; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(all).toEqual(["turn.started:th_a", "turn.started:th_b", "approval.decided:-"]);
+    expect(mine).toEqual(["turn.started", "approval.decided"]);
+    off();
+    hub.close();
+  });
+
+  it("les notices de la session passent par les textes fournis (défaut : français)", async () => {
+    const fetchImpl: FetchLike = async (url) =>
+      url.endsWith("/v1/events")
+        ? sse([frame(1, { type: "subagent.started", thread_id: "th_c", parent_turn: "th_c:0", child_id: "sa-1", goal: "lire" })], true)
+        : sse([chunk("ok", { reset: true, final: true }), "data: [DONE]\n\n"]);
+    const client = new NokkerClient({ baseUrl: "http://127.0.0.1:1", token: "t", fetchImpl });
+    const hub = new LocalEventHub(client);
+    const texts = { ...EDITOR_TEXTS_FR, subagentStarted: (g: string) => `Sub-agent started: ${g}` };
+    const s = new EditorSession(client, hub, "th_c", "/w", { read: async () => null }, texts);
+    const notices: string[] = [];
+    s.setSink({ onNotice: (t) => notices.push(t) });
+    s.attach();
+    await hub.ready();
+    for (let i = 0; i < 100 && !notices.length; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(notices).toEqual(["Sub-agent started: lire"]);
+    expect(EDITOR_TEXTS_FR.subagentFinished("ok", 2)).toBe("Sous-agent terminé (ok) : 2 commit(s)");
+    s.dispose();
+    hub.close();
+  });
 });

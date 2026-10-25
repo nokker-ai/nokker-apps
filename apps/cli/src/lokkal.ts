@@ -5,6 +5,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { legacyLokkalFilePaths, lokkalFilePath } from "./config.js";
+import { t } from "./i18n/index.js";
 
 export interface LokkalConfig {
   compose: string;
@@ -37,23 +38,23 @@ export type LokkalResult =
 
 /** Validation pure du contenu déjà parsé. Renvoie le message d'erreur ou la config. */
 export function validateLokkal(raw: unknown): { config: LokkalConfig } | { error: string } {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { error: "lokkal.json n'est pas un objet JSON" };
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { error: t("lokkal.json is not a JSON object") };
   const o = raw as Record<string, unknown>;
   const missing = LOKKAL_KEYS.filter((k) => typeof o[k] !== "string" || !(o[k] as string).trim());
-  if (missing.length) return { error: `lokkal.json : clé(s) manquante(s) ou vide(s) : ${missing.join(", ")} (relance install.sh)` };
+  if (missing.length) return { error: t("lokkal.json: missing or empty key(s): {0} (rerun install.sh)", missing.join(", ")) };
   const relative = ABSOLUTE_KEYS.filter((k) => !isAbsLike(o[k] as string));
-  if (relative.length) return { error: `lokkal.json : chemin(s) non absolu(s) : ${relative.join(", ")}` };
+  if (relative.length) return { error: t("lokkal.json: non-absolute path(s): {0}", relative.join(", ")) };
   const config = Object.fromEntries(LOKKAL_KEYS.map((k) => [k, (o[k] as string).trim()])) as unknown as LokkalConfig;
   for (const k of ["install_dir", "wsl_distro"] as const) {
     if (o[k] !== undefined) {
-      if (typeof o[k] !== "string" || !(o[k] as string).trim()) return { error: `lokkal.json : ${k} doit être une chaîne non vide` };
+      if (typeof o[k] !== "string" || !(o[k] as string).trim()) return { error: t("lokkal.json: {0} must be a non-empty string", k) };
       config[k] = (o[k] as string).trim();
     }
   }
   if (config.wsl_distro) {
-    if (!config.install_dir) return { error: "lokkal.json : wsl_distro présent mais install_dir manquant (chemin Linux de ~/.nokker)" };
+    if (!config.install_dir) return { error: t("lokkal.json: wsl_distro is set but install_dir is missing (Linux path of ~/.nokker)") };
     const notLinux = (["compose", "env_file", "install_dir"] as const).filter((k) => !(config[k] as string).startsWith("/"));
-    if (notLinux.length) return { error: `lokkal.json : sous WSL, ${notLinux.join(", ")} doivent être des chemins Linux (/…)` };
+    if (notLinux.length) return { error: t("lokkal.json: under WSL, {0} must be Linux paths (/…)", notLinux.join(", ")) };
   }
   return { config };
 }
@@ -72,7 +73,7 @@ export function readLokkal(): LokkalResult {
   try {
     raw = JSON.parse(readFileSync(path, "utf-8"));
   } catch {
-    return { status: "invalid", error: `${path} n'est pas un JSON valide` };
+    return { status: "invalid", error: t("{0} is not valid JSON", path) };
   }
   const v = validateLokkal(raw);
   if ("error" in v) return { status: "invalid", error: v.error };
@@ -82,9 +83,9 @@ export function readLokkal(): LokkalResult {
 
 /** Explication unique quand lokkal.json ne permet pas d'agir sur le noyau. `null` si tout est prêt. */
 export function lokkalProblem(r: LokkalResult): string | null {
-  if (r.status === "absent") return "aucun Lokkal installé (~/.config/nokker/lokkal.json absent — écrit par install.sh)";
+  if (r.status === "absent") return t("no Lokkal installed (~/.config/nokker/lokkal.json is missing — written by install.sh)");
   if (r.status === "invalid") return r.error;
-  if (!r.composeExists) return `compose introuvable (${r.config.compose})`;
+  if (!r.composeExists) return t("compose not found ({0})", r.config.compose);
   return null;
 }
 
@@ -106,12 +107,19 @@ export function resolveTokenPath(): string {
   return r.status === "ok" ? r.config.token_path : localTokenPath();
 }
 
-export type ServerSource = "--server" | "NOKKER_SERVER_URL" | "lokkal.json" | "défaut";
+/** Origine « défaut » de l'adresse du serveur ; l'affichage passe par `sourceLabel` (traduit). */
+export const SOURCE_DEFAULT = "default";
+export type ServerSource = "--server" | "NOKKER_SERVER_URL" | "lokkal.json" | typeof SOURCE_DEFAULT;
+
+/** Origine du serveur telle qu'on la montre (traduite pour le défaut). */
+export function sourceLabel(s: ServerSource): string {
+  return s === SOURCE_DEFAULT ? t("default") : s;
+}
 
 /** Priorité : --server > NOKKER_SERVER_URL > api_url de lokkal.json > défaut (8742). */
 export function resolveServer(parsed: { serverUrl: string; serverExplicit: boolean }, env: Record<string, string | undefined> = process.env): { url: string; source: ServerSource } {
   if (parsed.serverExplicit) return { url: parsed.serverUrl, source: env.NOKKER_SERVER_URL === parsed.serverUrl ? "NOKKER_SERVER_URL" : "--server" };
   const r = readLokkal();
   if (r.status === "ok") return { url: r.config.api_url, source: "lokkal.json" };
-  return { url: parsed.serverUrl, source: "défaut" };
+  return { url: parsed.serverUrl, source: SOURCE_DEFAULT };
 }

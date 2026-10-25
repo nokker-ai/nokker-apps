@@ -93,6 +93,22 @@ export interface MockStateOptions {
   /** Machine liée à un compte nokker.ai : ses cartes fortes partent au téléphone (`forwarded`, `approval.forwarded`,
    * LOKKAL.md §7.3). Défaut : non liée (elles se décident au terminal). */
   strongRelay?: boolean;
+  /** Drapeau `sso` de nokker.ai (LOKKAL §7.24) : éteint par défaut, comme dans le noyau. */
+  sso?: boolean;
+  /** Drapeau `packs_web` de nokker.ai (LOKKAL §7.30) : éteint par défaut. */
+  packsWeb?: boolean;
+  /** Le scénario de session locale ÉCRIT vraiment dans le dossier (`patch`, `write_file`) et les points de retour
+   * photographient ses fichiers, comme le noyau (docs/en/checkpoints.md) : un retour par fichier restaure le contenu.
+   * Défaut : non (aucun outil n'est exécuté, état simulé). */
+  localWrites?: boolean;
+  /** Drapeau `local.project_memory` (LOKKAL.md §7.11) : outil `memory` appelable par la route d'appel d'outil. Défaut :
+   * allumé, comme le compose Lokkal (`MOCK_PROJECT_MEMORY=0` l'éteint). */
+  projectMemory?: boolean;
+  /** Drapeau `local.project_skills` (§7.21) : clé `skills` à l'ouverture, `skill.untrusted`, `POST /v1/local/skills/trust`.
+   * Défaut : éteint, comme le compose (`MOCK_PROJECT_SKILLS=1` l'allume). */
+  projectSkills?: boolean;
+  /** Drapeau `household` (X23, §7.29) et rôle de la démo : `off` (défaut), `payer`, `member`, `minor`, `none`. */
+  household?: "off" | "payer" | "member" | "minor" | "none";
 }
 
 /** Suite d'un tour arrêté sur une carte (style `kernel`) : jouée après une approbation, verrou du fil tenu — l'outil
@@ -156,6 +172,13 @@ export class MockState {
   approvalStyle: "inline" | "kernel";
   /** Machine liée : cartes fortes déposées chez nokker.ai (modifiable, tests). */
   strongRelay: boolean;
+  /** Écritures réelles du scénario local et points de retour photographiés (modifiable, tests). */
+  localWrites: boolean;
+  /** Mémoire de projet et skills du dépôt (drapeaux du noyau, modifiables : tests). */
+  projectMemory: boolean;
+  projectSkills: boolean;
+  readonly household: "off" | "payer" | "member" | "minor" | "none";
+  private memTrusted: { root: string; sha256: string }[] = [];
   /** Délai du dépôt après la pose de la carte (ms, mis à l'échelle de `speed`). */
   strongRelayMs = 300;
   /** `GET /v1/local/memory` (LOKKAL.md §7.13.6) : mémoire longue directe saine par défaut ; modifiable (tests). */
@@ -172,6 +195,9 @@ export class MockState {
   private threadLocks = new Map<string, Promise<void>>();
   /** Fil racine → nombre d'annulations : une suite de décision en file d'avant l'annulation est abandonnée. */
   cancelEpochs = new Map<string, number>();
+  /** Geste du noyau à l'approbation d'une carte (publication d'une page, §7.26) : remplace le tour de suite. Rend le
+   * résumé, ou `"failed"`. */
+  approvalEffects = new Map<string, () => string>();
   /** Règles `allow` posées par `scope: session`, par fil (mémoire seulement). */
   sessionRules = new Map<string, string[]>();
   /** Jeton local (`local-token`), absent si le mock n'en a pas écrit. */
@@ -181,6 +207,8 @@ export class MockState {
   readonly localRoots: string[] | null;
   readonly minClientVersion: string | null;
   readonly devicePending: boolean;
+  readonly sso: boolean;
+  readonly packsWeb: boolean;
   private memSettings: PermissionSettings = {};
   readonly speed: number;
   private timers = new Set<ReturnType<typeof setTimeout>>();
@@ -194,6 +222,44 @@ export class MockState {
     this.devicePending = opts.devicePending ?? false;
     this.approvalStyle = opts.approvalStyle ?? (process.env.MOCK_APPROVAL_STYLE === "kernel" ? "kernel" : "inline");
     this.strongRelay = opts.strongRelay ?? false;
+    this.sso = opts.sso ?? false;
+    this.packsWeb = opts.packsWeb ?? false;
+    this.localWrites = opts.localWrites ?? false;
+    this.projectMemory = opts.projectMemory ?? true;
+    this.projectSkills = opts.projectSkills ?? false;
+    this.household = opts.household ?? "off";
+  }
+
+  /** `trusted_project_skills: [{root, sha256}]` des réglages de l'utilisateur (jamais lus dans le dépôt). */
+  trustedProjectSkills(): { root: string; sha256: string }[] {
+    const path = this.settingsPath;
+    if (!path) return this.memTrusted;
+    try {
+      const doc = JSON.parse(readFileSync(path, "utf-8")) as { trusted_project_skills?: unknown };
+      return Array.isArray(doc.trusted_project_skills) ? (doc.trusted_project_skills as { root: string; sha256: string }[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Une entrée par dossier : la nouvelle remplace l'ancienne. */
+  addTrustedProjectSkills(root: string, sha256: string): void {
+    const path = this.settingsPath;
+    const next = [...this.trustedProjectSkills().filter((t) => t.root !== root), { root, sha256 }];
+    if (!path) {
+      this.memTrusted = next;
+      return;
+    }
+    let doc: Record<string, unknown> = {};
+    try {
+      doc = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+    } catch {
+      doc = {};
+    }
+    doc.trusted_project_skills = next;
+    if (!existsSync(this.configDir!)) mkdirSync(this.configDir!, { recursive: true, mode: 0o700 });
+    writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`, { mode: 0o600 });
+    chmodSync(path, 0o600);
   }
 
   // -- Réglages de permission (~/.config/nokker/settings.json, relus à chaque appel) ------------
@@ -512,6 +578,17 @@ export function finalizeDecision(
   // `approval.decided` publie le STATUT posé (`"approved"`/`"rejected"`), pas le verbe de la
   // requête — APPROVALS.md §2, `BaseApprovals.decide`.
   state.publish({ type: "approval.decided", approval_id: approval.id, decision: approval.status, by: decidedBy, via });
+  const effect = state.approvalEffects.get(approval.id);
+  if (effect) {
+    // Geste du noyau (`ApprovalExecutor.handlers`) : pas de tour de suite.
+    state.approvalEffects.delete(approval.id);
+    if (decision === "approve") {
+      const r = effect();
+      approval.status = r === "failed" ? "failed" : "executed";
+      approval.result_summary = r === "failed" ? null : r;
+    }
+    return;
+  }
   // Exécution + tour de continuation (APPROVALS.md §2) — simulé : pas de vrai outil appelé.
   let summary: string;
   if (decision === "approve") {

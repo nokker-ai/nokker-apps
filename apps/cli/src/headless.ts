@@ -10,6 +10,7 @@ import type { Connection } from "./auth.js";
 import { CliSession } from "./session.js";
 import { toolTarget } from "./toolview.js";
 import { resolveEffect } from "./approval-model.js";
+import { t } from "./i18n/index.js";
 
 export interface RefusedEffect {
   approval_id: string;
@@ -73,7 +74,7 @@ export async function runPrint(text: string, client: NokkerClient, conn: Connect
         tool: a.tool_name,
         effect: resolveEffect(a, []),
         target: toolTarget(a.tool_name, a.arguments),
-        reason: "aucune règle ne couvre cet effet : refusé par défaut (mode non interactif)",
+        reason: t("no rule covers this effect: refused by default (non-interactive mode)"),
       });
       decisions.push(session.decideLocal(a.id, "reject", "once").catch(() => undefined));
     },

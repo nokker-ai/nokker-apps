@@ -4,6 +4,7 @@
  */
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { cliLogPath } from "./config.js";
+import { t } from "./i18n/index.js";
 import { composeArgs, hostCommand, lokkalProblem, readLokkal } from "./lokkal.js";
 import { firstLine, run as realRun, type Runner } from "./proc.js";
 
@@ -35,16 +36,16 @@ export function filterCliLog(text: string, lines: number, since: string | null, 
   if (since) {
     const limit = now - sinceToMs(since);
     all = all.filter((l) => {
-      const t = Date.parse(l.slice(0, l.indexOf(" ")));
-      return Number.isNaN(t) || t >= limit;
+      const ts = Date.parse(l.slice(0, l.indexOf(" ")));
+      return Number.isNaN(ts) || ts >= limit;
     });
   }
   return all.slice(-lines);
 }
 
 export async function runLogs(opts: LogsOptions): Promise<number> {
-  const out = opts.out ?? ((t) => process.stdout.write(t));
-  const err = opts.err ?? ((t) => process.stderr.write(t));
+  const out = opts.out ?? ((s) => process.stdout.write(s));
+  const err = opts.err ?? ((s) => process.stderr.write(s));
   const run = opts.run ?? realRun;
 
   if (opts.component === "cli") return logsCli(opts, out, err);
@@ -52,17 +53,17 @@ export async function runLogs(opts: LogsOptions): Promise<number> {
   const lokkal = readLokkal();
   const problem = lokkalProblem(lokkal);
   if (problem || lokkal.status !== "ok") {
-    err(`Logs du noyau indisponibles : ${problem}.\nLe journal du client reste lisible : nokker logs --component cli\n`);
+    err(`${t("Kernel logs unavailable: {0}.\nThe client log is still readable: nokker logs --component cli", String(problem))}\n`);
     return 1;
   }
   const pcmd = hostCommand(lokkal.config, "docker", ["info", "--format", "{{.ServerVersion}}"]);
   const probe = await run(pcmd.cmd, pcmd.args, { timeoutMs: 15_000 });
   if (probe.error === "ENOENT") {
-    err("docker n'est pas installé (ou pas dans le PATH) : impossible de lire les logs du noyau.\nLe journal du client reste lisible : nokker logs --component cli\n");
+    err(`${t("docker is not installed (or not in PATH): cannot read the kernel logs.\nThe client log is still readable: nokker logs --component cli")}\n`);
     return 1;
   }
   if (probe.code !== 0) {
-    err(`Le démon docker ne répond pas (${firstLine(probe.stderr) || "pas de réponse"}) : impossible de lire les logs du noyau.\n`);
+    err(`${t("The docker daemon does not respond ({0}): cannot read the kernel logs.", firstLine(probe.stderr) || t("no response"))}\n`);
     return 1;
   }
   const args = [...composeArgs(lokkal.config), "logs", "--tail", String(opts.lines)];
@@ -72,7 +73,7 @@ export async function runLogs(opts: LogsOptions): Promise<number> {
   const lcmd = hostCommand(lokkal.config, "docker", args);
   const res = await run(lcmd.cmd, lcmd.args, { inherit: true, timeoutMs: opts.follow ? 2_147_483_000 : 60_000 });
   if (res.code !== 0 && res.code !== null) {
-    err(`docker compose logs a échoué (code ${res.code}).\n`);
+    err(`${t("docker compose logs failed (code {0}).", res.code)}\n`);
     return 1;
   }
   return 0;
@@ -81,7 +82,7 @@ export async function runLogs(opts: LogsOptions): Promise<number> {
 async function logsCli(opts: LogsOptions, out: (t: string) => void, err: (t: string) => void): Promise<number> {
   const path = cliLogPath();
   if (!existsSync(path)) {
-    err(`Pas encore de journal client (${path}).\n`);
+    err(`${t("No client log yet ({0}).", path)}\n`);
     return opts.follow ? 0 : 1;
   }
   const chosen = filterCliLog(readFileSync(path, "utf-8"), opts.lines, opts.since);

@@ -9,6 +9,8 @@ import React, { useEffect, useRef, useState } from "react";
 import { NokkerApiError, type Approval, type Bubble, type BubbleBase } from "@nokker-apps/sdk";
 import { useStore } from "../context.js";
 import { Icon } from "../icons.js";
+import { PublishPanel } from "../publish/PublishPanel.js";
+import { PackAgents } from "../packs/PackAgents.js";
 
 type B<K extends Bubble["kind"]> = BubbleBase<K>;
 
@@ -272,9 +274,7 @@ function Artifact({ b }: { b: B<"artifact"> }) {
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [opening, setOpening] = useState(false);
-  const [busy, setBusy] = useState<"download" | "copy" | null>(null);
-  const [copied, setCopied] = useState<"ok" | "fail" | null>(null);
-  const [publicUrl, setPublicUrl] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"download" | null>(null);
   const [dl, setDl] = useState<string | null>(null);
   const writing = (s as { writing?: { call_id: string } }).writing;
   const live = writing ? store.liveInputs.get(writing.call_id) : undefined;
@@ -342,26 +342,6 @@ function Artifact({ b }: { b: B<"artifact"> }) {
     }
   };
 
-  const copyLink = async () => {
-    if (!pageId || busy) return;
-    setBusy("copy");
-    setCopied(null);
-    setPublicUrl(null);
-    try {
-      const l = await store.client.getPageLink(pageId);
-      if (!l.public_url) throw new Error("pas d'adresse publique");
-      const href = new URL(store.client.resolveUrl(l.public_url) ?? l.public_url, location.href).href;
-      // Presse-papiers absent (contexte non sécurisé, permission refusée) : l'adresse s'affiche pour une copie à la main.
-      setPublicUrl(href);
-      await navigator.clipboard.writeText(href);
-      setCopied("ok");
-    } catch {
-      setCopied("fail");
-    } finally {
-      setBusy(null);
-    }
-  };
-
   return (
     <div className="bubble-body artifact">
       <div className="artifact-frame">
@@ -403,25 +383,21 @@ function Artifact({ b }: { b: B<"artifact"> }) {
         <button type="button" className="btn" disabled={!pageId || busy !== null} onClick={() => void download()}>
           Télécharger
         </button>
-        {s.public ? (
-          <button type="button" className="btn" disabled={!pageId || busy !== null} onClick={() => void copyLink()}>
-            {copied === "ok" ? "Lien copié" : "Copier le lien"}
-          </button>
-        ) : null}
         {b.actions.map((a) => (
           <button key={a.id} type="button" className={`btn ${a.primary ? "btn-brass" : ""}`} onClick={() => void store.runAction(b, a.id)}>
             {a.label}
           </button>
         ))}
       </div>
-      {copied === "fail" && publicUrl ? (
-        <input className="artifact-url mono" readOnly value={publicUrl} aria-label="Adresse publique de la page" autoFocus onFocus={(e) => e.currentTarget.select()} />
-      ) : copied === "fail" ? (
-        <p className="fine artifact-fail" role="alert">Le lien n'a pas pu être copié.</p>
-      ) : null}
+      {pageId ? <PublishPanel client={store.client} state={s} authMode={store.authMode} toast={store.toast} /> : null}
       {dl ? <iframe key={dl} className="artifact-dl" src={dl} title="" aria-hidden="true" sandbox="allow-downloads" /> : null}
     </div>
   );
+}
+
+function PackAgentsBody({ b }: { b: B<"pack_agents"> }) {
+  const store = useStore();
+  return <PackAgents b={b} onAction={(id) => void store.runAction(b, id)} />;
 }
 
 function Notify({ b }: { b: B<"notify"> }) {
@@ -719,6 +695,8 @@ export function BubbleBody({ b, readOnly }: { b: Bubble; readOnly: boolean }): R
       return <Handoff b={b} />;
     case "plan_split":
       return <PlanSplit b={b} readOnly={readOnly} />;
+    case "pack_agents":
+      return <PackAgentsBody b={b} />;
     case "brief":
       return (
         <div className="bubble-body brief">

@@ -70,6 +70,13 @@ export function fmtReset(lang: string, iso: string | undefined, withDay: boolean
   return new Intl.DateTimeFormat(lang, { timeZone: ZURICH, ...(withDay ? { weekday: "long" } : {}), hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(d);
 }
 
+/** Plafonds d'un palier tels que le noyau les envoie (`turns_per_day`, `turns_per_week`, `household_members` pour un
+ * foyer) ; `turns` = ancienne forme du mock, lue en repli. */
+export function planCaps(caps: Record<string, number>): { day: number | null; week: number | null; seats: number | null } {
+  const n = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  return { day: n(caps.turns_per_day) ?? n(caps.turns), week: n(caps.turns_per_week), seats: n(caps.household_members) };
+}
+
 export function planLabel(id: string): string {
   return id ? id.charAt(0).toUpperCase() + id.slice(1) : id;
 }

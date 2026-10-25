@@ -21,17 +21,29 @@ import {
   type LocalToolResult,
   type SkillInfo,
   type TodoResult,
+  type DelegateStatusResult,
+  type ProjectMemoryList,
+  type ProjectMemoryView,
   parseToolJson,
+  subagentParent,
 } from "@nokker-apps/sdk";
 import { connect, login } from "../auth.js";
 import { cliLog } from "../log.js";
 import { CliSession } from "../session.js";
 import {
-  NOT_LOCAL_MESSAGE,
+  notLocalMessage,
+  findMemoryEntry,
+  formatMemory,
+  formatMemoryView,
+  formatSubagent,
+  mergeSubagentViews,
+  type ProjectSkillsState,
   parseCheckpointDiff,
   parseCheckpointList,
   applySubagentEvent,
   formatCheckpoints,
+  formatProjectSkills,
+  subagentStatusLabel,
   formatPlan,
   formatRestore,
   formatSkills,
@@ -44,7 +56,9 @@ import {
 import { applyToolEvent, type ToolLine } from "../toolview.js";
 import { decisionSummary, resolveEffect } from "../approval-model.js";
 import { ringBell } from "../bell.js";
-import { HELP_TEXT, parseSlashCommand } from "../commands.js";
+import { helpText, parseSlashCommand } from "../commands.js";
+import { t } from "../i18n/index.js";
+import { ConfirmCard, type ConfirmRequest } from "./ConfirmCard.js";
 import { formatCostTotals, turnCostLine } from "../cost.js";
 import { Markdown } from "./Markdown.js";
 import { ToolCallView } from "./ToolCallView.js";
@@ -68,7 +82,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
   const { exit } = useApp();
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [input, setInput] = useState("");
-  const [status, setStatus] = useState("connexion…");
+  const [status, setStatus] = useState(() => t("connecting…"));
   const [sending, setSending] = useState(false);
   const [pendingApproval, setPendingApproval] = useState<Approval | null>(null);
   const [approvalBusy, setApprovalBusy] = useState(false);
@@ -85,6 +99,11 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
   const [threadLabel, setThreadLabel] = useState("…");
   const [lastUsage, setLastUsage] = useState<TurnUsage | null>(null);
   const [lastCost, setLastCost] = useState<number | null>(null);
+  /** Carte de confirmation (oubli d'une note, confiance aux skills du dépôt). */
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [confirmMessage, setConfirmMessage] = useState<string | null>(null);
+  const confirmRef = useRef<ConfirmRequest | null>(null);
 
   const clientRef = useRef<NokkerClient | undefined>(undefined);
   const sessionRef = useRef<CliSession | undefined>(undefined);
@@ -101,9 +120,13 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
   const toolLinesRef = useRef<ToolLine[]>([]);
   /** Sous-agents du fil connus par les événements `subagent.*`. */
   const subagentsRef = useRef<Map<string, SubagentState>>(new Map());
-  /** `/rollback` : cartes de restauration dont on attend le `tool.result` (approval_id -> point visé). */
-  const restoreWaitRef = useRef<Map<string, string>>(new Map());
-  const restoreDoneRef = useRef<Map<string, { content: string; is_error: boolean }>>(new Map());
+  /** Appels directs (`/rollback`, `/memory forget`) arrêtés sur une carte : approval_id -> suite, appelée avec le
+   * `tool.result` qui porte cet approval_id (dans un sens ou l'autre de l'arrivée). */
+  const directWaitRef = useRef<Map<string, (content: string, isError: boolean) => void>>(new Map());
+  const directDoneRef = useRef<Map<string, { content: string; is_error: boolean }>>(new Map());
+  /** Skills du dépôt : état connu (ouverture, `skill.untrusted`) et empreintes déjà proposées (une carte par version). */
+  const skillsRef = useRef<ProjectSkillsState>("off");
+  const skillsAskedRef = useRef<Set<string>>(new Set());
   /** Cartes dont NOUS avons déjà écrit le résumé (évite le doublon avec `approval.decided`). */
   const summarizedRef = useRef<Set<string>>(new Set());
   const pendingDeviceRef = useRef<{ id: string; user: string } | null>(null);
@@ -128,7 +151,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
     return () => clearInterval(t);
   }, [bubbles]);
 
-  const localCardOpen = pendingApproval !== null && pendingLocal;
+  const localCardOpen = (pendingApproval !== null && pendingLocal) || confirm !== null;
 
   useInput((_input, key) => {
     if (key.ctrl && _input === "c") {
@@ -172,9 +195,9 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
     if (!session) return;
     try {
       const done = await session.cancel();
-      if (done || !quiet) pushSystem(done ? "⏹ annulation demandée…" : "Aucun tour en cours.");
+      if (done || !quiet) pushSystem(done ? t("⏹ cancellation requested…") : t("No turn in progress."));
     } catch (err) {
-      pushSystem(`Annulation impossible : ${String(err)}`);
+      pushSystem(t("Cannot cancel: {0}", String(err)));
     }
   }
 
@@ -183,26 +206,24 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
     (async () => {
       const client = new NokkerClient({ baseUrl, userAgent: BRAND.userAgent });
       clientRef.current = client;
-      setStatus("connexion…");
+      setStatus(t("connecting…"));
 
       let conn;
       try {
         conn = await connect(client, baseUrl, `cli-${process.platform}`, {
           onPending: (d) => {
             pendingDeviceRef.current = { id: d.id, user: d.user };
-            pushSystem(
-              `Appareil en attente de confirmation — code ${d.code || "(voir l'hôte)"}. Confirme-le sur l'hôte ou tape /confirm <code TOTP>.`,
-            );
-            setStatus("appareil en attente");
+            pushSystem(t("Device waiting for confirmation — code {0}. Confirm it on the host or type /confirm <TOTP code>.", d.code || t("(see the host)")));
+            setStatus(t("device pending"));
           },
         });
       } catch (err) {
-        setStatus("échec de connexion");
-        cliLog("error", `connexion impossible : ${String(err)}`);
-        pushSystem(`Connexion impossible à ${baseUrl} : ${String(err)} — \`nokker doctor\` dit ce qui répond.`);
+        setStatus(t("connection failed"));
+        cliLog("error", `connection failed: ${String(err)}`);
+        pushSystem(t("Cannot connect to {0}: {1} — `nokker doctor` tells what answers.", baseUrl, String(err)));
         return;
       }
-      setStatus(conn.mode === "local" ? "connecté (jeton local)" : `connecté (${conn.user})`);
+      setStatus(conn.mode === "local" ? t("connected (local token)") : t("connected ({0})", conn.user));
 
       const session = new CliSession(client, conn.identity, undefined, conn.user);
       sessionRef.current = session;
@@ -216,12 +237,12 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
           // Une seule ligne par coupure : les tentatives suivantes (backoff) restent silencieuses.
           if (eventsDownRef.current) return;
           eventsDownRef.current = true;
-          cliLog("warn", `flux d'événements coupé : ${String(err)}`);
-          pushSystem(`(événements) coupés : ${String(err).replace(/^Error: /, "")} — reconnexion automatique…`);
+          cliLog("warn", `event stream down: ${String(err)}`);
+          pushSystem(t("(events) down: {0} — reconnecting automatically…", String(err).replace(/^Error: /, "")));
         },
         onReconnected: () => {
           eventsDownRef.current = false;
-          pushSystem("(événements) reconnecté — relance /approvals ou /bubbles si l'état a bougé.");
+          pushSystem(t("(events) reconnected — run /approvals or /bubbles again if the state moved."));
         },
       });
 
@@ -230,14 +251,17 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         setFolder(basename(cwd) || cwd);
         setThreadLabel(session.threadId);
         if (opened.messages.length) setFeed(feedFromMessages(opened.messages));
-        pushSystem(`Session de code sur ${cwd} (${opened.resumed ? "reprise" : "nouvelle"}). /help pour les commandes.`);
+        pushSystem(opened.resumed ? t("Code session on {0} (resumed). /help for the commands.", cwd) : t("Code session on {0} (new). /help for the commands.", cwd));
+        skillsRef.current = opened.skills;
+        if (typeof opened.skills === "object" && opened.skills.project === "untrusted") askTrust(opened.skills);
+        else if (typeof opened.skills === "object" && opened.skills.project === "invalid" && opened.skills.notice) pushSystem(opened.skills.notice);
       } catch (err) {
         if (err instanceof NokkerApiError && err.status === 403) {
-          pushSystem(`Dossier hors des racines déclarées par le serveur : ${cwd}. Fil ordinaire ouvert à la place.`);
+          pushSystem(t("Folder outside the roots declared by the server: {0}. Plain thread opened instead.", cwd));
         } else if (err instanceof NokkerApiError && (err.status === 404 || err.status === 405)) {
-          pushSystem("Ce serveur ne propose pas de session de code locale — fil ordinaire.");
+          pushSystem(t("This server offers no local code session — plain thread."));
         } else {
-          pushSystem(`Session locale impossible : ${String(err)} — fil ordinaire.`);
+          pushSystem(t("Local session impossible: {0} — plain thread.", String(err)));
         }
         setThreadLabel(session.threadId);
       }
@@ -297,7 +321,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
           setPendingApproval(null);
         }
         if (!summarizedRef.current.has(event.approval_id)) {
-          pushSystem(`Approbation ${event.approval_id} : ${event.decision} par ${event.by} (${event.via}).`);
+          pushSystem(t("Approval {0}: {1} by {2} ({3}).", event.approval_id, event.decision, event.by, event.via));
         }
         applyToolFeed(event); // l'appel qui attendait la carte : « exécution… », ou fermé s'il est refusé
         return;
@@ -309,8 +333,8 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
           if (!event.call_id) {
             // Appel direct : apparié par approval_id, pas de ligne d'outil.
             if (event.approval_id) {
-              restoreDoneRef.current.set(event.approval_id, { content: event.content ?? event.preview ?? "", is_error: event.is_error === true });
-              showRestoreResult(event.approval_id);
+              directDoneRef.current.set(event.approval_id, { content: event.content ?? event.preview ?? "", is_error: event.is_error === true });
+              settleDirect(event.approval_id);
             }
             return;
           }
@@ -325,29 +349,30 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         return;
       }
       case "subagent.started":
-        if (event.thread_id !== session.threadId) return;
-        subagentsRef.current = applySubagentEvent(subagentsRef.current, event);
-        setFeed((f) => [...f, { kind: "sub", id: `sub:${event.child_id}`, childId: event.child_id, text: `↳ sous-agent ${event.child_id} : ${event.goal}` }]);
-        return;
       case "subagent.progress":
-        subagentsRef.current = applySubagentEvent(subagentsRef.current, event);
-        setFeed((f) => f.map((it) => (it.kind === "sub" && it.childId === event.child_id ? { ...it, text: `↳ sous-agent ${event.child_id} : ${event.tool} (${event.ms} ms)` } : it)));
-        return;
       case "subagent.finished":
-        subagentsRef.current = applySubagentEvent(subagentsRef.current, event);
-        setFeed((f) =>
-          f.map((it) =>
-            it.kind === "sub" && it.childId === event.child_id
-              ? { ...it, text: `↳ sous-agent ${event.child_id} terminé (${event.status}) — ${event.commits} commit(s), arbre ${event.dirty ? "modifié" : "propre"}` }
-              : it,
-          ),
-        );
+        // Sous-agents de CE fil (premier plan et fond) : `parent_thread_id` (le seul champ commun aux trois).
+        if (subagentParent(event) !== session.threadId) return;
+        onSubagentEvent(event);
+        return;
+      case "skill.untrusted":
+        if (event.thread_id !== session.threadId) return;
+        skillsRef.current = { enabled: true, project: "untrusted", root: event.root, sha256: event.sha256, count: event.count, notice: event.notice };
+        askTrust(skillsRef.current);
+        return;
+      case "memory.noted":
+        if (event.thread_id !== session.threadId) return;
+        pushSystem(t("Noted in the project memory: {0} [{1}] — /memory to review or forget it.", event.title, event.kind));
+        return;
+      case "memory.forgotten":
+        if (event.thread_id !== session.threadId) return;
+        pushSystem(t("Forgotten from the project memory: {0}.", event.name));
         return;
       case "turn.delta":
         // Le texte de NOTRE propre fil arrive déjà via le flux direct de /v1/chat/completions —
         // on ignore ici pour ne pas le doubler ; un autre fil/canal reste visible (multi-canal).
         // turn.delta est UNIQUE par tour côté noyau (réponse complète) : on l'affiche d'un bloc.
-        if (event.thread_id !== session.threadId) pushSystem(`[autre fil ${event.thread_id}] ${event.text}`);
+        if (event.thread_id !== session.threadId) pushSystem(t("[other thread {0}] {1}", event.thread_id, event.text));
         return;
       case "turn.cost":
         // Publié juste avant `turn.done` (LOKKAL.md §7.6) : une ligne discrète sous le tour, au lieu du pied.
@@ -364,7 +389,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
           const hasCostLine = costTurnRef.current === event.turn_id;
           setLastUsage(hasCostLine ? null : event.usage);
           setLastCost(hasCostLine ? null : (event.cost_chf ?? null));
-          if (event.cancelled) pushSystem("⏹ tour annulé.");
+          if (event.cancelled) pushSystem(t("⏹ turn cancelled."));
         }
         return;
       case "thread.updated":
@@ -374,7 +399,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         setBubbles((b) => applyBubbleEvent(b, event, session.threadId));
         ringBell(sound);
         if (event.bubble.kind === "notify") {
-          pushSystem(`(bulle) notify de « ${event.bubble.state.from_title} » — ${event.bubble.state.text} — /goto ${event.bubble.state.from_thread}`);
+          pushSystem(t("(bubble) notify from “{0}” — {1} — /goto {2}", event.bubble.state.from_title, event.bubble.state.text, event.bubble.state.from_thread));
         }
         return;
       case "bubble.updated":
@@ -382,13 +407,13 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         setBubbles((b) => applyBubbleEvent(b, event, session.threadId));
         return;
       case "bubble.transferred":
-        pushSystem(`Bulle ${event.mode === "copy" ? "copiée" : "déplacée"} (${event.from_thread} → ${event.to_thread}).`);
+        pushSystem(event.mode === "copy" ? t("Bubble copied ({0} → {1}).", event.from_thread, event.to_thread) : t("Bubble moved ({0} → {1}).", event.from_thread, event.to_thread));
         return;
       case "session.message":
         // Déjà couvert par la bulle `notify` associée (bubble.created ci-dessus) — pas de doublon.
         return;
       case "agent.created":
-        pushSystem(`Nouvel agent créé : ${event.agent.name} (onglet Crew).`);
+        pushSystem(t("New agent created: {0} (Crew tab).", event.agent.name));
         return;
       default:
         return;
@@ -421,7 +446,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
     setPendingApproval(card);
     setApprovalMessage(null);
     ringBell(sound);
-    if (!local) pushSystem(`Carte d'approbation reçue pour le fil ${card.thread_id} (niveau ${card.strength}).`);
+    if (!local) pushSystem(t("Approval card received for thread {0} (level {1}).", card.thread_id, card.strength));
   }
 
   async function resolveThreadId(token: string): Promise<{ id: string; title: string } | null> {
@@ -472,7 +497,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
     if (!readyRef.current) {
       // Connexion en cours : pas de perte, la ligne part dès que la session est ouverte.
       queuedRef.current.push(text);
-      pushSystem(`connexion en cours — « ${text.length > 40 ? `${text.slice(0, 39)}…` : text} » partira dès que la session sera prête.`);
+      pushSystem(t("connecting — “{0}” will be sent as soon as the session is ready.", text.length > 40 ? `${text.slice(0, 39)}…` : text));
       return;
     }
 
@@ -486,11 +511,11 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
   async function sendTurn(text: string): Promise<void> {
     const session = sessionRef.current;
     if (!session) {
-      pushSystem("Pas encore connecté.");
+      pushSystem(t("Not connected yet."));
       return;
     }
     if (sending) {
-      pushSystem("Un tour est déjà en cours — Échap (ou /cancel) pour l'annuler.");
+      pushSystem(t("A turn is already in progress — Esc (or /cancel) to cancel it."));
       return;
     }
     setFeed((f) => [...f, { kind: "user", id: nextId(), text }]);
@@ -510,7 +535,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         setFeed((f) => f.map((it) => (it.id === assistantId && it.kind === "assistant" ? { ...it, text: full } : it)));
       });
     } catch (err) {
-      pushSystem(`Erreur d'envoi : ${String(err)}`);
+      pushSystem(t("Send error: {0}", String(err)));
     } finally {
       setSending(false);
     }
@@ -528,16 +553,16 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         return;
 
       case "help":
-        pushSystem(HELP_TEXT);
+        pushSystem(helpText());
         return;
 
       case "renamedNew":
-        pushSystem("/new n'existe plus ici (celui du noyau pose une frontière d'épisode) — utilise /thread [titre] pour un nouveau fil.");
+        pushSystem(t("/new no longer exists here (the core's /new marks an episode boundary) — use /thread [title] for a new thread."));
         return;
 
       case "thread": {
         if (!session) return;
-        const title = cmd.title ?? "Sans titre";
+        const title = cmd.title ?? t("Untitled");
         try {
           const thread = await session.createNamedThread(title);
           setFeed([]);
@@ -545,9 +570,9 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
           setFolder(null);
           setThreadLabel(thread.title);
           setLastUsage(null);
-          pushSystem(`Nouveau fil « ${thread.title} » (${thread.id}).`);
+          pushSystem(t("New thread “{0}” ({1}).", thread.title, thread.id));
         } catch (err) {
-          pushSystem(`Erreur /thread : ${String(err)}`);
+          pushSystem(t("Error {0}: {1}", "/thread", String(err)));
         }
         setMode("chat");
         return;
@@ -561,7 +586,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         if (!r) return;
         const parsed = parseCheckpointDiff(r.content);
         if (!parsed.diff.trim()) {
-          pushSystem(parsed.message ?? "Aucune différence depuis ce point de retour.");
+          pushSystem(parsed.message ?? t("No difference since this checkpoint."));
           return;
         }
         if (parsed.stat) pushSystem(parsed.stat);
@@ -583,7 +608,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         if (!list) return;
         const cp = resolveCheckpoint(list, cmd.target);
         if (!cp) {
-          pushSystem(list.length ? `Point de retour introuvable : ${cmd.target} (/checkpoints)` : "Aucun point de retour.");
+          pushSystem(list.length ? t("Checkpoint not found: {0} (/checkpoints)", cmd.target ?? "") : t("No checkpoints."));
           return;
         }
         const label = `${cp.short_hash} (${cp.reason})`;
@@ -591,8 +616,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
           const r = await session.callTool("checkpoint_restore", { hash: cp.hash, safe: true });
           if ("approval_id" in r) {
             // La carte arrive par approval.requested ; le résumé, par le tool.result portant cet approval_id.
-            restoreWaitRef.current.set(r.approval_id, label);
-            showRestoreResult(r.approval_id);
+            waitDirect(r.approval_id, (content, isError) => showRestore(content, isError, label));
           } else {
             showRestore(r.content, r.is_error, label);
           }
@@ -611,7 +635,23 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         }
         const r = await callTool(session, "skill_list");
         const skills = r ? parseToolJson<{ skills: SkillInfo[] }>(r.content)?.skills : undefined;
-        if (skills) pushSystem(formatSkills(skills));
+        if (skills) pushSystem(formatSkills(skills, skillsRef.current));
+        return;
+      }
+
+      case "skillsTrust": {
+        if (!session || !localOnly(session)) return;
+        const st = skillsRef.current;
+        if (typeof st === "object" && st.project === "untrusted") {
+          skillsAskedRef.current.delete(st.sha256 ?? "");
+          askTrust(st);
+        } else pushSystem(formatProjectSkills(st));
+        return;
+      }
+
+      case "memory": {
+        if (!session || !localOnly(session)) return;
+        await runMemory(session, cmd.action, cmd.name);
         return;
       }
 
@@ -625,7 +665,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
 
       case "agents": {
         if (!session || !localOnly(session)) return;
-        pushSystem(formatSubagents(subagentsRef.current));
+        await runAgents(session, cmd.action, cmd.id);
         return;
       }
 
@@ -634,7 +674,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         try {
           pushSystem(formatCostTotals(await session.getCost()));
         } catch (err) {
-          if (err instanceof NokkerApiError && [404, 405].includes(err.status)) pushSystem("/cost : non disponible sur ce serveur (noyau local seulement)");
+          if (err instanceof NokkerApiError && [404, 405].includes(err.status)) pushSystem(t("/cost: not available on this server (local core only)"));
           else pushSystem(toolCallError("/cost", err));
         }
         return;
@@ -646,7 +686,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
 
       case "out": {
         if (lastToolRef.current) toggleExpanded(lastToolRef.current);
-        else pushSystem("Aucun appel d'outil à déplier.");
+        else pushSystem(t("No tool call to expand."));
         return;
       }
 
@@ -654,18 +694,18 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         const client = clientRef.current;
         const dev = pendingDeviceRef.current;
         if (!client || !dev) {
-          pushSystem("Aucun appareil en attente de confirmation.");
+          pushSystem(t("No device waiting for confirmation."));
           return;
         }
         if (!cmd.totp) {
-          pushSystem("Usage : /confirm <code TOTP>");
+          pushSystem(t("Usage: {0}", "/confirm <TOTP>"));
           return;
         }
         try {
           await client.confirmDevice(dev.id, { totp: cmd.totp, user: dev.user });
-          pushSystem("Appareil confirmé.");
+          pushSystem(t("Device confirmed."));
         } catch (err) {
-          pushSystem(`Confirmation refusée : ${String(err)}`);
+          pushSystem(t("Confirmation refused: {0}", String(err)));
         }
         return;
       }
@@ -688,7 +728,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
           setLocalSessions(await session.listLocalSessions());
           setMode("sessions");
         } catch (err) {
-          pushSystem(`Erreur /sessions : ${String(err)}`);
+          pushSystem(t("Error {0}: {1}", "/sessions", String(err)));
         }
         return;
       }
@@ -705,7 +745,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
           const list = await session.listBubbles();
           setBubbles(list.filter((b) => b.closed_at === null));
         } catch (err) {
-          pushSystem(`Erreur /bubbles : ${String(err)}`);
+          pushSystem(t("Error {0}: {1}", "/bubbles", String(err)));
         }
         setMode("bubbles");
         return;
@@ -714,7 +754,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
       case "bubble": {
         if (!session) return;
         if (!cmd.id) {
-          pushSystem("Usage : /bubble <id|titre>");
+          pushSystem(t("Usage: {0}", "/bubble <id|title>"));
           return;
         }
         const local = resolveBubbleLocal(cmd.id);
@@ -722,7 +762,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
           const b = local ?? (await session.getBubble(cmd.id));
           pushSystem(`◇ ${b.title} [${b.kind}/${b.status}] (${b.id}) — ${summarizeState(b)}`);
         } catch {
-          pushSystem(`Bulle introuvable : ${cmd.id}`);
+          pushSystem(t("Bubble not found: {0}", cmd.id));
         }
         return;
       }
@@ -730,25 +770,25 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
       case "send": {
         if (!session) return;
         if (!cmd.bubble || !cmd.session) {
-          pushSystem("Usage : /send <bulle> <session> [--copy]");
+          pushSystem(t("Usage: {0}", "/send <bubble> <session> [--copy]"));
           return;
         }
         const bubble = resolveBubbleLocal(cmd.bubble);
         if (!bubble) {
-          pushSystem(`Bulle introuvable ici : ${cmd.bubble} (essaie /bubbles pour la liste).`);
+          pushSystem(t("Bubble not found here: {0} (try /bubbles for the list).", cmd.bubble));
           return;
         }
         const target = await resolveThreadId(cmd.session);
         if (!target) {
-          pushSystem(`Session introuvable : ${cmd.session}`);
+          pushSystem(t("Session not found: {0}", cmd.session));
           return;
         }
         try {
           const transferMode = cmd.copy ? "copy" : "move";
           await session.transferBubble(bubble.id, target.id, transferMode);
-          pushSystem(`Bulle « ${bubble.title} » ${cmd.copy ? "copiée" : "déplacée"} vers « ${target.title} ».`);
+          pushSystem(cmd.copy ? t("Bubble “{0}” copied to “{1}”.", bubble.title, target.title) : t("Bubble “{0}” moved to “{1}”.", bubble.title, target.title));
         } catch (err) {
-          pushSystem(`Erreur /send : ${String(err)}`);
+          pushSystem(t("Error {0}: {1}", "/send", String(err)));
         }
         return;
       }
@@ -756,19 +796,19 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
       case "ask": {
         if (!session) return;
         if (!cmd.session || !cmd.text) {
-          pushSystem("Usage : /ask <session> <texte>");
+          pushSystem(t("Usage: {0}", "/ask <session> <text>"));
           return;
         }
         const target = await resolveThreadId(cmd.session);
         if (!target) {
-          pushSystem(`Session introuvable : ${cmd.session}`);
+          pushSystem(t("Session not found: {0}", cmd.session));
           return;
         }
         try {
           await session.sendAsk(target.id, cmd.text);
-          pushSystem(`Question transmise à « ${target.title} » — sa réponse arrivera ici par une notification.`);
+          pushSystem(t("Question sent to “{0}” — its answer will arrive here as a notification.", target.title));
         } catch (err) {
-          pushSystem(`Erreur /ask : ${String(err)}`);
+          pushSystem(t("Error {0}: {1}", "/ask", String(err)));
         }
         return;
       }
@@ -784,16 +824,16 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
       case "login": {
         const client = clientRef.current;
         if (!client) return;
-        pushSystem("Re-connexion…");
+        pushSystem(t("Signing in again…"));
         const token = await login(client, `cli-${process.platform}`, {
           onPending: (d) => {
             pendingDeviceRef.current = { id: d.id, user: d.user };
-            pushSystem(`Appareil en attente — code ${d.code}. /confirm <code TOTP> ou confirmation sur l'hôte.`);
+            pushSystem(t("Device pending — code {0}. /confirm <TOTP code> or confirm on the host.", d.code));
           },
         });
         session?.setUser(token.user);
-        setStatus(`connecté (${token.user})`);
-        pushSystem("Connecté.");
+        setStatus(t("connected ({0})", token.user));
+        pushSystem(t("Connected."));
         return;
       }
 
@@ -802,7 +842,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         return;
 
       case "unknown":
-        pushSystem(`Commande inconnue : /${cmd.name} — /help pour la liste.`);
+        pushSystem(t("Unknown command: /{0} — /help for the list.", cmd.name));
         return;
     }
   }
@@ -810,7 +850,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
   /** Les commandes d'outils du noyau n'existent que dans une session de code (dossier). */
   function localOnly(session: CliSession): boolean {
     if (session.cwd) return true;
-    pushSystem(NOT_LOCAL_MESSAGE);
+    pushSystem(notLocalMessage());
     return false;
   }
 
@@ -818,7 +858,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
     try {
       const r = await session.callTool(name, args);
       if ("approval_id" in r) {
-        pushSystem(`${name} : en attente d'approbation (${r.approval_id}).`);
+        pushSystem(t("{0}: waiting for approval ({1}).", name, r.approval_id));
         return null;
       }
       if (r.is_error) {
@@ -833,14 +873,14 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
   }
 
   function toolCallError(label: string, err: unknown): string {
-    if (err instanceof NokkerApiError && err.status === 409) return "un tour est en cours, réessayez après";
-    return `Erreur ${label} : ${err instanceof NokkerApiError ? err.serverMessage : String(err)}`;
+    if (err instanceof NokkerApiError && err.status === 409) return t("a turn is in progress, try again afterwards");
+    return t("Error {0}: {1}", label, err instanceof NokkerApiError ? err.serverMessage : String(err));
   }
 
   async function listCheckpoints(session: CliSession): Promise<CheckpointInfo[] | null> {
     const r = await callTool(session, "checkpoint_list");
     const list = r ? parseCheckpointList(r.content) : undefined;
-    if (r && !list) pushSystem("Réponse checkpoint_list illisible.");
+    if (r && !list) pushSystem(t("Unreadable checkpoint_list answer."));
     return list ?? null;
   }
 
@@ -851,7 +891,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
     if (!list) return undefined;
     const cp = resolveCheckpoint(list, arg);
     if (!cp) {
-      pushSystem(`Point de retour introuvable : ${arg} (/checkpoints)`);
+      pushSystem(t("Checkpoint not found: {0} (/checkpoints)", arg));
       return undefined;
     }
     return cp.hash;
@@ -859,24 +899,231 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
 
   function showRestore(content: string, isError: boolean, label: string): void {
     const r = parseToolJson<CheckpointRestoreResult>(content);
-    if (isError || !r) pushSystem(`✗ Retour à ${label} : ${isError ? content : "réponse illisible"}`);
+    if (isError || !r) pushSystem(t("✗ Rollback to {0}: {1}", label, isError ? content : t("unreadable answer")));
     else pushSystem(formatRestore(r, label));
   }
 
-  /** Résumé du retour une fois le tool.result reçu (dans un sens ou l'autre de l'arrivée de l'approval_id). */
-  function showRestoreResult(approvalId: string): void {
-    const label = restoreWaitRef.current.get(approvalId);
-    const done = restoreDoneRef.current.get(approvalId);
-    if (label === undefined || !done) return;
-    restoreWaitRef.current.delete(approvalId);
-    restoreDoneRef.current.delete(approvalId);
-    showRestore(done.content, done.is_error, label);
+  /** Suite d'un appel direct arrêté sur une carte, jouée au `tool.result` qui porte son approval_id. */
+  function waitDirect(approvalId: string, then: (content: string, isError: boolean) => void): void {
+    directWaitRef.current.set(approvalId, then);
+    settleDirect(approvalId);
+  }
+
+  function settleDirect(approvalId: string): void {
+    const then = directWaitRef.current.get(approvalId);
+    const done = directDoneRef.current.get(approvalId);
+    if (then === undefined || !done) return;
+    directWaitRef.current.delete(approvalId);
+    directDoneRef.current.delete(approvalId);
+    then(done.content, done.is_error);
+  }
+
+  // -- Sous-agents (/agents, LOKKAL.md §7.22) ------------------------------------------------------------
+
+  function onSubagentEvent(event: Extract<NokkerEvent, { type: "subagent.started" | "subagent.progress" | "subagent.finished" }>): void {
+    subagentsRef.current = applySubagentEvent(subagentsRef.current, event);
+    const a = subagentsRef.current.get(event.child_id);
+    const bg = a?.background ? ` ${t("(background)")}` : "";
+    if (event.type === "subagent.started") {
+      setFeed((f) => [...f, { kind: "sub", id: `sub:${event.child_id}`, childId: event.child_id, text: t("↳ sub-agent {0}{1}: {2}", event.child_id, bg, event.goal) }]);
+      return;
+    }
+    const text =
+      event.type === "subagent.progress"
+        ? t("↳ sub-agent {0}{1}: {2} ({3} ms)", event.child_id, bg, event.tool, event.ms)
+        : t("↳ sub-agent {0}{1} {2} — {3} commit(s), tree {4}", event.child_id, bg, subagentStatusLabel(a?.status ?? event.status), event.commits, event.dirty ? t("modified") : t("clean"));
+    setFeed((f) => {
+      const has = f.some((it) => it.kind === "sub" && it.childId === event.child_id);
+      return has ? f.map((it) => (it.kind === "sub" && it.childId === event.child_id ? { ...it, text } : it)) : [...f, { kind: "sub", id: `sub:${event.child_id}`, childId: event.child_id, text }];
+    });
+    if (event.type === "subagent.finished" && a?.background) pushSystem(t("Background sub-agent {0} finished ({1}) — /agents {0} for its result.", event.child_id, subagentStatusLabel(a.status)));
+  }
+
+  /** Relit `delegate_status` (enfants de fond) ; rend une note quand l'état ne vient que des événements. */
+  async function refreshSubagents(session: CliSession): Promise<string | null> {
+    try {
+      const r = await session.callTool("delegate_status");
+      if ("approval_id" in r) return null;
+      const st = r.is_error ? null : parseToolJson<DelegateStatusResult>(r.content);
+      if (st) subagentsRef.current = mergeSubagentViews(subagentsRef.current, st.children);
+      return null;
+    } catch (err) {
+      if (err instanceof NokkerApiError && err.status === 409) return t("(a turn is in progress: state taken from the live events)");
+      if (err instanceof NokkerApiError && [403, 404].includes(err.status)) return t("(this core has no background sub-agents: state taken from the live events)");
+      return t("(delegate_status unavailable: {0})", err instanceof NokkerApiError ? err.serverMessage : String(err));
+    }
+  }
+
+  function findSubagent(id: string): SubagentState | null {
+    const all = [...subagentsRef.current.values()];
+    return all.find((a) => a.childId === id) ?? (all.filter((a) => a.childId.startsWith(id)).length === 1 ? all.find((a) => a.childId.startsWith(id))! : null);
+  }
+
+  async function runAgents(session: CliSession, action: "list" | "view" | "cancel", id: string | null): Promise<void> {
+    if (action === "cancel") {
+      if (!id) {
+        pushSystem(t("Usage: {0}", "/agents cancel <id|all>"));
+        return;
+      }
+      if (id === "all") {
+        try {
+          const r = await session.cancelAllSubagents();
+          pushSystem(t("Stopped {0} sub-agent(s) (their worktrees are kept); the turn in progress, if any, is cancelled too.", r.subagents_cancelled ?? 0));
+        } catch (err) {
+          pushSystem(toolCallError("/agents cancel", err));
+        }
+        return;
+      }
+      await refreshSubagents(session);
+      const a = findSubagent(id);
+      if (!a) {
+        pushSystem(t("Sub-agent not found: {0} (/agents)", id));
+        return;
+      }
+      try {
+        const r = await session.cancelSubagent(a.childId);
+        const out = "approval_id" in r ? null : parseToolJson<{ cancelled: string[]; unknown?: string[] }>(r.content);
+        if ("approval_id" in r || r.is_error || !out) pushSystem(t("Error {0}: {1}", "/agents cancel", "approval_id" in r ? r.approval_id : r.content));
+        else if (out.cancelled.includes(a.childId)) pushSystem(t("Sub-agent {0}: stop requested (its worktree is kept).", a.childId));
+        else pushSystem(t("Sub-agent {0} was not running.", a.childId));
+      } catch (err) {
+        if (err instanceof NokkerApiError && err.status === 403) {
+          pushSystem(t("This core cannot stop a single sub-agent from the terminal yet. /agents cancel all stops every sub-agent of this thread (and the turn in progress)."));
+        } else pushSystem(toolCallError("/agents cancel", err));
+      }
+      return;
+    }
+    const note = await refreshSubagents(session);
+    if (action === "view" && id) {
+      const a = findSubagent(id);
+      pushSystem(a ? formatSubagent(a) : t("Sub-agent not found: {0} (/agents)", id));
+      return;
+    }
+    pushSystem(formatSubagents(subagentsRef.current, Date.now(), note));
+  }
+
+  // -- Mémoire de projet (/memory, LOKKAL.md §7.11.7) ------------------------------------------------------
+
+  async function memoryCall(session: CliSession, args: Record<string, unknown>): Promise<LocalToolResult | null> {
+    try {
+      const r = await session.callTool("memory", args);
+      if ("approval_id" in r) {
+        pushSystem(t("{0}: waiting for approval ({1}).", "memory", r.approval_id));
+        return null;
+      }
+      return r;
+    } catch (err) {
+      if (err instanceof NokkerApiError && err.status === 403) pushSystem(t("Project memory is not available on this core (local.project_memory is off)."));
+      else pushSystem(toolCallError("/memory", err));
+      return null;
+    }
+  }
+
+  async function memoryList(session: CliSession): Promise<ProjectMemoryList | null> {
+    const r = await memoryCall(session, { action: "list" });
+    if (!r) return null;
+    const list = r.is_error ? null : parseToolJson<ProjectMemoryList>(r.content);
+    if (!list) pushSystem(r.is_error ? `✗ memory: ${r.content}` : t("Unreadable memory answer."));
+    return list;
+  }
+
+  async function runMemory(session: CliSession, action: "list" | "view" | "forget", name: string | null): Promise<void> {
+    if (action === "list") {
+      const [list, status] = await Promise.all([memoryList(session), session.memoryStatus()]);
+      if (list) pushSystem(formatMemory(list, status));
+      return;
+    }
+    if (!name) {
+      pushSystem(t("Usage: {0}", "/memory forget <note>"));
+      return;
+    }
+    const list = await memoryList(session);
+    if (!list) return;
+    const hit = findMemoryEntry(list, name);
+    if (!hit) {
+      pushSystem(t("Note not found: {0} (/memory for the list)", name));
+      return;
+    }
+    if (action === "view") {
+      const r = await memoryCall(session, { action: "view", name: hit.name });
+      const v = r && !r.is_error ? parseToolJson<ProjectMemoryView>(r.content) : null;
+      if (v) pushSystem(formatMemoryView(v));
+      else if (r) pushSystem(`✗ memory: ${r.content}`);
+      return;
+    }
+    if (!hit.learned) {
+      pushSystem(t("{0} comes from an instruction file: edit the file, the memory follows.", hit.name));
+      return;
+    }
+    openConfirm({ kind: "forget", name: hit.name, title: hit.title });
+  }
+
+  function forgetDone(content: string, isError: boolean, title: string): void {
+    const out = isError ? null : parseToolJson<{ forgotten: string }>(content);
+    if (out?.forgotten) pushSystem(t("✓ Forgotten: {0} ({1}).", title, out.forgotten));
+    else pushSystem(t("✗ Not forgotten: {0}", content));
+  }
+
+  // -- Cartes de confirmation (oubli, confiance aux skills du dépôt) ---------------------------------------
+
+  function openConfirm(req: ConfirmRequest): void {
+    confirmRef.current = req;
+    setConfirmMessage(null);
+    setConfirm(req);
+  }
+
+  function closeConfirm(): void {
+    confirmRef.current = null;
+    setConfirm(null);
+    setConfirmMessage(null);
+  }
+
+  /** Carte « faire confiance aux skills de ce dépôt » : une fois par empreinte (un arbre changé redemande). */
+  function askTrust(st: ProjectSkillsState): void {
+    if (typeof st !== "object" || st.project !== "untrusted" || !st.sha256) return;
+    if (skillsAskedRef.current.has(st.sha256)) return;
+    skillsAskedRef.current.add(st.sha256);
+    openConfirm({ kind: "trust", skills: st });
+  }
+
+  async function answerConfirm(yes: boolean): Promise<void> {
+    const req = confirmRef.current;
+    const session = sessionRef.current;
+    if (!req || !session) return;
+    if (!yes) {
+      closeConfirm();
+      pushSystem(req.kind === "forget" ? t("Kept: {0}.", req.title) : t("Repository skills left untrusted (ignored). /skills trust to decide later."));
+      return;
+    }
+    setConfirmBusy(true);
+    try {
+      if (req.kind === "forget") {
+        const r = await session.callTool("memory", { action: "forget", name: req.name });
+        closeConfirm();
+        // Mode `default` : l'oubli (WRITE) passe par une carte ; son résultat arrive par le tool.result de la carte.
+        if ("approval_id" in r) waitDirect(r.approval_id, (content, isError) => forgetDone(content, isError, req.title));
+        else forgetDone(r.content, r.is_error, req.title);
+      } else {
+        const r = await session.trustSkills(req.skills.sha256 ?? "");
+        closeConfirm();
+        skillsRef.current = { ...req.skills, project: "trusted", notice: null };
+        pushSystem(t("✓ Repository skills trusted ({0}, fingerprint {1}…). /skills to list them.", r.root, r.sha256.slice(0, 12)));
+      }
+    } catch (err) {
+      if (err instanceof NokkerApiError && err.status === 409) {
+        // Empreinte périmée : l'arbre a changé ; le noyau publie un nouveau `skill.untrusted` (nouvelle carte).
+        closeConfirm();
+        pushSystem(t("The skills changed since they were read: review them again (/skills trust)."));
+      } else setConfirmMessage(t("Failed: {0}", err instanceof NokkerApiError ? err.serverMessage : String(err)));
+    } finally {
+      setConfirmBusy(false);
+    }
   }
 
   async function gotoThread(session: CliSession, query: string): Promise<void> {
     const target = await resolveThreadId(query);
     if (!target) {
-      pushSystem(`Session introuvable : ${query}`);
+      pushSystem(t("Session not found: {0}", query));
       return;
     }
     try {
@@ -889,10 +1136,10 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
       setThreadLabel(view.thread.title || view.thread.id);
       setLastUsage(null);
       setLastCost(null);
-      pushSystem(`Basculé sur « ${view.thread.title} » (${view.thread.id}).`);
+      pushSystem(t("Switched to “{0}” ({1}).", view.thread.title, view.thread.id));
       setMode("chat");
     } catch (err) {
-      pushSystem(`Erreur de bascule : ${String(err)}`);
+      pushSystem(t("Switch error: {0}", String(err)));
     }
   }
 
@@ -905,36 +1152,38 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
 
       {mode === "threads" ? (
         <Box flexDirection="column" borderStyle="single" paddingX={1}>
-          <Text bold>Fils :</Text>
-          {threads.length === 0 ? <Text dimColor>(aucun)</Text> : null}
-          {threads.map((t) => (
-            <Text key={t.id}>
-              {t.working ? "● " : "○ "}
-              {t.id} — {t.title} ({t.bubble_count} bulle(s))
+          <Text bold>{t("Threads:")}</Text>
+          {threads.length === 0 ? <Text dimColor>{t("(no threads)")}</Text> : null}
+          {threads.map((th) => (
+            <Text key={th.id}>
+              {th.working ? "● " : "○ "}
+              {th.id} — {th.title} ({t("{0} bubble(s)", th.bubble_count)})
             </Text>
           ))}
-          <Text dimColor>/sessions &lt;requête&gt; ou /goto &lt;requête&gt; pour basculer · /new [titre] pour repartir</Text>
+          <Text dimColor>{t("/sessions <query> or /goto <query> to switch · /thread [title] to start over")}</Text>
         </Box>
       ) : null}
 
       {mode === "sessions" ? (
         <Box flexDirection="column" borderStyle="single" paddingX={1}>
-          <Text bold>Sessions de code :</Text>
-          {localSessions.length === 0 ? <Text dimColor>(aucune)</Text> : null}
+          <Text bold>{t("Code sessions:")}</Text>
+          {localSessions.length === 0 ? <Text dimColor>{t("(none)")}</Text> : null}
           {localSessions.map((l) => (
             <Text key={l.thread_id}>
               {l.thread_id === sessionRef.current?.threadId ? "● " : "○ "}
-              {l.title ?? basename(l.cwd)} — {l.cwd} ({l.thread_id}){l.last_turn_at ? ` · dernier tour ${l.last_turn_at}` : ""}
+              {l.title ?? basename(l.cwd)} — {l.cwd} ({l.thread_id}){l.last_turn_at ? ` · ${t("last turn {0}", l.last_turn_at)}` : ""}
+              {l.working ? ` · ${t("working")}` : ""}
+              {l.pending_approvals ? ` · ${t("{0} card(s) pending", l.pending_approvals)}` : ""}
             </Text>
           ))}
-          <Text dimColor>/sessions &lt;dossier&gt; pour basculer · /threads pour tous les fils</Text>
+          <Text dimColor>{t("/sessions <folder> to switch · /threads for all threads")}</Text>
         </Box>
       ) : null}
 
       {mode === "approvals" ? (
         <Box flexDirection="column" borderStyle="single" paddingX={1}>
-          <Text bold>Approbations :</Text>
-          {approvalsList.length === 0 ? <Text dimColor>(aucune)</Text> : null}
+          <Text bold>{t("Approvals:")}</Text>
+          {approvalsList.length === 0 ? <Text dimColor>{t("(none)")}</Text> : null}
           {approvalsList.map((a) => (
             <Text key={a.id}>
               {a.id} — {a.tool_name} [{a.effect}/{a.strength}] {a.status}
@@ -945,12 +1194,12 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
 
       {mode === "bubbles" ? (
         <Box flexDirection="column" borderStyle="single" paddingX={1}>
-          <Text bold>Bulles de ce fil :</Text>
-          {bubbles.length === 0 ? <Text dimColor>(aucune)</Text> : null}
+          <Text bold>{t("Bubbles of this thread:")}</Text>
+          {bubbles.length === 0 ? <Text dimColor>{t("(none)")}</Text> : null}
           {bubbles.map((b) => (
             <BubbleLine key={b.id} bubble={b} spinnerFrame={spinnerFrame} />
           ))}
-          <Text dimColor>/bubble &lt;id|titre&gt; pour le détail · /send &lt;bulle&gt; &lt;session&gt; [--copy]</Text>
+          <Text dimColor>{t("/bubble <id|title> for details · /send <bubble> <session> [--copy]")}</Text>
         </Box>
       ) : null}
 
@@ -967,7 +1216,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
                       {l.text}
                     </Text>
                   ))}
-                  {item.omitted > 0 ? <Text dimColor>… {item.omitted} ligne(s) de plus non affichée(s) (300 premières lignes)</Text> : null}
+                  {item.omitted > 0 ? <Text dimColor>{t("… {0} more line(s) not shown (first 300 lines)", item.omitted)}</Text> : null}
                 </Box>
               );
             if (item.kind === "tool") return <ToolCallView key={item.id} call={item.call} expanded={toolsExpanded || expanded.has(item.id)} />;
@@ -1004,7 +1253,9 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         />
       ) : null}
 
-      {sending && !pendingApproval ? <Text dimColor>… tour en cours (Échap pour annuler)</Text> : null}
+      {confirm && !pendingApproval ? <ConfirmCard request={confirm} busy={confirmBusy} message={confirmMessage} onAnswer={(yes) => void answerConfirm(yes)} /> : null}
+
+      {sending && !pendingApproval ? <Text dimColor>{t("… turn in progress (Esc to cancel)")}</Text> : null}
 
       {mode === "chat" ? <Footer usage={lastUsage} costChf={lastCost} /> : null}
 
@@ -1043,14 +1294,14 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
     setApprovalMessage(null);
     try {
       const r = await session.decideLocal(a.id, decision, scope, rule);
-      const queued = r.continuation === "queued" ? " — en file, après le tour en cours" : "";
+      const queued = r.continuation === "queued" ? t(" — queued, after the turn in progress") : "";
       pushSystem(`${decisionSummary(a, decision === "approve" ? "approved" : "rejected", scope, rule)}${queued}`);
       pendingRef.current = null;
       pendingLocalRef.current = false;
       setPendingApproval(null);
     } catch (err) {
       summarizedRef.current.delete(a.id);
-      setApprovalMessage(`Échec : ${err instanceof NokkerApiError ? err.serverMessage : String(err)}`);
+      setApprovalMessage(t("Failed: {0}", err instanceof NokkerApiError ? err.serverMessage : String(err)));
     } finally {
       setApprovalBusy(false);
     }
@@ -1085,7 +1336,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
       }
       // La carte se ferme via l'événement `approval.decided` reçu en retour (voir handleEvent).
     } catch (err) {
-      setApprovalMessage(`Échec : ${String(err)}`);
+      setApprovalMessage(t("Failed: {0}", String(err)));
     } finally {
       setApprovalBusy(false);
     }

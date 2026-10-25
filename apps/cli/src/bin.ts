@@ -14,8 +14,13 @@ import { resolveServer } from "./lokkal.js";
 import { runLogs } from "./logs.js";
 import { runUpdate } from "./update.js";
 import { runAcp } from "./acp/run.js";
+import { parseLang, setLang, t } from "./i18n/index.js";
 
-const args = parseArgs(process.argv.slice(2));
+// `--lang` d'abord : les erreurs d'usage sont déjà dans la bonne langue.
+const argv = process.argv.slice(2);
+const langArg = parseLang(argv[argv.indexOf("--lang") + 1] ?? undefined);
+if (argv.includes("--lang") && langArg) setLang(langArg);
+const args = parseArgs(argv);
 // --server > NOKKER_SERVER_URL > api_url de lokkal.json > http://127.0.0.1:8742
 const resolvedServer = resolveServer(args);
 args.serverUrl = resolvedServer.url;
@@ -34,8 +39,8 @@ if (args.error) {
     (code) => process.exit(code),
     (err) => {
       // Jamais de trace de pile pour l'utilisateur : le détail va dans cli.log.
-      cliLog("error", `sous-commande ${args.command} : ${String(err)}`);
-      process.stderr.write(`Erreur : ${err instanceof Error ? err.message : String(err)}\n`);
+      cliLog("error", `subcommand ${args.command}: ${String(err)}`);
+      process.stderr.write(`${t("Error: {0}", err instanceof Error ? err.message : String(err))}\n`);
       process.exit(1);
     },
   );
@@ -44,7 +49,7 @@ if (args.error) {
   void runNonInteractive(args).then((code) => process.exit(code));
 } else if (!process.stdin.isTTY || !process.stdout.isTTY) {
   // Ink exige un terminal (mode brut) : sans TTY, jamais de TUI ni de trace de pile.
-  process.stderr.write('mode interactif impossible sans terminal ; utilisez nokker -p "…"\n');
+  process.stderr.write(`${t("interactive mode needs a terminal; use nokker -p \"…\"")}\n`);
   process.exit(2);
 } else {
   const { waitUntilExit, unmount } = render(
@@ -78,25 +83,32 @@ async function runSubcommand(opts: ParsedArgs): Promise<number> {
 }
 
 function printHelp(): void {
+  const b = BRAND.cliBin;
+  const rows: Array<[string, string]> = [
+    ["", t("code session in the current folder (resumes this folder's thread)")],
+    ['-p "request"', t("one turn in the current folder, answer on stdout (scripts/CI); any effect without a rule is REJECTED (unattended mode)")],
+    ['-p "request" --json', t("same, JSON output {reply, thread_id, cwd, pending_approvals, refused, cost}")],
+    ["doctor [--fix]", t("checks: docker, compose, server, authentication, version, git")],
+    ["logs [-f] [-n N] [--since 1h|30m|2d] [--component core|cli]", ""],
+    ["update [--check]", t("update the core (docker compose pull + up -d); --check compares the digests")],
+    ["acp", t("ACP agent on stdio for an editor (Zed, JetBrains, Neovim…): session of the editor's folder")],
+    ["--server <url>", t("server (default {0}, or $NOKKER_SERVER_URL)", args.serverUrl)],
+    ["--lang en|fr", t("interface language (default: NOKKER_LANG, LC_ALL, LC_MESSAGES, LANG; English otherwise)")],
+    ["--sound", t("terminal bell (BEL) on every bubble — off by default")],
+    ["--help", t("this help")],
+    ["--version", t("print the client version")],
+  ];
+  const lines = rows.map(([c, d]) => {
+    const cmd = `  ${b}${c ? ` ${c}` : ""}`;
+    return d ? (cmd.length < 38 ? `${cmd.padEnd(38)}${d}` : `${cmd}\n${" ".repeat(38)}${d}`) : cmd;
+  });
   // eslint-disable-next-line no-console
-  console.log(`${BRAND.productName} — ${BRAND.cliBin}
+  console.log(`${BRAND.productName} — ${b}
 
-Usage :
-  ${BRAND.cliBin}                        session de code dans le dossier courant (reprend le fil de ce dossier)
-  ${BRAND.cliBin} -p "demande"           un tour dans le dossier courant, réponse sur stdout (scripts/CI) ;
-                                      tout effet sans règle est REFUSÉ (mode sans surveillance)
-  ${BRAND.cliBin} -p "demande" --json    même chose, sortie JSON {reply, thread_id, cwd, pending_approvals, refused, cost}
-  ${BRAND.cliBin} doctor [--fix]         contrôles : docker, compose, serveur, authentification, version, git
-  ${BRAND.cliBin} logs [-f] [-n N] [--since 1h|30m|2d] [--component core|cli]
-  ${BRAND.cliBin} update [--check]       mise à jour du noyau (docker compose pull + up -d) ; --check compare les digests
-  ${BRAND.cliBin} acp                    agent ACP sur stdio pour un éditeur (Zed, JetBrains, Neovim…) : session du dossier de l'éditeur
-  ${BRAND.cliBin} --server <url>         serveur (défaut ${args.serverUrl}, ou $NOKKER_SERVER_URL)
-  ${BRAND.cliBin} --sound                sonnette terminal (BEL) à chaque bulle — coupée par défaut
-  ${BRAND.cliBin} --help                 cette aide
-  ${BRAND.cliBin} --version              version du client
+${t("Usage:")}
+${lines.join("\n")}
 
-En session, /help liste les commandes (/sessions, /thread, /diff, /checkpoints, /rollback, /skills, /plan, /agents, /cost, /cancel, /approvals…). Échap annule le
-tour en cours. Une carte forte se décide localement une fois seulement ; depuis le web ou la passerelle, sur le téléphone.
+${t("In a session, /help lists the commands (/sessions, /thread, /diff, /checkpoints, /rollback, /skills, /plan, /agents, /memory, /cost, /cancel, /approvals…). Esc cancels the turn in progress. A strong card is decided locally once only; from the web or the gateway, on the phone.")}
 `);
 }
 
@@ -108,8 +120,7 @@ async function runNonInteractive(opts: ParsedArgs): Promise<number> {
     const conn = await connect(client, opts.serverUrl, name, {
       user: defaultUser(),
       ...(process.env.NOKKER_TOTP ? { totp: process.env.NOKKER_TOTP } : {}),
-      onPending: (d) =>
-        process.stderr.write(`Appareil en attente de confirmation — code ${d.code}. Confirme-le sur l'hôte (ou NOKKER_TOTP).\n`),
+      onPending: (d) => process.stderr.write(`${t("Device waiting for confirmation — code {0}. Confirm it on the host (or NOKKER_TOTP).", d.code)}\n`),
     });
     const res = await runPrint(opts.print ?? "", client, conn, process.cwd());
 
@@ -118,12 +129,10 @@ async function runNonInteractive(opts: ParsedArgs): Promise<number> {
     } else {
       process.stdout.write(`${res.reply}\n`);
       for (const r of res.refused) {
-        process.stderr.write(`Refusé (aucune règle) : ${r.tool} ${r.target} [${r.effect ?? "?"}]\n`);
+        process.stderr.write(`${t("Rejected (no rule): {0} {1} [{2}]", r.tool, r.target, r.effect ?? "?")}\n`);
       }
       if (res.pending_approvals.length) {
-        process.stderr.write(
-          `(${res.pending_approvals.length} approbation(s) en attente sur ce fil — à décider depuis une session interactive ou un autre client.)\n`,
-        );
+        process.stderr.write(`${t("({0} approval(s) pending on this thread — decide them from an interactive session or another client.)", res.pending_approvals.length)}\n`);
       }
     }
     return 0;
@@ -132,7 +141,7 @@ async function runNonInteractive(opts: ParsedArgs): Promise<number> {
     if (opts.json) {
       process.stdout.write(`${JSON.stringify({ error: String(err), refused: [] })}\n`);
     } else {
-      process.stderr.write(`Erreur : ${String(err)}\n`);
+      process.stderr.write(`${t("Error: {0}", String(err))}\n`);
     }
     return 1;
   }

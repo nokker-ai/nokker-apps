@@ -1,0 +1,71 @@
+/* Écran « Miroir » (LOKKAL §7.23). Variables de theme.css. */
+.mirror-lag.late {
+  color: var(--hot);
+}
+.mirror-paused {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--hot);
+}
+.mirror-channels,
+.mirror-pages {
+  list-style: none;
+  margin: 10px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mirror-ch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+.mirror-ch-name {
+  min-width: 10em;
+  font-weight: 600;
+}
+.mirror-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--ok);
+}
+.mirror-dot.retry {
+  background: var(--hot);
+}
+.mirror-err {
+  flex-basis: 100%;
+  color: var(--hot);
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+.mirror-pages li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+.mirror-page-title {
+  flex: 1;
+  min-width: 12em;
+}
+.mirror-team {
+  flex-basis: 100%;
+}
+.mirror-st-sent {
+  color: var(--ok);
+}
+.mirror-st-quota,
+.mirror-st-refused {
+  color: var(--hot);
+}
+.team-notes-history summary {
+  cursor: pointer;
+  color: var(--soft);
+  margin-top: 10px;
+}

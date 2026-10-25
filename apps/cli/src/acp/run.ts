@@ -6,6 +6,7 @@ import { readFile, stat } from "node:fs/promises";
 import { NokkerClient, type EditorFs } from "@nokker-apps/sdk";
 import { BRAND } from "@nokker-apps/brand";
 import { isLocalServer, loadSession, readLocalToken } from "../auth.js";
+import { t } from "../i18n/index.js";
 import { cliLog } from "../log.js";
 import { CLI_VERSION } from "../version.js";
 import { AcpAgent } from "./agent.js";
@@ -45,8 +46,8 @@ export async function acpConnect(serverUrl: string): Promise<NokkerClient> {
   throw new RpcFailure(
     RPC.authRequired,
     isLocalServer(serverUrl)
-      ? "jeton local introuvable : Lokkal est-il installé et démarré ? (nokker doctor)"
-      : `aucune session pour ${serverUrl} : lance d'abord ${BRAND.cliBin} --server ${serverUrl} dans un terminal`,
+      ? t("local token not found: is Lokkal installed and running? (nokker doctor)")
+      : t("no session for {0}: first run {1} --server {0} in a terminal", serverUrl, BRAND.cliBin),
   );
 }
 
@@ -63,12 +64,12 @@ export async function runAcp(serverUrl: string): Promise<number> {
     log: (level, msg) => cliLog(level, msg),
     costLine: process.env.NOKKER_ACP_COST_LINE !== "0",
   });
-  cliLog("info", `acp : démarré (serveur ${serverUrl})`);
+  cliLog("info", `acp: started (server ${serverUrl})`);
   process.stdin.setEncoding("utf-8");
   process.stdin.on("data", (chunk: string) => peer.feed(chunk));
   await new Promise<void>((resolve) => process.stdin.on("end", resolve));
   peer.close();
   agent.dispose();
-  cliLog("info", "acp : fin de stdin, arrêt");
+  cliLog("info", "acp: end of stdin, stopping");
   return 0;
 }

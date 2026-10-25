@@ -1,9 +1,13 @@
 **
 !package.json
+!package.nls.json
+!package.nls.*.json
 !README.md
+!CHANGELOG.md
 !LICENSE
 !dist/extension.cjs
 !dist/webview.js
 !media/chat.css
 !media/activity.svg
 !media/icon.png
+!l10n/bundle.l10n.*.json

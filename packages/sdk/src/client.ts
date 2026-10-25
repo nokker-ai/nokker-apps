@@ -27,6 +27,7 @@ import type {
   LocalApprovalResult,
   LocalSession,
   LocalSessionSummary,
+  SkillsTrustResult,
   Device,
   EnrollDeviceRequest,
   NokkerEvent,
@@ -57,8 +58,38 @@ import type {
   BillingStatus,
 } from "./account.js";
 import type { LocalProcess, LocalSecrets } from "./local-machine.js";
-import type { AlertSource, AlertSourceSecret, Incident, IncidentState, PlanCard, PlanCardDetail, PlanCardInput, PlanContext, PlanProposal } from "./ops.js";
-import type { MyInvitation, Project, ProjectInvitation, ProjectMember, ProjectNote, ProjectRole, ProjectRules, ProjectSkill } from "./team.js";
+import type { PackDetail, PackInstallResult, PackRemoveResult, PackSummary } from "./packs.js";
+import type { PageLocalityResult, PublishPageResult, UnpublishPageResult } from "./pages.js";
+import type { LocalConnectorsListing, LocalMailCard, PutLocalMailRequest } from "./local-connectors.js";
+import type { LocalMirrorPage, LocalMirrorProject, LocalMirrorStatus, MirrorSpace, QuarantinedNote } from "./mirror.js";
+import type { AlertSource, AlertSourceSecret, BriefDelivery, Incident, IncidentState, PlanCard, PlanCardDetail, PlanCardInput, PlanContext, PlanProposal } from "./ops.js";
+import type {
+  MyInvitation,
+  Project,
+  ProjectAgentEntry,
+  ProjectAuditEvent,
+  ProjectBudgetCap,
+  ProjectBudgetView,
+  ProjectEntry,
+  ProjectInvitation,
+  ProjectMember,
+  ProjectNote,
+  ProjectRole,
+  ProjectRules,
+  ProjectSkill,
+} from "./team.js";
+import type {
+  OidcCallbackRequest,
+  OidcCallbackResult,
+  OidcStart,
+  OidcStartRequest,
+  SsoAuditEvent,
+  SsoBinding,
+  SsoBindingInput,
+  SsoConnection,
+  SsoConnectionInput,
+  SsoDomain,
+} from "./sso.js";
 import type { DeckView, LinkApproveResult, LinkDecision, LinkedMachines, LinkPending, RemoteApproval, RemoteDecision, RemoteDecisionProof } from "./link.js";
 import type {
   LocalLinkStart,
@@ -69,6 +100,7 @@ import type {
   LocalSetup,
   PutLocalModelsRequest,
 } from "./local-setup.js";
+import type { Household, HouseholdApproval, HouseholdAttestation, HouseholdConsentRecord, HouseholdConsentText, HouseholdInvitation, HouseholdMember, HouseholdNote, HouseholdPolicy, HouseholdProfile, HouseholdQuarantined, ReceivedHouseholdInvitation } from "./household.js";
 import type { PatchThreadRequest } from "./bubbles.js";
 import type {
   Agent,
@@ -284,6 +316,15 @@ export class NokkerClient {
     return this.request<LocalMemoryStatus>("/v1/local/memory", signal ? { signal } : {});
   }
 
+  /** `POST /v1/local/skills/trust {thread_id, sha256}` (jeton local, LOKKAL.md §7.21.4) : faire confiance aux skills du
+   * dépôt de ce fil, tels que relus (`sha256` rendue à l'ouverture ou par `skill.untrusted`). */
+  async trustProjectSkills(threadId: string, sha256: string): Promise<SkillsTrustResult> {
+    return this.request<SkillsTrustResult>("/v1/local/skills/trust", {
+      method: "POST",
+      body: JSON.stringify({ thread_id: threadId, sha256 }),
+    });
+  }
+
   /** `POST /v1/threads/{id}/cancel` (202) — arrête le tour en cours ; le flux se termine par `turn.done {cancelled: true}`. */
   async cancelTurn(threadId: string): Promise<CancelResult> {
     return this.request<CancelResult>(`/v1/threads/${encodeURIComponent(threadId)}/cancel`, { method: "POST" });
@@ -403,6 +444,22 @@ export class NokkerClient {
       method: "POST",
       body: JSON.stringify({ page_id: pageId, embed: opts.embed === true }),
     });
+  }
+
+  /** Publier une page (§7.26) : 202 avec la carte forte à signer ; 409 `local_page` | `not_linked`, 403
+   * `pages_public_not_allowed`, 400 index non booléen. */
+  async publishPage(pageId: string, opts: { index?: boolean } = {}): Promise<PublishPageResult> {
+    return this.request<PublishPageResult>(`/v1/pages/${encodeURIComponent(pageId)}/publish`, { method: "POST", body: JSON.stringify({ index: opts.index === true }) });
+  }
+
+  /** Dépublier : immédiat, sans carte ; l'URL publique meurt pour toujours. */
+  async unpublishPage(pageId: string): Promise<UnpublishPageResult> {
+    return this.request<UnpublishPageResult>(`/v1/pages/${encodeURIComponent(pageId)}/unpublish`, { method: "POST" });
+  }
+
+  /** Épingler la page sur la machine (`local` : ni copie ni publication ; une page publique est dépubliée). */
+  async setPageLocality(pageId: string, locality: "local" | null): Promise<PageLocalityResult> {
+    return this.request<PageLocalityResult>(`/v1/pages/${encodeURIComponent(pageId)}/locality`, { method: "PUT", body: JSON.stringify({ locality }) });
   }
 
   /** Déclenche une action (voir `BubbleActionResult`) : notify → fermée (+ `goto`) ; autre bulle → 202, un tour
@@ -532,6 +589,78 @@ export class NokkerClient {
     return this.request<{ name: string; deleted: true }>(`/v1/local/secrets/${encodeURIComponent(name)}`, { method: "DELETE" });
   }
 
+  // -- Packs d'agents (LOKKAL §7.30 ; web : drapeau packs_web, éteint → 404) -------------------------
+
+  async listPacks(): Promise<{ packs: PackSummary[]; refused?: string[] }> {
+    return this.request<{ packs: PackSummary[]; refused?: string[] }>("/v1/packs");
+  }
+  async getPack(name: string): Promise<PackDetail> {
+    return this.request<PackDetail>(`/v1/packs/${encodeURIComponent(name)}`);
+  }
+  /** 409 `machine_only` (avec `machine`) | `invalid_pack`, 422 `scan_refused` (`report`), 503 `no_scanner`, 404
+   * `unknown_pack` | `unknown_thread`. Avec `thread_id` : cartes `agent_draft` posées ; `handoff` : relais vers la machine. */
+  async installPack(name: string, req: { thread_id?: string; handoff?: boolean; bind?: Record<string, string> } = {}): Promise<PackInstallResult> {
+    return this.request<PackInstallResult>(`/v1/packs/${encodeURIComponent(name)}/install`, { method: "POST", body: JSON.stringify(req) });
+  }
+  async proposePack(name: string, req: { thread_id: string; templates?: string[] }): Promise<{ pack: string; proposed: { template: string; bubble_id: string }[]; to_propose?: PackInstallResult["to_propose"] }> {
+    return this.request(`/v1/packs/${encodeURIComponent(name)}/propose`, { method: "POST", body: JSON.stringify(req) });
+  }
+  /** Idempotent ; les agents créés depuis le pack restent (carte `pack_agents` dans `thread_id`). */
+  async removePack(name: string, threadId?: string): Promise<PackRemoveResult> {
+    return this.request<PackRemoveResult>(`/v1/packs/${encodeURIComponent(name)}${threadId ? `?thread_id=${encodeURIComponent(threadId)}` : ""}`, { method: "DELETE" });
+  }
+  /** Lokkal (jeton local) : `pack_list`. */
+  async listLocalPacks(): Promise<{ packs: Omit<PackSummary, "web" | "machine">[]; refused?: string[] }> {
+    return this.request<{ packs: Omit<PackSummary, "web" | "machine">[]; refused?: string[] }>("/v1/local/packs");
+  }
+  /** Lokkal (jeton local ; par la passerelle : 403) : même retrait que l'outil `pack_remove`. */
+  async removeLocalPack(name: string, threadId?: string): Promise<PackRemoveResult> {
+    return this.request<PackRemoveResult>(`/v1/local/packs/${encodeURIComponent(name)}/remove`, { method: "POST", body: JSON.stringify(threadId ? { thread_id: threadId } : {}) });
+  }
+
+  // -- Boîte mail de la machine (LOKKAL §7.25, jeton local ; passerelle : 403) -------------------
+
+  async listLocalConnectors(): Promise<LocalConnectorsListing> {
+    return this.request<LocalConnectorsListing>("/v1/local/connectors");
+  }
+  /** Testée (IMAP puis SMTP) avant d'être rangée : 400 réglages ou secret, 422 identifiants refusés, 502 injoignable. */
+  async putLocalMail(req: PutLocalMailRequest): Promise<LocalMailCard> {
+    return this.request<LocalMailCard>("/v1/local/connectors/mail", { method: "PUT", body: JSON.stringify(req) });
+  }
+  async testLocalMail(): Promise<ConnectorTestResult> {
+    return this.request<ConnectorTestResult>("/v1/local/connectors/mail/test", { method: "POST" });
+  }
+  async deleteLocalMail(): Promise<{ revoked: boolean }> {
+    return this.request<{ revoked: boolean }>("/v1/local/connectors/mail", { method: "DELETE" });
+  }
+
+  // -- Miroir de la machine (LOKKAL §7.23, jeton local) --------------------------------------------
+
+  async getLocalMirror(): Promise<LocalMirrorStatus> {
+    return this.request<LocalMirrorStatus>("/v1/local/mirror");
+  }
+  /** 202 avec l'état ; 409 en pause (copies effacées : reprendre d'abord). */
+  async resyncLocalMirror(): Promise<LocalMirrorStatus> {
+    return this.request<LocalMirrorStatus>("/v1/local/mirror/resync", { method: "POST" });
+  }
+  /** Reprise après effacement des copies : tout est renvoyé. */
+  async resumeLocalMirror(): Promise<LocalMirrorStatus> {
+    return this.request<LocalMirrorStatus>("/v1/local/mirror/resume", { method: "POST" });
+  }
+  async listLocalMirrorPages(): Promise<{ pages: LocalMirrorPage[]; space: MirrorSpace | null }> {
+    return this.request<{ pages: LocalMirrorPage[]; space: MirrorSpace | null }>("/v1/local/mirror/pages");
+  }
+  /** « Garder en ligne » : copie servie machine éteinte (400 corps, 404 page inconnue, 409 `local_page`). */
+  async setLocalMirrorPage(pageId: string, mirror: boolean): Promise<{ page_id: string; mirror: boolean }> {
+    return this.request<{ page_id: string; mirror: boolean }>(`/v1/local/mirror/pages/${encodeURIComponent(pageId)}`, { method: "PUT", body: JSON.stringify({ mirror }) });
+  }
+  async listLocalMirrorProjects(): Promise<{ projects: LocalMirrorProject[] }> {
+    return this.request<{ projects: LocalMirrorProject[] }>("/v1/local/mirror/projects");
+  }
+  async setLocalMirrorProject(project: string, mirror: boolean): Promise<{ project: string; mirror: boolean }> {
+    return this.request<{ project: string; mirror: boolean }>(`/v1/local/mirror/projects/${encodeURIComponent(project)}`, { method: "PUT", body: JSON.stringify({ mirror }) });
+  }
+
   /** Confiance aux hooks du dépôt de ce fil, pour CETTE empreinte (409 si le bloc a changé depuis l'ouverture). */
   async trustProjectHooks(threadId: string, sha256: string): Promise<{ thread_id: string; root: string; sha256: string; trusted: true }> {
     return this.request<{ thread_id: string; root: string; sha256: string; trusted: true }>("/v1/local/hooks/trust", {
@@ -545,8 +674,9 @@ export class NokkerClient {
   private pj(id: string, tail = ""): string {
     return `/v1/projects/${encodeURIComponent(id)}${tail}`;
   }
-  async listProjects(): Promise<{ projects: Project[]; invitations: number }> {
-    return this.request<{ projects: Project[]; invitations: number }>("/v1/projects");
+  /** Un projet « SSO obligatoire » sans connexion SSO récente arrive réduit (`GatedProject`, §7.24). */
+  async listProjects(): Promise<{ projects: ProjectEntry[]; invitations: number }> {
+    return this.request<{ projects: ProjectEntry[]; invitations: number }>("/v1/projects");
   }
   async createProject(req: { name: string; description?: string }): Promise<Project> {
     return this.request<Project>("/v1/projects", { method: "POST", body: JSON.stringify(req) });
@@ -614,8 +744,93 @@ export class NokkerClient {
   async listProjectNotes(id: string, since?: string): Promise<{ notes: ProjectNote[]; cursor: string | number | null }> {
     return this.request<{ notes: ProjectNote[]; cursor: string | number | null }>(this.pj(id, `/notes${since ? `?since=${encodeURIComponent(since)}` : ""}`));
   }
-  async listProjectAgents(id: string): Promise<{ agents: Agent[] }> {
-    return this.request<{ agents: Agent[] }>(this.pj(id, "/agents"));
+  /** Versions remplacées ou oubliées des notes d'un projet d'équipe (maintainer ; §7.15, §7.23). */
+  async listProjectQuarantine(id: string): Promise<{ quarantine: QuarantinedNote[] }> {
+    return this.request<{ quarantine: QuarantinedNote[] }>(this.pj(id, "/notes/quarantine"));
+  }
+  /** Remet une version de la quarantaine en version courante (maintainer) ; la version courante y part à son tour.
+   * 404 ligne inconnue, 409 `already_current`. */
+  async restoreQuarantinedNote(id: string, quarantineId: number | string): Promise<{ note: ProjectNote }> {
+    return this.request<{ note: ProjectNote }>(this.pj(id, `/notes/quarantine/${encodeURIComponent(String(quarantineId))}/restore`), { method: "POST" });
+  }
+  /** Les agents rattachés au projet par TOUS ses membres (§7.27.2) : les miens complets, ceux des autres réduits. */
+  async listProjectAgents(id: string): Promise<{ agents: ProjectAgentEntry[] }> {
+    return this.request<{ agents: ProjectAgentEntry[] }>(this.pj(id, "/agents"));
+  }
+  /** Son propriétaire, ou l'owner du projet (journalisé) ; 403 sinon, 404 hors du projet. */
+  async disarmProjectAgent(id: string, agentId: string): Promise<{ agent: ProjectAgentEntry }> {
+    return this.request<{ agent: ProjectAgentEntry }>(this.pj(id, `/agents/${encodeURIComponent(agentId)}/disarm`), { method: "POST" });
+  }
+  async getProjectBudget(id: string): Promise<ProjectBudgetView> {
+    return this.request<ProjectBudgetView>(this.pj(id, "/budget"));
+  }
+  /** Owner ou maintainer ; `daily` et/ou `monthly`. */
+  async putProjectBudget(id: string, budget: Partial<ProjectBudgetCap>): Promise<{ budget: ProjectBudgetCap }> {
+    return this.request<{ budget: ProjectBudgetCap }>(this.pj(id, "/budget"), { method: "PUT", body: JSON.stringify(budget) });
+  }
+  async deleteProjectBudget(id: string): Promise<{ budget: null }> {
+    return this.request<{ budget: null }>(this.pj(id, "/budget"), { method: "DELETE" });
+  }
+  /** Journal du projet (maintainer), le plus récent d'abord. */
+  async getProjectAudit(id: string, limit?: number): Promise<{ events: ProjectAuditEvent[] }> {
+    return this.request<{ events: ProjectAuditEvent[] }>(this.pj(id, `/audit${limit ? `?limit=${limit}` : ""}`));
+  }
+
+  // -- SSO OIDC des équipes (LOKKAL §7.24, drapeau `sso` ; éteint : 404) ------------------------
+
+  async listSsoConnections(): Promise<{ connections: SsoConnection[] }> {
+    return this.request<{ connections: SsoConnection[] }>("/v1/sso/connections");
+  }
+  /** 5 par compte ; une VALEUR de secret dans le corps → 400 `secret_value_refused` (elle passe par `setSsoClientSecret`). */
+  async createSsoConnection(req: SsoConnectionInput): Promise<SsoConnection> {
+    return this.request<SsoConnection>("/v1/sso/connections", { method: "POST", body: JSON.stringify(req) });
+  }
+  async getSsoConnection(id: string): Promise<SsoConnection> {
+    return this.request<SsoConnection>(this.sc(id));
+  }
+  async patchSsoConnection(id: string, req: Partial<SsoConnectionInput>): Promise<SsoConnection> {
+    return this.request<SsoConnection>(this.sc(id), { method: "PATCH", body: JSON.stringify(req) });
+  }
+  async deleteSsoConnection(id: string): Promise<{ deleted: true }> {
+    return this.request<{ deleted: true }>(this.sc(id), { method: "DELETE" });
+  }
+  /** Écriture seule : la valeur part au coffre du noyau et ne revient jamais. */
+  async setSsoClientSecret(id: string, value: string): Promise<{ client_secret: { name: string; set: true } }> {
+    return this.request<{ client_secret: { name: string; set: true } }>(this.sc(id, "/client-secret"), { method: "PUT", body: JSON.stringify({ value }) });
+  }
+  async addSsoDomain(id: string, domain: string): Promise<SsoDomain> {
+    return this.request<SsoDomain>(this.sc(id, "/domains"), { method: "POST", body: JSON.stringify({ domain }) });
+  }
+  /** 409 `not_verified` (TXT absent ou différent) | 409 `domain_claimed` | 503 `dns_unavailable`. */
+  async verifySsoDomain(id: string, domain: string): Promise<SsoDomain> {
+    return this.request<SsoDomain>(this.sc(id, `/domains/${encodeURIComponent(domain)}/verify`), { method: "POST" });
+  }
+  async removeSsoDomain(id: string, domain: string): Promise<{ removed: true }> {
+    return this.request<{ removed: true }>(this.sc(id, `/domains/${encodeURIComponent(domain)}`), { method: "DELETE" });
+  }
+  async getSsoAudit(id: string, limit?: number): Promise<{ events: SsoAuditEvent[] }> {
+    return this.request<{ events: SsoAuditEvent[] }>(this.sc(id, `/audit${limit ? `?limit=${limit}` : ""}`));
+  }
+  /** 404 sans lien ; 403 `forbidden` hors propriétaire. */
+  async getProjectSso(projectId: string): Promise<SsoBinding> {
+    return this.request<SsoBinding>(this.pj(projectId, "/sso"));
+  }
+  async putProjectSso(projectId: string, req: SsoBindingInput): Promise<SsoBinding> {
+    return this.request<SsoBinding>(this.pj(projectId, "/sso"), { method: "PUT", body: JSON.stringify(req) });
+  }
+  async deleteProjectSso(projectId: string): Promise<{ removed: true }> {
+    return this.request<{ removed: true }>(this.pj(projectId, "/sso"), { method: "DELETE" });
+  }
+  /** Public (sans session) : la clé de l'appareil est générée par l'appelant, comme pour le code e-mail. */
+  async startOidc(req: OidcStartRequest): Promise<OidcStart> {
+    return this.request<OidcStart>("/v1/auth/oidc/start", { method: "POST", body: JSON.stringify(req) });
+  }
+  /** Public : rend l'appareil enrôlé (`approved_via = "sso:<sc>"`) ; la session s'ouvre ensuite par le défi habituel. */
+  async oidcCallback(req: OidcCallbackRequest): Promise<OidcCallbackResult> {
+    return this.request<OidcCallbackResult>("/v1/auth/oidc/callback", { method: "POST", body: JSON.stringify(req) });
+  }
+  private sc(id: string, rest = ""): string {
+    return `/v1/sso/connections/${encodeURIComponent(id)}${rest}`;
   }
 
   // ── X18 (LOKKAL §7.18) : incidents (drapeau `operate`) et plan (drapeau `plan`) ; drapeau éteint = 404.
@@ -700,6 +915,14 @@ export class NokkerClient {
   async deleteBrief(): Promise<{ deleted: boolean }> {
     return this.request<{ deleted: boolean }>("/v1/plan/brief", { method: "DELETE" });
   }
+  /** Livraison du brief (§7.18.5). */
+  async getBriefDelivery(): Promise<BriefDelivery> {
+    return this.request<BriefDelivery>("/v1/plan/brief/delivery");
+  }
+  /** 409 `no_telegram` | `no_mail_connector`, 503 `approvals_unavailable`, 400 `invalid`. Une adresse nouvelle pose une carte forte. */
+  async putBriefDelivery(req: { telegram?: boolean; email?: string | null }): Promise<BriefDelivery> {
+    return this.request<BriefDelivery>("/v1/plan/brief/delivery", { method: "PUT", body: JSON.stringify(req) });
+  }
 
   /** Délie une machine : son jeton est révoqué, la passerelle se ferme (404 : machine inconnue de ce compte). */
   async revokeMachine(machineId: string): Promise<{ revoked: true }> {
@@ -722,6 +945,94 @@ export class NokkerClient {
   /** 404 tant que l'abonnement n'est pas activé côté noyau. */
   async getBillingStatus(): Promise<BillingStatus> {
     return this.request<BillingStatus>("/v1/billing/plan");
+  }
+
+  // ── X23 (LOKKAL §7.29) : le foyer. Drapeau `household` éteint = 404 partout ; sans foyer, GET /v1/household = 404.
+  async getHousehold(): Promise<Household> {
+    return this.request<Household>("/v1/household");
+  }
+  /** 409 `household_exists` ; 402 `plan_required` quand la facturation exige Famille ou Large. */
+  async createHousehold(name?: string): Promise<Household> {
+    return this.request<Household>("/v1/household", { method: "POST", body: JSON.stringify(name ? { name } : {}) });
+  }
+  async deleteHousehold(): Promise<{ deleted: true }> {
+    return this.request<{ deleted: true }>("/v1/household", { method: "DELETE" });
+  }
+  async getHouseholdConsentText(lang: "fr" | "en"): Promise<HouseholdConsentText> {
+    return this.request<HouseholdConsentText>(`/v1/household/consent?lang=${lang}`);
+  }
+  async listHouseholdConsents(): Promise<{ consents: HouseholdConsentRecord[] }> {
+    return this.request<{ consents: HouseholdConsentRecord[] }>("/v1/household/consents");
+  }
+  async listHouseholdInvitations(): Promise<{ invitations: HouseholdInvitation[] }> {
+    return this.request<{ invitations: HouseholdInvitation[] }>("/v1/household/invitations");
+  }
+  async inviteToHousehold(email: string, profile: HouseholdProfile = "adult", attestation?: HouseholdAttestation): Promise<HouseholdInvitation> {
+    return this.request<HouseholdInvitation>("/v1/household/invitations", { method: "POST", body: JSON.stringify({ email, profile, ...(attestation ? { attestation } : {}) }) });
+  }
+  async revokeHouseholdInvitation(id: string): Promise<{ revoked: true }> {
+    return this.request<{ revoked: true }>(`/v1/household/invitations/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+  async listReceivedHouseholdInvitations(): Promise<{ invitations: ReceivedHouseholdInvitation[] }> {
+    return this.request<{ invitations: ReceivedHouseholdInvitation[] }>("/v1/household/invitations/received");
+  }
+  async answerHouseholdInvitation(id: string, accept: boolean): Promise<Household | { declined: true }> {
+    return this.request<Household | { declined: true }>(`/v1/household/invitations/${encodeURIComponent(id)}/${accept ? "accept" : "decline"}`, { method: "POST" });
+  }
+  /** Le payeur retire un membre ; un adulte se retire lui-même (« Quitter »). 409 `payer_fixed`, 403 `minor_cannot_leave`. */
+  async removeHouseholdMember(account: string): Promise<{ removed: true }> {
+    return this.request<{ removed: true }>(`/v1/household/members/${encodeURIComponent(account)}`, { method: "DELETE" });
+  }
+  /** `null` = aucun plafond ; `resetHouseholdCap` = retour au défaut. */
+  async setHouseholdCap(account: string, turnsPerDay: number | null): Promise<HouseholdMember> {
+    return this.request<HouseholdMember>(`/v1/household/members/${encodeURIComponent(account)}/cap`, { method: "PUT", body: JSON.stringify({ turns_per_day: turnsPerDay }) });
+  }
+  async resetHouseholdCap(account: string): Promise<HouseholdMember> {
+    return this.request<HouseholdMember>(`/v1/household/members/${encodeURIComponent(account)}/cap`, { method: "DELETE" });
+  }
+  async setHouseholdProfile(account: string, profile: HouseholdProfile, attestation?: HouseholdAttestation): Promise<HouseholdMember> {
+    return this.request<HouseholdMember>(`/v1/household/members/${encodeURIComponent(account)}/profile`, { method: "PUT", body: JSON.stringify({ profile, ...(attestation ? { attestation } : {}) }) });
+  }
+  async renewHouseholdConsent(account: string, attestation: HouseholdAttestation): Promise<HouseholdMember> {
+    return this.request<HouseholdMember>(`/v1/household/members/${encodeURIComponent(account)}/consent`, { method: "POST", body: JSON.stringify({ attestation }) });
+  }
+  /** Le profil passe `suspended` : plus aucun tour. */
+  async revokeHouseholdConsent(account: string): Promise<HouseholdMember> {
+    return this.request<HouseholdMember>(`/v1/household/members/${encodeURIComponent(account)}/consent`, { method: "DELETE" });
+  }
+  async getHouseholdPolicy(): Promise<HouseholdPolicy> {
+    return this.request<HouseholdPolicy>("/v1/household/policy");
+  }
+  async setHouseholdPolicy(p: Partial<HouseholdPolicy>): Promise<HouseholdPolicy> {
+    return this.request<HouseholdPolicy>("/v1/household/policy", { method: "PUT", body: JSON.stringify(p) });
+  }
+  async listHouseholdNotes(since?: number): Promise<{ notes: HouseholdNote[]; cursor: number | null }> {
+    return this.request<{ notes: HouseholdNote[]; cursor: number | null }>(`/v1/household/notes${since != null ? `?since=${since}` : ""}`);
+  }
+  async putHouseholdNote(name: string, note: { kind: HouseholdNote["kind"]; title: string; text: string; base_sha?: string; deleted?: boolean }): Promise<{ note: HouseholdNote | null; accepted: number; skipped: number; quarantined: number; refused: number }> {
+    return this.request(`/v1/household/notes/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify(note) });
+  }
+  async forgetHouseholdNote(name: string): Promise<{ forgotten: boolean }> {
+    return this.request<{ forgotten: boolean }>(`/v1/household/notes/${encodeURIComponent(name)}`, { method: "DELETE" });
+  }
+  async listHouseholdQuarantine(): Promise<{ quarantine: HouseholdQuarantined[] }> {
+    return this.request<{ quarantine: HouseholdQuarantined[] }>("/v1/household/notes/quarantine");
+  }
+  async restoreHouseholdQuarantine(id: string): Promise<{ note: HouseholdNote }> {
+    return this.request<{ note: HouseholdNote }>(`/v1/household/notes/quarantine/${encodeURIComponent(id)}/restore`, { method: "POST" });
+  }
+  async listHouseholdApprovals(): Promise<{ approvals: HouseholdApproval[] }> {
+    return this.request<{ approvals: HouseholdApproval[] }>("/v1/household/approvals");
+  }
+  async householdApprovalChallenge(id: string, member: string): Promise<{ challenge: string; nonce: string; exp: number }> {
+    return this.request<{ challenge: string; nonce: string; exp: number }>(`/v1/household/approvals/${encodeURIComponent(id)}/challenge`, { method: "POST", body: JSON.stringify({ member }) });
+  }
+  /** Seul le représentant décide, depuis SES appareils (passkey UV ou Mini App). */
+  async householdApprovalDecision(
+    id: string,
+    body: { member: string; decision: "approve" | "reject"; challenge: string; device_id: string; signature?: string; init_data?: string; webauthn?: { client_data_json: string; authenticator_data: string; signature: string } },
+  ): Promise<HouseholdApproval["approval"]> {
+    return this.request<HouseholdApproval["approval"]>(`/v1/household/approvals/${encodeURIComponent(id)}/decision`, { method: "POST", body: JSON.stringify(body) });
   }
 
   async billingCheckout(plan: string): Promise<{ url: string }> {
@@ -1022,7 +1333,9 @@ function asAsyncIterable(body: NonNullable<ResponseLike["body"]>): AsyncIterable
 /** Chemin de la route locale d'appel d'outil (proposée au noyau ; à renommer ici seulement). */
 export const LOCAL_TOOL_CALL_PATH = "/v1/local/tools/call";
 
-/** Liste blanche des outils appelables par la route (tout autre nom : 403). */
+/** Liste blanche des outils appelables par la route (tout autre nom : 403) : les 7 de base, plus `memory` (drapeau
+ * `local.project_memory`) et `delegate_status` (serveur local, sous-agents en arrière-plan). `delegate_cancel` n'y est
+ * pas (403 du noyau). */
 export const LOCAL_TOOL_NAMES: readonly LocalToolName[] = [
   "checkpoint_list",
   "checkpoint_diff",
@@ -1031,6 +1344,8 @@ export const LOCAL_TOOL_NAMES: readonly LocalToolName[] = [
   "skill_list",
   "skill_view",
   "todo",
+  "memory",
+  "delegate_status",
 ];
 
 /** Décode le `content` JSON d'un appel (null si ce n'est pas du JSON). */

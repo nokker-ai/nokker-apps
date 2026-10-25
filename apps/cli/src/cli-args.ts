@@ -3,6 +3,7 @@
  * directement. `bin.ts` n'en fait qu'un appel puis bascule entre mode interactif (Ink), mode
  * non-interactif (`-p`/`--print`) et sous-commandes (`doctor`, `logs`, `update`, `acp`).
  */
+import { parseLang, t, type Lang } from "./i18n/index.js";
 
 export type Subcommand = "doctor" | "logs" | "update" | "acp" | null;
 
@@ -34,6 +35,8 @@ export interface ParsedArgs {
   component: "core" | "cli";
   /** update : comparer les digests sans rien télécharger. */
   check: boolean;
+  /** `--lang en|fr` : langue de l'interface (sinon `NOKKER_LANG`, `LC_ALL`, `LC_MESSAGES`, `LANG`). */
+  lang: Lang | null;
   /** Erreur d'usage à afficher (valeur invalide…), sinon `null`. */
   error: string | null;
 }
@@ -57,6 +60,7 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
   let component: "core" | "cli" = "core";
   let check = false;
   let error: string | null = null;
+  let lang: Lang | null = null;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -82,20 +86,23 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
     } else if (arg === "-n" || arg === "--lines") {
       const n = Number(argv[++i]);
       if (Number.isInteger(n) && n > 0) lines = n;
-      else error = "-n attend un entier positif";
+      else error = t("-n expects a positive integer");
     } else if (arg === "--since") {
       const v = argv[++i] ?? "";
       if (/^\d+[smhd]$/.test(v)) since = v;
-      else error = "--since attend une durée comme 30m, 1h ou 2d";
+      else error = t("--since expects a duration like 30m, 1h or 2d");
     } else if (arg === "--component") {
       const v = argv[++i];
       if (v === "core" || v === "cli") component = v;
-      else error = "--component attend core ou cli";
+      else error = t("--component expects core or cli");
     } else if (arg === "--check") {
       check = true;
+    } else if (arg === "--lang") {
+      lang = parseLang(argv[++i]);
+      if (!lang) error = t("--lang expects en or fr");
     } else {
-      error ??= `argument inconnu : ${arg} (nokker --help)`;
+      error ??= t("unknown argument: {0} (nokker --help)", arg ?? "");
     }
   }
-  return { serverUrl, serverExplicit, print, json, sound, help, version, command, fix, follow, lines, since, component, check, error };
+  return { serverUrl, serverExplicit, print, json, sound, help, version, command, fix, follow, lines, since, component, check, lang, error };
 }

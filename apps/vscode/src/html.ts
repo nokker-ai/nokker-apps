@@ -21,10 +21,17 @@ export function newNonce(random: (n: number) => Uint8Array): string {
   return Buffer.from(random(18)).toString("base64").replace(/[^A-Za-z0-9]/g, "");
 }
 
-export function panelHtml(opts: { cspSource: string; nonce: string; scriptUri: string; styleUri: string }): string {
+/** Texte sûr dans un attribut ou un nœud HTML. */
+export function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+/** `strings` : libellés du panneau déjà traduits (`webviewStrings`), lus par le script dans `data-strings`. */
+export function panelHtml(opts: { cspSource: string; nonce: string; scriptUri: string; styleUri: string; strings: Record<string, string>; lang: string }): string {
   const csp = contentSecurityPolicy(opts.cspSource, opts.nonce);
+  const s = (k: string): string => escapeHtml(opts.strings[k] ?? k);
   return `<!doctype html>
-<html lang="fr">
+<html lang="${escapeHtml(opts.lang)}">
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
@@ -32,15 +39,17 @@ export function panelHtml(opts: { cspSource: string; nonce: string; scriptUri: s
 <link rel="stylesheet" href="${opts.styleUri}">
 <title>Nokker</title>
 </head>
-<body>
+<body data-strings="${escapeHtml(JSON.stringify(opts.strings))}">
 <header id="status" class="status" role="status" aria-live="polite"></header>
 <main id="log" class="log" aria-live="polite"></main>
 <footer class="composer">
+  <div id="review" class="review" hidden></div>
   <div id="context" class="context"></div>
-  <textarea id="input" rows="3" placeholder="Demande à Nokker… (Entrée envoie, Maj+Entrée va à la ligne)" aria-label="Message"></textarea>
+  <textarea id="input" rows="3" placeholder="${s("placeholder")}" aria-label="${s("message")}"></textarea>
   <div class="actions">
-    <button id="send" type="button">Envoyer</button>
-    <button id="stop" type="button" class="secondary" hidden>Arrêter</button>
+    <button id="file" type="button" class="secondary" title="${s("addFile")}" aria-label="${s("addFile")}">@</button>
+    <button id="send" type="button">${s("send")}</button>
+    <button id="stop" type="button" class="secondary" hidden>${s("stop")}</button>
   </div>
 </footer>
 <script nonce="${opts.nonce}" src="${opts.scriptUri}"></script>

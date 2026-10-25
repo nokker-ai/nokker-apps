@@ -1,7 +1,7 @@
 // Couleurs, icônes et libellés des bulles — côté client UNIQUEMENT (BUBBLES.md §2 : « couleurs côté client
 // (packages/brand), jamais dans l'API »). Couleur + icône + libellé ensemble : la couleur n'est jamais le seul signal.
 
-export type BubbleKindName = "monitor" | "search" | "notify" | "timer" | "script" | "media" | "artifact" | "agent_draft" | "approval" | "handoff" | "plan_split" | "brief";
+export type BubbleKindName = "monitor" | "search" | "notify" | "timer" | "script" | "media" | "artifact" | "agent_draft" | "approval" | "handoff" | "plan_split" | "brief" | "pack_agents";
 
 export interface BubbleKindTheme {
   label: string;
@@ -30,6 +30,7 @@ export const BUBBLE_THEME: Record<BubbleKindName, BubbleKindTheme> = {
   handoff: { label: "Relais", color: "#B39DFF", rgb: "179,157,255", light: "#5B3FC4", lightRgb: "91,63,196", icon: "terminal" },
   plan_split: { label: "Découpage", color: "#7FD1FF", rgb: "127,209,255", light: "#0B5F8A", lightRgb: "11,95,138", icon: "page" },
   brief: { label: "Brief", color: "#F2C94C", rgb: "242,201,76", light: "#7A5A00", lightRgb: "122,90,0", icon: "bell" },
+  pack_agents: { label: "Agents d'un pack", color: "#5FD4C8", rgb: "95,212,200", light: "#0B6E67", lightRgb: "11,110,103", icon: "bot" },
 };
 
 /** Thème neutre d'un `kind` que ce client ne connaît pas (le noyau peut en ajouter avant nous). */

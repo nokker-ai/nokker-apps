@@ -14,6 +14,7 @@ import { NokkerClient, type Healthz } from "@nokker-apps/sdk";
 import { BRAND } from "@nokker-apps/brand";
 import { lokkalProblem, readLokkal, composeArgs, hostCommand, type LokkalConfig } from "./lokkal.js";
 import { lokkalFilePath } from "./config.js";
+import { t } from "./i18n/index.js";
 import { firstLine, run as realRun, type Runner } from "./proc.js";
 import { CLI_VERSION, compareVersions } from "./version.js";
 
@@ -91,7 +92,7 @@ export async function latestRelease(http: HttpFetch): Promise<Release | null> {
 export function clientHint(h: Healthz | null): string | null {
   const min = h?.min_client_version;
   if (min && compareVersions(CLI_VERSION, min) < 0) {
-    return `Le serveur demande un client ≥ ${min} (le tien : ${CLI_VERSION}) — nokker update remplace le binaire par celui de la dernière release.`;
+    return t("The server requires a client ≥ {0} (yours: {1}) — nokker update replaces the binary with the one from the latest release.", min, CLI_VERSION);
   }
   return null;
 }
@@ -155,13 +156,14 @@ function findInstaller(cfg: LokkalConfig, home: string): string | null {
 
 /** Remplace le binaire autonome par celui de la release (sha256 obligatoire + cosign si présent ; rename atomique). */
 export async function replaceSelf(opts: UpdateOptions, version: string): Promise<boolean> {
-  const out = opts.out ?? ((t) => process.stdout.write(t));
-  const err = opts.err ?? ((t) => process.stderr.write(t));
+  const out = opts.out ?? ((s) => process.stdout.write(s));
+  const err = opts.err ?? ((s) => process.stderr.write(s));
   const platform = opts.platform ?? currentPlatform();
   const self = opts.selfPath !== undefined ? opts.selfPath : /^nokker(-|\.|$)/.test(basename(process.execPath)) ? process.execPath : null;
   const asset = assetName(platform);
+  const tag = RELEASE_TAG_PREFIX + version;
   if (!self) {
-    out(`Ce client n'est pas le binaire autonome (npm ou sources) : récupère ${asset} dans la release ${RELEASE_TAG_PREFIX}${version}.\n`);
+    out(`${t("This client is not the standalone binary (npm or sources): get {0} from release {1}.", asset, tag)}\n`);
     return true;
   }
   const http = httpOf(opts);
@@ -170,38 +172,38 @@ export async function replaceSelf(opts: UpdateOptions, version: string): Promise
   try {
     const res = await http(base);
     if (!res.ok) {
-      err(`Binaire ${asset} introuvable dans la release ${RELEASE_TAG_PREFIX}${version} (HTTP ${res.status}) : client inchangé.\n`);
+      err(`${t("Binary {0} not found in release {1} (HTTP {2}): client unchanged.", asset, tag, res.status)}\n`);
       return false;
     }
     buf = Buffer.from(await res.arrayBuffer());
     const declared = Number(res.headers.get("content-length") ?? 0);
     if (declared && declared !== buf.length) {
-      err(`Téléchargement tronqué (${buf.length} sur ${declared} octets) : client inchangé.\n`);
+      err(`${t("Download truncated ({0} of {1} bytes): client unchanged.", buf.length, declared)}\n`);
       return false;
     }
   } catch (e) {
-    err(`Téléchargement du binaire impossible (${String(e)}) : client inchangé.\n`);
+    err(`${t("Could not download the binary ({0}): client unchanged.", String(e))}\n`);
     return false;
   }
   // sha256 OBLIGATOIRE (sortie de `sha256sum` : « <hex>  <fichier> »), publié à côté du binaire.
   try {
     const sha = await http(`${base}.sha256`);
     if (!sha.ok) {
-      err(`Pas de ${asset}.sha256 dans la release (HTTP ${sha.status}) : vérification impossible, client inchangé.\n`);
+      err(`${t("No {0}.sha256 in the release (HTTP {1}): cannot verify, client unchanged.", asset, sha.status)}\n`);
       return false;
     }
     const expected = (await sha.text()).trim().split(/\s+/)[0]?.toLowerCase() ?? "";
     const actual = createHash("sha256").update(buf).digest("hex");
     if (!/^[0-9a-f]{64}$/.test(expected) || expected !== actual) {
-      err(`Somme sha256 incorrecte (attendue ${expected.slice(0, 12)}…, reçue ${actual.slice(0, 12)}…) : client inchangé.\n`);
+      err(`${t("Wrong sha256 checksum (expected {0}…, received {1}…): client unchanged.", expected.slice(0, 12), actual.slice(0, 12))}\n`);
       return false;
     }
   } catch (e) {
-    err(`Somme sha256 introuvable (${String(e)}) : vérification impossible, client inchangé.\n`);
+    err(`${t("sha256 checksum not found ({0}): cannot verify, client unchanged.", String(e))}\n`);
     return false;
   }
   if (buf.length < 1_000_000) {
-    err("Binaire téléchargé trop petit pour être valide : client inchangé.\n");
+    err(`${t("Downloaded binary too small to be valid: client unchanged.")}\n`);
     return false;
   }
   const next = `${self}.new`;
@@ -214,36 +216,36 @@ export async function replaceSelf(opts: UpdateOptions, version: string): Promise
     const bundlePath = `${next}.sigstore.json`;
     try {
       const b = await http(`${base}.sigstore.json`);
-      if (!b.ok) throw new Error(`bundle sigstore absent (HTTP ${b.status})`);
+      if (!b.ok) throw new Error(t("sigstore bundle missing (HTTP {0})", b.status));
       writeFileSync(bundlePath, Buffer.from(await b.arrayBuffer()));
       const v = await run(
         "cosign",
         ["verify-blob", "--bundle", bundlePath, "--certificate-identity-regexp", `^https://github\\.com/${RELEASES_REPO.replace(/\./g, "\\.")}/\\.github/workflows/lokkal-images\\.yml@refs/tags/lokkal-v`, "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com", next],
         { timeoutMs: 60_000 },
       );
-      if (v.code !== 0) throw new Error(firstLine(v.stderr) || "signature invalide");
+      if (v.code !== 0) throw new Error(firstLine(v.stderr) || t("invalid signature"));
       signed = true;
     } catch (e) {
       rmSync(next, { force: true });
-      err(`Vérification cosign échouée (${e instanceof Error ? e.message : String(e)}) : client inchangé.\n`);
+      err(`${t("cosign verification failed ({0}): client unchanged.", e instanceof Error ? e.message : String(e))}\n`);
       return false;
     } finally {
       rmSync(bundlePath, { force: true });
     }
   }
   if (platform.os === "windows") {
-    out(`Windows ne remplace pas un exécutable en cours : ${next} est prêt. Ferme nokker puis renomme-le en ${basename(self)}.\n`);
+    out(`${t("Windows cannot replace a running executable: {0} is ready. Close nokker then rename it to {1}.", next, basename(self))}\n`);
     return true;
   }
   chmodSync(next, 0o755);
   renameSync(next, self); // atomique ; un binaire en cours d'exécution reste valide sous Linux/macOS
-  out(`Client remplacé : ${self} (release ${RELEASE_TAG_PREFIX}${version}${signed ? ", sha256 + cosign vérifiés" : ", sha256 vérifié"}).\n`);
+  out(`${t("Client replaced: {0} (release {1}{2}).", self, tag, signed ? t(", sha256 + cosign verified") : t(", sha256 verified"))}\n`);
   return true;
 }
 
 export async function runUpdate(opts: UpdateOptions): Promise<number> {
-  const out = opts.out ?? ((t) => process.stdout.write(t));
-  const err = opts.err ?? ((t) => process.stderr.write(t));
+  const out = opts.out ?? ((s) => process.stdout.write(s));
+  const err = opts.err ?? ((s) => process.stderr.write(s));
   const run = opts.run ?? realRun;
   const http = httpOf(opts);
 
@@ -252,7 +254,7 @@ export async function runUpdate(opts: UpdateOptions): Promise<number> {
   const before = await health(opts);
   const hint = clientHint(before);
   if (problem || lokkal.status !== "ok") {
-    err(`Mise à jour du noyau impossible : ${problem}.\n`);
+    err(`${t("Cannot update the kernel: {0}.", String(problem))}\n`);
     if (hint) out(`${hint}\n`);
     return 1;
   }
@@ -260,21 +262,21 @@ export async function runUpdate(opts: UpdateOptions): Promise<number> {
   const latest = await latestRelease(http);
 
   if (opts.check) {
-    out(`Installé : ${cfg.version}\n`);
+    out(`${t("Installed: {0}", cfg.version)}\n`);
     if (!latest) {
-      out("Dernière release : inconnue (GitHub injoignable — pas de réseau ?)\n");
+      out(`${t("Latest release: unknown (GitHub unreachable — no network?)")}\n`);
     } else {
       const cmp = compareVersions(cfg.version, latest.version);
-      out(`Dernière release : ${latest.version}\n`);
-      out(cmp < 0 ? `↑ mise à jour disponible : nokker update\n` : "✓ à jour.\n");
-      if (compareVersions(CLI_VERSION, latest.version) < 0) out(`Client : ${CLI_VERSION} (nokker update le remplace par ${latest.version}).\n`);
+      out(`${t("Latest release: {0}", latest.version)}\n`);
+      out(cmp < 0 ? `${t("↑ update available: nokker update")}\n` : `${t("✓ up to date.")}\n`);
+      if (compareVersions(CLI_VERSION, latest.version) < 0) out(`${t("Client: {0} (nokker update replaces it with {1}).", CLI_VERSION, latest.version)}\n`);
     }
     if (hint) out(`${hint}\n`);
     return 0;
   }
 
   if (!latest) {
-    err("Impossible de joindre GitHub pour connaître la dernière release (réseau ?) : rien n'a été modifié.\n");
+    err(`${t("Cannot reach GitHub to find the latest release (network?): nothing was changed.")}\n`);
     return 1;
   }
   const target = latest.version;
@@ -283,45 +285,45 @@ export async function runUpdate(opts: UpdateOptions): Promise<number> {
   if (info.error === "ENOENT" || info.code !== 0) {
     err(
       info.error === "ENOENT"
-        ? "docker n'est pas installé (ou pas dans le PATH) : le noyau ne peut pas être mis à jour d'ici.\n"
-        : `Le démon docker ne répond pas (${firstLine(info.stderr) || "pas de réponse"}).\n`,
+        ? `${t("docker is not installed (or not in PATH): the kernel cannot be updated from here.")}\n`
+        : `${t("The docker daemon does not respond ({0}).", firstLine(info.stderr) || t("no response"))}\n`,
     );
     if (hint) out(`${hint}\n`);
     return 1;
   }
 
   if (compareVersions(cfg.version, target) >= 0) {
-    out(`Noyau déjà à jour (${cfg.version}).\n`);
+    out(`${t("Kernel already up to date ({0}).", cfg.version)}\n`);
   } else {
     const home = opts.nokkerHome ?? join(homedir(), ".nokker");
     const installer = findInstaller(cfg, home);
     if (installer) {
-      out(`Mise à jour par ${installer} --update…\n`);
+      out(`${t("Updating through {0} --update…", installer)}\n`);
       // Sous WSL : `wsl.exe -d <distro> -- sh <install_dir>/install.sh --update` ; ailleurs `bash <install.sh> --update`.
       const h = hostCommand(cfg, cfg.wsl_distro ? "sh" : "bash", [installer, "--update"]);
       const r = await run(h.cmd, h.args, { inherit: true, timeoutMs: 1_800_000, env: { NOKKER_VERSION: target } });
       if (r.code !== 0) {
-        err("install.sh --update a échoué.\n");
+        err(`${t("install.sh --update failed.")}\n`);
         return 1;
       }
     } else {
       const set = await setEnvVersion(cfg, target, run);
       if (!set) {
-        err(`Impossible d'écrire NOKKER_VERSION dans ${cfg.env_file}.\n`);
+        err(`${t("Cannot write NOKKER_VERSION to {0}.", cfg.env_file)}\n`);
         return 1;
       }
-      out(`NOKKER_VERSION=${target} écrit dans ${cfg.env_file}. Téléchargement des images…\n`);
+      out(`${t("NOKKER_VERSION={0} written to {1}. Downloading images…", target, cfg.env_file)}\n`);
       const pullC = hostCommand(cfg, "docker", [...composeArgs(cfg), "pull"]);
       const pull = await run(pullC.cmd, pullC.args, { inherit: true, timeoutMs: 1_800_000 });
       if (pull.code !== 0) {
-        err("docker compose pull a échoué (réseau, registre ou droits).\n");
+        err(`${t("docker compose pull failed (network, registry or permissions).")}\n`);
         return 1;
       }
-      out("Redémarrage du noyau…\n");
+      out(`${t("Restarting the kernel…")}\n`);
       const upC = hostCommand(cfg, "docker", [...composeArgs(cfg), "up", "-d"]);
       const up = await run(upC.cmd, upC.args, { inherit: true, timeoutMs: 600_000 });
       if (up.code !== 0) {
-        err("docker compose up -d a échoué.\n");
+        err(`${t("docker compose up -d failed.")}\n`);
         return 1;
       }
       setLokkalVersion(target);
@@ -332,10 +334,10 @@ export async function runUpdate(opts: UpdateOptions): Promise<number> {
       if (!after) await new Promise((r) => setTimeout(r, opts.healthWaitMs ?? 2000));
     }
     if (!after) {
-      err("Le noyau ne répond pas encore sur /healthz après la mise à jour — vérifie avec nokker doctor.\n");
+      err(`${t("The kernel does not respond on /healthz yet after the update — check with nokker doctor.")}\n`);
       return 1;
     }
-    out(`Noyau : version ${cfg.version} → ${target}\n`);
+    out(`${t("Kernel: version {0} → {1}", cfg.version, target)}\n`);
   }
 
   if (compareVersions(CLI_VERSION, target) < 0) {

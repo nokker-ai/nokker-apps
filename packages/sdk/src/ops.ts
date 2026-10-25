@@ -173,3 +173,11 @@ export interface BriefState {
 export const INCIDENT_STATE_LABEL: Record<IncidentState, string> = { open: "ouvert", in_progress: "en cours", resolved: "résolu" };
 export const PLAN_STATUS_LABEL: Record<PlanCardStatus, string> = { todo: "à faire", in_progress: "en cours", blocked: "bloqué", done: "fait" };
 export const PLAN_KIND_LABEL: Record<PlanCardKind, string> = { goal: "objectif", milestone: "lot", task: "tâche" };
+
+/** Livraison du brief hors de l'app (§7.18.5) : choix de chaque personne, tout éteint par défaut. L'e-mail ne part
+ * qu'après une carte forte (`brief_delivery_arm`) signée pour cette adresse et cette boîte. */
+export interface BriefDelivery {
+  telegram: { enabled: boolean; chats: number };
+  email: { address: string | null; from: string | null; state: "off" | "pending" | "armed" | "not_armed"; approval_id: string | null };
+  last: { at: string | number; telegram: "off" | "sent" | "failed" | "no_chat"; email: "off" | "sent" | "failed" | "not_armed" } | null;
+}

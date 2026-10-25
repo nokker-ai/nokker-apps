@@ -31,6 +31,7 @@ import { LOCAL_TOOL_CALL_PATH, argsSha256, canonicalJson, type Approval, type Ap
 import { deviceToJson, finalizeDecision, knownUsersJson, KNOWN_USERS, LOCAL_OWNER, MockState, MOCK_USER, randomId, type MockDeviceRecord } from "./state.js";
 import { localTitle, rootFor, runLocalTurn, scheduleLocalDecision } from "./local.js";
 import { handleLocalToolCall } from "./localtools.js";
+import { cancelChildren, openProjectSkills, trustProjectSkills } from "./project.js";
 import { localCostTotals, publishTurnCost } from "./cost.js";
 import {
   MockHttpError,
@@ -44,13 +45,18 @@ import {
   transferBubble,
   updateBubble,
 } from "./bubbles.js";
-import { PAGE_HEADERS, downloadName, getPage, signPageUrl, verifyPageSignature } from "./pages.js";
+import { PAGE_HEADERS, PUBLIC_PAGE_HEADERS, downloadName, getPage, handlePagePublication, signPageUrl, verifyPageSignature } from "./pages.js";
 import { approvalBubble, verifyImageSignature, fakePreview, interpretDemo, previewImage, sessionMessage, settleApprovalBubbles, startDemoTimers } from "./demo.js";
 import { BUBBLE_KINDS, BUBBLE_STATUSES, type BubbleKind } from "@nokker-apps/sdk";
 import { verifyWebAuthnAssertion } from "./webauthn.js";
 import { handleAccount } from "./account.js";
 import { handleAgents } from "./agents.js";
 import { handleTeam } from "./team.js";
+import { handleHousehold } from "./household.js";
+import { handleLocalMirror } from "./mirror.js";
+import { handleLocalMail } from "./local-mail.js";
+import { handlePacks } from "./packs.js";
+import { handleSso, handleSsoPublic, type SsoSession } from "./sso.js";
 import { handleAlertReceive, handleOps, handleOpsDev } from "./ops.js";
 import { handleLocalMachine, handleLocalMachineDev, handlePreview } from "./local-machine.js";
 import { handleLink, handleLinkDev } from "./link.js";
@@ -110,6 +116,14 @@ function authUser(state: MockState, req: IncomingMessage): string | null {
   // Jeton local fixe de l'écran /setup (`LOCAL_TOKEN`) : même règle, en boucle locale seulement.
   if (token === LOCAL_TOKEN) return isLoopbackRequest(req) ? LOCAL_OWNER : null;
   return state.userForToken(token);
+}
+
+/** Appareil de la session (SSO obligatoire, §7.24) : `approved_via` et heure de confirmation. */
+function sessionDevice(state: MockState, req: IncomingMessage): SsoSession {
+  const token = (req.headers["authorization"] ?? "").replace(/^Bearer /, "").trim();
+  const dev = state.devices.get(state.sessions.get(token)?.deviceId ?? "");
+  const at = dev?.approved_at ? Math.floor(Date.parse(dev.approved_at) / 1000) : null;
+  return { via: dev?.approved_via ?? null, at };
 }
 
 /** Décode base64url (SANS padding) ; le base64 standard passe aussi sans effet (pas de `-`/`_` à
@@ -179,7 +193,17 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     return;
   }
 
-  // Pages (BUBBLES.md §10) — l'identité normale, un lien signé, OU la page publiée ; sinon 404 (on ne révèle rien).
+  // Publication (§7.26) : publish / unpublish / locality, et la page publiée servie par son id public seulement.
+  if (
+    await handlePagePublication(state, authUser(state, req), method, path, () => readJsonBody(req), (st, obj) => sendJson(res, st, obj), (body, index) => {
+      res.writeHead(200, { ...PUBLIC_PAGE_HEADERS, ...(index ? {} : { "X-Robots-Tag": "noindex, nofollow" }), ...corsHeaders() });
+      res.end(method === "HEAD" ? undefined : body);
+    })
+  )
+    return;
+
+  // Pages (BUBBLES.md §10) — l'identité normale ou un lien signé ; sinon 404 (on ne révèle rien). Une page publique
+  // n'est JAMAIS servie ici sans preuve : seulement par son id public (§7.26).
   const pageGet = path.match(/^\/v1\/pages\/(pg_[0-9a-f]{16})$/);
   if (method === "GET" && pageGet) {
     const page = state.pages.get(pageGet[1]!);
@@ -187,7 +211,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     const signed = verifyPageSignature(pageGet[1]!, url.searchParams.get("exp"), url.searchParams.get("sig"), download);
     // Téléchargement : seulement par un lien signé `download` (une URL publique ne devient pas pièce jointe).
     const proven = signed || (!download && authUser(state, req) !== null);
-    if (!page || !(proven || (page.public && !download))) return void sendJson(res, 404, { error: { message: "page inconnue" } });
+    if (!page || !proven) return void sendJson(res, 404, { error: { message: "page inconnue" } });
     const v = url.searchParams.get("v");
     const idx = v === null ? page.versions.length : Number(v);
     const body = page.versions[idx - 1];
@@ -203,6 +227,13 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   const readBody = (): Promise<Record<string, unknown>> => (bodyCache ??= readJsonBody(req));
   if (await handlePublicOnboarding(state, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleGatewayRelay(state, req, res, method, path, readBody)) return;
+  if (
+    await handleSsoPublic(state, method, url, readBody, (st, obj) => sendJson(res, st, obj), (st, body) => {
+      res.writeHead(st, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", ...corsHeaders() });
+      res.end(body);
+    })
+  )
+    return;
 
   // ---- Appareils / sessions -----------------------------------------------------------------
 
@@ -353,6 +384,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   if (await handleLocal(state, { host: req.headers.host, authorization: req.headers.authorization, localPort: req.socket.localPort }, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleLinkDev(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleLocalMachineDev(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleLocalMirror(state, authUser(state, req), method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleOpsDev(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   // X18 : réception d'alertes SANS session (signée HMAC ou Bearer selon la source) ; le corps brut sert à la signature.
   if (
@@ -375,7 +407,11 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   if (user && (await handleLink(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj)))) return;
   if (await handleGatewayAuthorize(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleLocalMachine(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
-  if (await handleTeam(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleLocalMail(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (user && (await handleSso(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj)))) return;
+  if (await handlePacks(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleHousehold(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleTeam(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj), sessionDevice(state, req))) return;
   if (await handleOps(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleAuthedOnboarding(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
 
@@ -386,22 +422,48 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     if (!cwd || !cwd.startsWith("/")) return void sendJson(res, 400, { error: { message: "cwd (chemin absolu) requis" } });
     const root = rootFor(cwd, state.localRoots);
     if (root === null) return void sendJson(res, 403, { error: { message: "cwd hors des racines déclarées" } });
-    if (typeof body.resume === "string" && body.resume) {
-      const meta = state.localSessions.get(body.resume);
-      if (!meta || !state.threads.has(body.resume)) return void sendJson(res, 404, { error: { message: "session locale inconnue" } });
-      state.requireMember(body.resume, user);
-      return void sendJson(res, 200, { thread_id: body.resume, cwd: meta.cwd });
+    // Fil demandé : `thread_id` ou son alias `resume` (§7.4.1) ; non chaîne ou deux fils différents : 400 ; vide : neuf.
+    const wanted: string[] = [];
+    for (const key of ["thread_id", "resume"] as const) {
+      const v = body[key];
+      if (v === undefined || v === null || v === "") continue;
+      if (typeof v !== "string") return void sendJson(res, 400, { error: { message: `${key} : chaîne attendue` } });
+      wanted.push(v);
     }
-    const rec = state.createThread(localTitle(cwd), { members: [user ?? MOCK_USER] });
-    rec.thread.owner = user ?? MOCK_USER;
-    state.localSessions.set(rec.thread.id, { cwd, root, backend: "mock" });
-    state.publishThread(rec.thread.id);
-    return void sendJson(res, 201, { thread_id: rec.thread.id, cwd });
+    if (new Set(wanted).size > 1) return void sendJson(res, 400, { error: { message: "thread_id et resume désignent deux fils différents : n'en donner qu'un" } });
+    let threadId: string;
+    if (wanted[0]) {
+      // Le noyau rouvre le fil donné (connu ou non) sur ce dossier.
+      threadId = wanted[0];
+      if (state.threads.has(threadId)) state.requireMember(threadId, user);
+      else state.createThread(localTitle(cwd), { id: threadId, members: [user ?? MOCK_USER] }).thread.owner = user ?? MOCK_USER;
+    } else {
+      const rec = state.createThread(localTitle(cwd), { members: [user ?? MOCK_USER] });
+      rec.thread.owner = user ?? MOCK_USER;
+      threadId = rec.thread.id;
+    }
+    state.localSessions.set(threadId, { cwd, root, backend: "mock" });
+    state.publishThread(threadId);
+    // Drapeau `local.project_skills` (§7.21.3) : état des skills du dépôt ; éteint, pas de clé `skills`.
+    const skills = state.projectSkills ? openProjectSkills(state, threadId, cwd, root) : null;
+    return void sendJson(res, 201, { ...(skills ? { skills } : {}), thread_id: threadId, cwd });
   }
   if (method === "GET" && path === "/v1/local/sessions") {
+    // Lignes du noyau (§7.4.1) : `title` null avant le premier tour, `working` (tour en cours ou en file),
+    // `pending_approvals` (fil et sous-agents).
     const out = [...state.localSessions.entries()].map(([id, meta]) => {
       const rec = state.threads.get(id)!;
-      return { thread_id: id, cwd: meta.cwd, title: rec.thread.title, last_turn_at: rec.turns.at(-1)?.created_at ?? null, _u: rec.thread.updated_at };
+      const last = rec.turns.at(-1)?.created_at ?? null;
+      const pending = [...state.approvals.values()].filter((a) => a.status === "pending" && (a.thread_id === id || a.thread_id.startsWith(`${id}/sa-`))).length;
+      return {
+        thread_id: id,
+        cwd: meta.cwd,
+        title: rec.turns.length ? rec.thread.title || null : null,
+        last_turn_at: last ? new Date(last).toISOString() : null,
+        working: state.activeTurns.has(id) || state.threadBusy(id),
+        pending_approvals: pending,
+        _u: rec.thread.updated_at,
+      };
     });
     out.sort((a, b) => a._u.localeCompare(b._u)); // ordre du noyau : les plus anciennes d'abord
     return void sendJson(res, 200, { sessions: out.map(({ _u, ...r }) => (void _u, r)) });
@@ -430,6 +492,14 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     if (user !== LOCAL_OWNER) return void sendJson(res, 403, { error: { message: "jeton local requis" } });
     const body = await readBody();
     const approval = state.approvals.get(localDecideMatch[1]!);
+    // Publier une page s'approuve à la clé d'appareil seulement ; la refuser reste possible au jeton local (§7.26).
+    if (approval?.tool_name === "page_publish" && body.decision === "approve") {
+      return void sendJson(res, 403, { error: { code: "device_key_required", message: "publier une page se signe à la clé d'appareil" } });
+    }
+    if (approval?.tool_name === "page_publish" && body.decision === "reject" && approval.status === "pending") {
+      finalizeDecision(state, approval, "reject", "local", LOCAL_OWNER);
+      return void sendJson(res, 200, { status: approval.status });
+    }
     if (!approval || !state.localSessions.has(approval.thread_id.split("/sa-")[0]!)) {
       return void sendJson(res, 404, { error: { message: "approbation locale inconnue" } });
     }
@@ -463,6 +533,14 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     const continuation = scheduleLocalDecision(state, approval);
     return void sendJson(res, continuation === "none" ? 200 : 202, { ...body202, continuation });
   }
+  // ---- Skills du dépôt (LOKKAL.md §7.21.4) : confiance donnée sur la machine, jeton local seulement -----------------
+  if (method === "POST" && path === "/v1/local/skills/trust") {
+    if (user !== LOCAL_OWNER) return void sendJson(res, 401, { error: { message: "jeton local requis" } });
+    if (!state.projectSkills) return void sendJson(res, 404, { error: { message: "skills du dépôt désactivés (local.project_skills)" } });
+    const body = await readBody();
+    const r = trustProjectSkills(state, String(body.thread_id ?? ""), String(body.sha256 ?? ""));
+    return void sendJson(res, r.status, r.body);
+  }
   if (method === "POST" && path === LOCAL_TOOL_CALL_PATH) {
     if (user !== LOCAL_OWNER) return void sendJson(res, 403, { error: { message: "jeton local requis" } });
     const r = await handleLocalToolCall(state, await readBody());
@@ -471,7 +549,8 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   const cancelMatch = path.match(/^\/v1\/threads\/([^/]+)\/cancel$/);
   if (method === "POST" && cancelMatch) {
     state.requireMember(cancelMatch[1]!, user);
-    return void sendJson(res, 202, state.cancelTurn(cancelMatch[1]!));
+    // Sous-agents du fil (fond et premier plan), un `<fil>/sa-<id>` : cet enfant seulement (§7.22.4).
+    return void sendJson(res, 202, { ...state.cancelTurn(cancelMatch[1]!), subagents_cancelled: cancelChildren(state, cancelMatch[1]!) });
   }
 
   // ---- Fils (BUBBLES.md §1) ----------------------------------------------------------------
@@ -537,7 +616,8 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     }
     const body = await readJsonBody(req);
     const kind = String(body.kind ?? "") as BubbleKind;
-    if (!(BUBBLE_KINDS as readonly string[]).includes(kind) || kind === "notify") {
+    // `pack_agents` (BUBBLES §9.6) : posée par le noyau seulement (400 pour un client).
+    if (!(BUBBLE_KINDS as readonly string[]).includes(kind) || kind === "notify" || kind === "pack_agents") {
       return void sendJson(res, 400, { error: { message: `kind non créable par un client : ${kind}` } });
     }
     if (body.state !== undefined && (typeof body.state !== "object" || body.state === null || Array.isArray(body.state))) {
@@ -600,7 +680,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     const body = await readJsonBody(req);
     const signed = signPageUrl(page.id, body.download === true);
     // Chemins relatifs au serveur : le client les résout (derrière le proxy de dev, l'hôte du mock n'est pas joignable).
-    const pub = page.public ? { public_url: `/v1/pages/${page.id}` } : {};
+    const pub = page.public && page.public_id ? { public_url: `/v1/pages/public/${page.public_id}`, public_version: page.public_version } : {};
     return void sendJson(res, 200, { url: signed.path, expires_at: signed.expires_at, ...pub });
   }
 

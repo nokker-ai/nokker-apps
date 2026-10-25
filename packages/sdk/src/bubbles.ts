@@ -8,6 +8,7 @@
  * événements `turn.*` historiques gardent leur forme camelCase tant que le noyau n'a pas tranché
  * (voir le rapport du chantier feat/bubbles) ; tout ce qui est nouveau suit BUBBLES.md.
  */
+import type { PackAgentsState } from "./packs.js";
 import type { BriefState, PlanSplitState } from "./ops.js";
 
 // ---------------------------------------------------------------------------
@@ -89,7 +90,7 @@ export interface SessionMessageResult {
 // §2 — Bulle
 // ---------------------------------------------------------------------------
 
-export const BUBBLE_KINDS = ["monitor", "search", "notify", "timer", "script", "media", "artifact", "agent_draft", "approval", "handoff", "plan_split", "brief"] as const;
+export const BUBBLE_KINDS = ["monitor", "search", "notify", "timer", "script", "media", "artifact", "agent_draft", "approval", "handoff", "plan_split", "brief", "pack_agents"] as const;
 export type BubbleKind = (typeof BUBBLE_KINDS)[number];
 
 export const BUBBLE_STATUSES = ["idle", "working", "done", "failed"] as const;
@@ -191,6 +192,12 @@ export interface ArtifactState {
   size: number;
   /** Publique : choix explicite page par page ; privée sinon. */
   public: boolean;
+  /** Version publiée (figée par la carte forte) ; une version plus récente attend une nouvelle publication (§7.26). */
+  public_version?: number | null;
+  /** Indexable par les moteurs (non par défaut). */
+  public_index?: boolean;
+  /** `"local"` : épinglée sur la machine, ni copie ni publication ; null : rien d'épinglé. */
+  locality?: "local" | null;
   /** Dernière écriture de la page, en secondes epoch (`nokker/pages/store.py`). */
   updated_at: number;
   /** Écriture en direct (X22, BUBBLES.md §10.2) : le modèle écrit le fichier de la page. Pendant ce temps, le client
@@ -211,9 +218,11 @@ export interface ArtifactWriting {
 export interface PageLink {
   url: string;
   expires_at: string;
-  /** Adresse publique stable (`https://<nom>--pages.nokker.app/<page_id>`), présente seulement si la page est
-   * publique — à copier et partager. Proposé à dev le 24.10 (§10.3). */
+  /** Adresse publique (`https://<nom>--pub.nokker.app/<public_id>`, autre origine, id tiré au hasard), présente
+   * seulement si la page est publique et la machine liée (LOKKAL §7.26). */
   public_url?: string;
+  /** Version servie à cette adresse. */
+  public_version?: number;
 }
 
 export interface NotifyState {
@@ -236,6 +245,10 @@ export interface AgentDraftState {
   tools: string[];
   /** Avancement du remplissage de la carte, 0..1. */
   fill: number;
+  /** Carte posée par l'installation d'un pack (§7.30) : son nom, le modèle, et ce qu'il exige de la machine. */
+  pack?: string;
+  template?: string;
+  needs?: unknown;
 }
 
 export interface ApprovalBubbleState {
@@ -252,6 +265,7 @@ export interface BubbleStateByKind {
   artifact: ArtifactState;
   agent_draft: AgentDraftState;
   approval: ApprovalBubbleState;
+  pack_agents: PackAgentsState;
   handoff: HandoffState;
   plan_split: PlanSplitState;
   brief: BriefState;
@@ -410,6 +424,8 @@ export interface Agent {
   project?: string | null;
   /** Carte forte d'armement en attente (règle d'écriture à approuver), sinon `null`. */
   arm_approval_id?: string | null;
+  /** Créé depuis un pack (§7.30) : le pack et le modèle. */
+  origin?: { pack: string; template: string } | null;
 }
 
 export interface AgentRun {

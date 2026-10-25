@@ -3,6 +3,7 @@
  * (`test/commands.test.ts`). `ui/App.tsx` ne fait qu'appeler `parseSlashCommand` puis exécuter l'effet
  * réseau correspondant ; toute la logique de découpage/alias vit ici pour rester testable isolément.
  */
+import { t } from "./i18n/index.js";
 
 export type SlashCommand =
   | { kind: "sessions"; query: string | null }
@@ -14,8 +15,10 @@ export type SlashCommand =
   | { kind: "checkpoints" }
   | { kind: "rollback"; target: string | null }
   | { kind: "skills"; name: string | null }
+  | { kind: "skillsTrust" }
   | { kind: "plan" }
-  | { kind: "agents" }
+  | { kind: "agents"; action: "list" | "view" | "cancel"; id: string | null }
+  | { kind: "memory"; action: "list" | "view" | "forget"; name: string | null }
   | { kind: "cost" }
   | { kind: "cancel" }
   | { kind: "out" }
@@ -43,32 +46,47 @@ export function tokenize(rest: string): string[] {
   return tokens;
 }
 
-export const HELP_TEXT = `Commandes :
-  /sessions [requête]                 sessions de code (dossiers) ; avec une requête, bascule sur celle qui correspond
-  /threads                            tous les fils
-  /goto <session>                     bascule directement sur un fil
-  /thread [titre]                     nouveau fil permanent (ce n'est pas /new : celui du noyau pose une frontière d'épisode)
-  /diff [hash]                        diff depuis un point de retour (le dernier par défaut), en vert/rouge
-  /checkpoints                        points de retour : hash court, heure, raison, fichiers
-  /rollback [hash|n]                  revient à un point de retour (le dernier par défaut) ; carte « Action à approuver »
-  /skills [nom]                       skills par famille ; avec un nom, son contenu
-  /plan                               plan de la session (todo) avec l'état de chaque étape
-  /agents                             sous-agents du fil : but, état, dernier outil, durée
-  /cost                               coût de la session et du jour : jetons, et montant quand le modèle a un prix
-  (diff, checkpoints, rollback, skills, plan, agents : session de code seulement)
-  /cancel                             annule le tour en cours (Échap aussi)
-  /out                                déplie/replie l'aperçu du dernier appel d'outil (touche o aussi)
-  /tools                              déplie/replie tous les aperçus
-  /bubbles                            bulles ouvertes de ce fil
-  /bubble <id|titre>                  détail d'une bulle
-  /send <bulle> <session> [--copy]    déplace (ou copie avec --copy) une bulle vers un autre fil
-  /ask <session> <texte>              pose une question à une autre session (réponse ici, par bulle notify)
-  /approvals                          cartes d'approbation
-  /confirm <code TOTP>                confirme cet appareil quand il est en attente
-  /login                              reconnexion
-  /help                                cette aide
-  /quit                                sortir
-Échap annule le tour en cours ; Ctrl+C refuse la carte affichée (et annule le tour), sinon quitte.`;
+/** Lignes de l'aide : commande, description (traduite à l'affichage). */
+function helpRows(): Array<[string, string]> {
+  return [
+    ["/sessions [query]", t("code sessions (folders); with a query, switch to the matching one")],
+    ["/threads", t("all threads")],
+    ["/goto <session>", t("switch straight to a thread")],
+    ["/thread [title]", t("new permanent thread (not /new: the core's /new marks an episode boundary)")],
+    ["/diff [hash]", t("diff since a checkpoint (the latest by default), in green/red")],
+    ["/checkpoints", t("checkpoints: short hash, time, reason, files")],
+    ["/rollback [hash|n]", t("go back to a checkpoint (the latest by default); “Action to approve” card")],
+    ["/skills [name]", t("skills by family, and the trust state of this repository's skills; with a name, its content")],
+    ["/skills trust", t("trust this repository's skills (card: root, count, fingerprint)")],
+    ["/plan", t("session plan (todo) with the state of each step")],
+    ["/agents [id]", t("sub-agents of the thread (background ones included): state, last tool, duration, result")],
+    ["/agents cancel <id|all>", t("stop a background sub-agent (all: every sub-agent of the thread)")],
+    ["/memory [note]", t("what the project memory knows: learned notes and instruction file sections; with a name, the note")],
+    ["/memory forget <note>", t("forget a learned note (after confirmation)")],
+    ["/cost", t("session and day cost: tokens, and the amount when the model has a price")],
+    ["", t("(diff, checkpoints, rollback, skills, plan, agents, memory: code session only)")],
+    ["/cancel", t("cancel the turn in progress (Esc too)")],
+    ["/out", t("expand/collapse the preview of the last tool call (key o too)")],
+    ["/tools", t("expand/collapse all previews")],
+    ["/bubbles", t("open bubbles of this thread")],
+    ["/bubble <id|title>", t("bubble details")],
+    ["/send <bubble> <session> [--copy]", t("move (or copy with --copy) a bubble to another thread")],
+    ["/ask <session> <text>", t("ask another session a question (answer here, as a notify bubble)")],
+    ["/approvals", t("approval cards")],
+    ["/confirm <TOTP code>", t("confirm this device while it is pending")],
+    ["/login", t("sign in again")],
+    ["/help", t("this help")],
+    ["/quit", t("quit")],
+  ];
+}
+
+/** Texte de `/help`, dans la langue de l'interface. */
+export function helpText(): string {
+  const rows = helpRows();
+  const width = Math.max(...rows.map(([c]) => c.length)) + 2;
+  const lines = rows.map(([c, d]) => (c ? `  ${c.padEnd(width)}${d}` : `  ${d}`));
+  return [t("Commands:"), ...lines, t("Esc cancels the turn in progress; Ctrl+C rejects the card on screen (and cancels the turn), otherwise quits.")].join("\n");
+}
 
 /** `line` commence par `/` (vérifié par l'appelant, comme pour tout texte libre démarrant par `/`). */
 export function parseSlashCommand(line: string): SlashCommand {
@@ -95,12 +113,22 @@ export function parseSlashCommand(line: string): SlashCommand {
       return { kind: "checkpoints" };
     case "rollback":
       return { kind: "rollback", target: rest.split(/\s+/)[0] || null };
-    case "skills":
-      return { kind: "skills", name: rest.split(/\s+/)[0] || null };
+    case "skills": {
+      const arg = rest.split(/\s+/)[0] || null;
+      return arg === "trust" ? { kind: "skillsTrust" } : { kind: "skills", name: arg };
+    }
     case "plan":
       return { kind: "plan" };
-    case "agents":
-      return { kind: "agents" };
+    case "agents": {
+      const [a, b] = rest.split(/\s+/).filter(Boolean);
+      if (a === "cancel" || a === "stop") return { kind: "agents", action: "cancel", id: b ?? null };
+      return a ? { kind: "agents", action: "view", id: a } : { kind: "agents", action: "list", id: null };
+    }
+    case "memory": {
+      const [a, b] = rest.split(/\s+/).filter(Boolean);
+      if (a === "forget") return { kind: "memory", action: "forget", name: b ?? null };
+      return a ? { kind: "memory", action: "view", name: a } : { kind: "memory", action: "list", name: null };
+    }
     case "cost":
       return { kind: "cost" };
     case "cancel":

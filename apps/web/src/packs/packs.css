@@ -1,0 +1,41 @@
+/* Packs d'agents (LOKKAL §7.30) et carte pack_agents (BUBBLES §9.6). Variables de theme.css. */
+.pack-machine h4 {
+  margin: 10px 0 4px;
+}
+.pack-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  margin-right: 2px;
+}
+.pack-dot.on {
+  background: var(--ok);
+}
+.pack-handoff {
+  color: var(--hot);
+}
+.pack-report {
+  margin: 6px 0;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
+.pack-agents-list {
+  margin: 6px 0;
+  padding-left: 18px;
+}
+.agent-origin {
+  font-size: 0.8em;
+  color: var(--soft);
+}
+.pack-detail .secret-list li {
+  flex-wrap: wrap;
+}
+.pack-detail .secret-list li code {
+  flex: initial;
+}
+.pack-detail .machine-section h3 + .secret-list,
+.pack-detail .machine-section .secret-list + h3 {
+  margin-top: 12px;
+}

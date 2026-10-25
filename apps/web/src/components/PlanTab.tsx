@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { PLAN_KIND_LABEL, PLAN_STATUS_LABEL, type Agent, type NokkerClient, type PlanCard, type PlanCardStatus, type PlanContext } from "@nokker-apps/sdk";
 import { Icon } from "../icons.js";
 import { cronHuman, lines, opsError, planTree } from "../ops/model.js";
+import { BriefDelivery } from "../project/BriefDelivery.js";
 
 type Toast = (text: string, tone?: "ok" | "error") => void;
 const STATUSES: PlanCardStatus[] = ["todo", "in_progress", "blocked", "done"];
@@ -349,6 +350,7 @@ function Brief({ client, toast }: { client: NokkerClient; toast: Toast }): React
           </button>
         </span>
       ) : null}
+      {agent ? <BriefDelivery client={client} toast={toast} /> : null}
     </div>
   );
 }

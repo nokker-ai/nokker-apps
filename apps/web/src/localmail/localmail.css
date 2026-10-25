@@ -1,0 +1,16 @@
+/* Boîte mail de la machine (LOKKAL §7.25). Variables de theme.css. */
+.local-mail-form select {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.local-mail-tip,
+.local-mail-actions {
+  grid-column: 1 / -1;
+}
+.local-mail-card p {
+  margin: 4px 0;
+}

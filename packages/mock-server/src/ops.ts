@@ -7,6 +7,8 @@
 import { createHmac, randomBytes, timingSafeEqual, createHash } from "node:crypto";
 import type {
   AlertSource,
+  Approval,
+  BriefDelivery,
   Bubble,
   Incident,
   IncidentTimelineEntry,
@@ -20,7 +22,7 @@ import type {
 import { createAgentFull, fireAgentEvent } from "./agents.js";
 import { closeBubble, createBubble, updateBubble } from "./bubbles.js";
 import { MockHttpError } from "./errors.js";
-import { MOCK_USER, hexId, type MockState } from "./state.js";
+import { MOCK_USER, finalizeDecision, hexId, type MockState } from "./state.js";
 
 type Send = (status: number, payload: unknown) => void;
 const iso = (t = Date.now()): string => new Date(t).toISOString();
@@ -59,11 +61,13 @@ interface Ops {
   proposals: Map<string, PlanProposal>;
   brief: string | null;
   seen: Map<string, number>;
+  /** Livraison du brief (§7.18.5) : choix de la personne ; démo : un chat Telegram relié, une boîte reliée. */
+  delivery: { telegram: boolean; email: string | null; armed: string | null; approval: string | null; chats: number; sender: string | null; last: BriefDelivery["last"] };
 }
 const all = new WeakMap<MockState, Ops>();
 
 function seed(): Ops {
-  const o: Ops = { sources: new Map(), incidents: new Map(), cards: new Map(), proposals: new Map(), brief: null, seen: new Map() };
+  const o: Ops = { sources: new Map(), incidents: new Map(), cards: new Map(), proposals: new Map(), brief: null, seen: new Map(), delivery: { telegram: false, email: null, armed: null, approval: null, chats: 1, sender: `${MOCK_USER}@example.com`, last: null } };
   const sid = hex("as");
   o.sources.set(sid, {
     s: { id: sid, name: "Prometheus (démo)", format: "alertmanager", url: `/v1/alerts/${sid}`, created_by: MOCK_USER, created_at: iso(Date.now() - 86400_000 * 3), last_seen_at: iso(Date.now() - 600_000), has_secret: true, auth: "bearer" },
@@ -282,6 +286,15 @@ export async function handleOpsDev(state: MockState, method: string, path: strin
   if (path !== "/v1/dev/ops-mock" || method !== "POST") return false;
   const o = ops(state);
   const b = await readBody();
+  // Livraison du brief (§7.18.5) : `{delivery: {chats?, sender?, approve?}}` règle la démo ou signe la carte.
+  if (b.delivery && typeof b.delivery === "object") {
+    const d = b.delivery as { chats?: number; sender?: string | null; approve?: boolean };
+    if (typeof d.chats === "number") o.delivery.chats = d.chats;
+    if (d.sender !== undefined) o.delivery.sender = d.sender;
+    const card = o.delivery.approval ? state.approvals.get(o.delivery.approval) : undefined;
+    if (d.approve && card?.status === "pending") finalizeDecision(state, card, "approve", "webauthn");
+    return send(200, deliveryView(state, o)), true;
+  }
   if (b.action === "alert") {
     const src = [...o.sources.values()][0]!;
     return send(202, { alerts: [receive(state, o, src, { name: String(b.name ?? "DiskAlmostFull"), status: b.status === "resolved" ? "resolved" : "firing", title: typeof b.title === "string" ? b.title : undefined, severity: "warning" })] }), true;
@@ -454,6 +467,43 @@ export async function handleOps(state: MockState, user: string, method: string, 
   }
   const pm = /^\/v1\/plan\/proposals\/(pp_[0-9a-f]{12})\/(accept|refuse)$/.exec(path);
   if (pm && method === "POST") return send(200, decide(state, o, pm[1]!, pm[2] as "accept" | "refuse", user)), true;
+  if (path === "/v1/plan/brief/delivery") {
+    if (method === "GET") return send(200, deliveryView(state, o)), true;
+    if (method === "PUT") {
+      const b = await readBody();
+      const d = o.delivery;
+      const unknown = Object.keys(b).filter((k) => k !== "telegram" && k !== "email");
+      if (unknown.length) return err(send, 400, "invalid", `livraison : clé inconnue ${unknown.sort()[0]} (telegram, email)`);
+      if ("telegram" in b) {
+        if (typeof b.telegram !== "boolean") return err(send, 400, "invalid", "telegram : true | false");
+        if (b.telegram && !d.chats) return err(send, 409, "no_telegram", "aucun Telegram relié à ce compte : relie-le d'abord (/start <code>)");
+        d.telegram = b.telegram;
+      }
+      if ("email" in b) {
+        const pendingCard = d.approval ? state.approvals.get(d.approval) : undefined;
+        const drop = (): void => {
+          if (pendingCard?.status === "pending") pendingCard.status = "failed";
+          d.approval = null;
+        };
+        if (b.email === null || b.email === "") {
+          drop();
+          Object.assign(d, { email: null, armed: null });
+        } else {
+          const to = String(b.email).trim();
+          if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return err(send, 400, "invalid", "email : une adresse e-mail");
+          if (!d.sender) return err(send, 409, "no_mail_connector", "aucune boîte mail reliée à ce compte : relie le connecteur mail d'abord");
+          const fp = createHash("sha256").update(`${user}|${to}|${d.sender}`).digest("hex");
+          const same = (d.email ?? "").toLowerCase() === to.toLowerCase();
+          if (!(same && (d.armed === fp || pendingCard?.status === "pending"))) {
+            drop();
+            Object.assign(d, { email: to, armed: null });
+            d.approval = deliveryCard(state, o, user, to, d.sender, fp);
+          }
+        }
+      }
+      return send(200, deliveryView(state, o)), true;
+    }
+  }
   if (path === "/v1/plan/brief") {
     const cur = o.brief ? state.agents.get(o.brief) ?? null : null;
     if (method === "GET") return send(200, { agent: cur ? structuredClone(cur) : null }), true;
@@ -482,4 +532,47 @@ export async function handleOps(state: MockState, user: string, method: string, 
     }
   }
   return err(send, 404, "not_found", "route inconnue");
+}
+
+/** Carte forte `brief_delivery_arm` : signée, la livraison par e-mail est armée sur cette empreinte (geste du noyau). */
+function deliveryCard(state: MockState, o: Ops, owner: string, to: string, from: string, fingerprint: string): string {
+  const args = { owner, to, from, fingerprint };
+  const a: Approval = {
+    id: hexId("appr"),
+    thread_id: "",
+    turn_index: 0,
+    channel: "web",
+    tool_name: "brief_delivery_arm",
+    arguments: args,
+    args_sha256: createHash("sha256").update(JSON.stringify(args)).digest("hex"),
+    effect: "external",
+    rule: "brief:mail_delivery",
+    reason: `envoyer chaque matin le brief du matin à ${to}, depuis ta boîte ${from} (ce brief seulement, vers cette adresse seulement)`,
+    advice: null,
+    strength: "strong",
+    status: "pending",
+    created_at: iso(),
+    expires_at: iso(Date.now() + 24 * 3600_000),
+    decided_by: null,
+    decided_via: null,
+    decided_at: null,
+    result_summary: null,
+    error: null,
+  };
+  state.approvals.set(a.id, a);
+  state.approvalEffects.set(a.id, () => {
+    if (o.delivery.approval === a.id) o.delivery.approval = null;
+    if (o.delivery.email === to) o.delivery.armed = fingerprint;
+    return `livraison du brief armée vers ${to}`;
+  });
+  state.publish({ type: "approval.requested", approval: a });
+  return a.id;
+}
+
+function deliveryView(state: MockState, o: Ops): BriefDelivery {
+  const d = o.delivery;
+  const card = d.approval ? state.approvals.get(d.approval) : undefined;
+  const fp = d.email && d.sender ? createHash("sha256").update(`${MOCK_USER}|${d.email}|${d.sender}`).digest("hex") : null;
+  const st: BriefDelivery["email"]["state"] = !d.email ? "off" : d.armed && d.armed === fp ? "armed" : card?.status === "pending" ? "pending" : "not_armed";
+  return { telegram: { enabled: d.telegram, chats: d.chats }, email: { address: d.email, from: d.sender, state: st, approval_id: st === "pending" ? d.approval : null }, last: d.last };
 }

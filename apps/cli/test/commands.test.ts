@@ -53,7 +53,15 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/skills")).toEqual({ kind: "skills", name: null });
     expect(parseSlashCommand("/checkpoints")).toEqual({ kind: "checkpoints" });
     expect(parseSlashCommand("/plan")).toEqual({ kind: "plan" });
-    expect(parseSlashCommand("/agents")).toEqual({ kind: "agents" });
+    expect(parseSlashCommand("/agents")).toEqual({ kind: "agents", action: "list", id: null });
+    expect(parseSlashCommand("/agents ab12")).toEqual({ kind: "agents", action: "view", id: "ab12" });
+    expect(parseSlashCommand("/agents cancel ab12")).toEqual({ kind: "agents", action: "cancel", id: "ab12" });
+    expect(parseSlashCommand("/agents cancel all")).toEqual({ kind: "agents", action: "cancel", id: "all" });
+    expect(parseSlashCommand("/agents cancel")).toEqual({ kind: "agents", action: "cancel", id: null });
+    expect(parseSlashCommand("/memory")).toEqual({ kind: "memory", action: "list", name: null });
+    expect(parseSlashCommand("/memory rule-x-1")).toEqual({ kind: "memory", action: "view", name: "rule-x-1" });
+    expect(parseSlashCommand("/memory forget rule-x-1")).toEqual({ kind: "memory", action: "forget", name: "rule-x-1" });
+    expect(parseSlashCommand("/skills trust")).toEqual({ kind: "skillsTrust" });
     expect(parseSlashCommand("/cost")).toEqual({ kind: "cost" });
     expect(parseSlashCommand("/cancel")).toEqual({ kind: "cancel" });
     expect(parseSlashCommand("/out")).toEqual({ kind: "out" });

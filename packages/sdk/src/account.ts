@@ -12,7 +12,7 @@ export interface AccountInfo {
   status: "active" | "deleting";
   terms: { version: string; accepted_at: string } | null;
   /** Consentement d'usage des conversations pour améliorer les modèles (facultatif, révocable). */
-  consents: { training: boolean };
+  consents: { training: boolean; /** X23 : profil mineur, le consentement d'entraînement est verrouillé à non. */ training_locked?: "minor" };
 }
 
 /** `PUT /v1/account/consent` — 400 `invalid` si la portée ou le booléen est faux, 503 `consents_disabled` si non configuré. */
@@ -37,6 +37,14 @@ export interface AccountUsage {
   today: { day: string; resets_at?: string; turns: UsageCounter; browser?: UsageCounter };
   week?: { starts: string; resets_at: string; turns: UsageCounter; browser?: UsageCounter };
   month?: { turns: { used: number } };
+  /** X23 : membre d'un foyer — quota commun et sa propre part (plafond et sa source). */
+  household?: {
+    id: string;
+    mode: "soft" | "hard";
+    today: { used: number; cap: number | null; resets_at: string };
+    week: { used: number; cap: number | null; resets_at: string };
+    member: { today: number; cap: number | null; source: "default" | "custom" | "none" };
+  };
 }
 
 export interface BillingPlanInfo {

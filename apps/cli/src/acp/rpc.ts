@@ -3,6 +3,8 @@
  * requêtes dans les deux sens. Sans dépendance ; stdout ne porte QUE le protocole (journal : cli.log).
  */
 
+import { t } from "../i18n/index.js";
+
 export type JsonRpcId = string | number;
 
 export interface RpcError {
@@ -84,7 +86,7 @@ export class RpcPeer {
   request<T = unknown>(method: string, params: unknown): { id: JsonRpcId; promise: Promise<T> } {
     const id = this.nextId++;
     const promise = new Promise<T>((resolve, reject) => {
-      if (this.closed) return reject(new RpcFailure(RPC.internalError, "connexion fermée"));
+      if (this.closed) return reject(new RpcFailure(RPC.internalError, t("connection closed")));
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
     });
     this.send({ jsonrpc: "2.0", id, method, params });
@@ -98,7 +100,7 @@ export class RpcPeer {
   /** Fin de stdin : les requêtes sortantes en attente échouent. */
   close(): void {
     this.closed = true;
-    for (const p of this.pending.values()) p.reject(new RpcFailure(RPC.internalError, "connexion fermée"));
+    for (const p of this.pending.values()) p.reject(new RpcFailure(RPC.internalError, t("connection closed")));
     this.pending.clear();
   }
 
@@ -112,7 +114,7 @@ export class RpcPeer {
     try {
       msg = JSON.parse(line) as Message;
     } catch {
-      this.send({ jsonrpc: "2.0", id: null, error: { code: RPC.parseError, message: "JSON illisible" } });
+      this.send({ jsonrpc: "2.0", id: null, error: { code: RPC.parseError, message: t("unreadable JSON") } });
       return;
     }
     if (typeof msg !== "object" || msg === null) return;
@@ -133,7 +135,7 @@ export class RpcPeer {
   private async handleRequest(method: string, params: unknown, id: JsonRpcId): Promise<void> {
     const handler = this.requests.get(method);
     if (!handler) {
-      this.send({ jsonrpc: "2.0", id, error: { code: RPC.methodNotFound, message: `méthode inconnue : ${method}` } });
+      this.send({ jsonrpc: "2.0", id, error: { code: RPC.methodNotFound, message: t("unknown method: {0}", method) } });
       return;
     }
     try {

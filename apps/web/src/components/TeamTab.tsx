@@ -4,8 +4,13 @@
  * pose la sienne dans le coffre de sa machine. Les droits sont vérifiés par le noyau ; l'écran ne fait que griser.
  */
 import React, { useCallback, useEffect, useState } from "react";
-import type { Agent, MyInvitation, NokkerClient, Project, ProjectInvitation, ProjectMember, ProjectNote, ProjectRole, ProjectRules, ProjectSkill } from "@nokker-apps/sdk";
+import { isGatedProject, type Agent, type MyInvitation, type NokkerClient, type Project, type ProjectEntry, type ProjectInvitation, ProjectMember, type ProjectNote, type ProjectRole, type ProjectRules, type ProjectSkill } from "@nokker-apps/sdk";
 import { Icon } from "../icons.js";
+import { ProjectSso, SsoGate } from "../sso/ProjectSso.js";
+import { SsoEntry, SsoSettings } from "../sso/SsoSettings.js";
+import { useSsoGuard } from "../sso/guard.js";
+import { NotesHistory } from "../mirror/NotesHistory.js";
+import { ProjectAgents, ProjectAudit, ProjectBudget } from "../project/ProjectExtras.js";
 import {
   GRANTABLE_ROLES,
   MODE_LABEL,
@@ -23,8 +28,9 @@ import {
 
 type Toast = (text: string, tone?: "ok" | "error") => void;
 
-export function TeamTab({ client, toast, onInvitations }: { client: NokkerClient; toast: Toast; onInvitations?: (n: number) => void }): React.ReactElement {
-  const [projects, setProjects] = useState<Project[] | null>(null);
+export function TeamTab({ client: raw, toast, onInvitations }: { client: NokkerClient; toast: Toast; onInvitations?: (n: number) => void }): React.ReactElement {
+  const client = useSsoGuard(raw, toast);
+  const [projects, setProjects] = useState<ProjectEntry[] | null>(null);
   const [invites, setInvites] = useState<MyInvitation[]>([]);
   const [sel, setSel] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -36,7 +42,7 @@ export function TeamTab({ client, toast, onInvitations }: { client: NokkerClient
       setInvites(iv.invitations);
       onInvitations?.(iv.invitations.length);
       setErr(null);
-      setSel((cur) => (cur && l.projects.some((p) => p.id === cur) ? cur : (l.projects[0]?.id ?? null)));
+      setSel((cur) => (cur && (cur === "sso" || l.projects.some((p) => p.id === cur)) ? cur : (l.projects[0]?.id ?? null)));
     } catch (e) {
       setErr(teamError(e));
     }
@@ -77,11 +83,13 @@ export function TeamTab({ client, toast, onInvitations }: { client: NokkerClient
                 <button type="button" className={`team-item ${p.id === sel ? "on" : ""}`} aria-current={p.id === sel ? "true" : undefined} onClick={() => setSel(p.id)}>
                   <strong>{p.name}</strong>
                   <span className={`chip role-${p.role}`}>{ROLE_LABEL[p.role]}</span>
+                  {isGatedProject(p) ? <span className="chip">SSO</span> : null}
                 </button>
               </li>
             ))}
           </ul>
         )}
+        <SsoEntry client={client} on={sel === "sso"} onOpen={() => setSel("sso")} />
         <CreateProject
           client={client}
           onCreated={(p) => {
@@ -116,7 +124,11 @@ export function TeamTab({ client, toast, onInvitations }: { client: NokkerClient
         ) : null}
       </aside>
       <div className="team-main">
-        {current ? (
+        {sel === "sso" ? (
+          <SsoSettings client={client} toast={toast} />
+        ) : current && isGatedProject(current) ? (
+          <SsoGate client={raw} project={current} />
+        ) : current ? (
           <ProjectView key={current.id} client={client} project={current} toast={toast} onChanged={() => void load()} onGone={() => { setSel(null); void load(); }} />
         ) : projects?.length ? (
           <p className="fine">Choisis un projet.</p>
@@ -219,6 +231,7 @@ function ProjectView({ client, project: p, toast, onChanged, onGone }: { client:
       ) : null}
       <Members client={client} p={p} toast={toast} onLeft={onGone} />
       {can.owner ? <Invitations client={client} p={p} toast={toast} /> : null}
+      {can.owner ? <ProjectSso client={client} projectId={p.id} toast={toast} /> : null}
       <Rules client={client} p={p} toast={toast} onSaved={onChanged} />
       <Secrets client={client} p={p} toast={toast} />
       <Skills client={client} p={p} toast={toast} />
@@ -235,8 +248,11 @@ function ProjectView({ client, project: p, toast, onChanged, onGone }: { client:
           </button>
         ) : null}
         {p.mirror ? <Notes client={client} p={p} /> : null}
+        {p.mirror && can.edit ? <NotesHistory client={client} projectId={p.id} toast={toast} /> : null}
       </section>
-      <MyAgents client={client} p={p} />
+      <ProjectBudget client={client} p={p} toast={toast} onSaved={onChanged} />
+      <ProjectAgents client={client} p={p} toast={toast} />
+      <ProjectAudit client={client} p={p} />
     </div>
   );
 }
@@ -633,24 +649,3 @@ function Notes({ client, p }: { client: NokkerClient; p: Project }): React.React
   );
 }
 
-function MyAgents({ client, p }: { client: NokkerClient; p: Project }): React.ReactElement {
-  const { items, err } = useList<Agent>(async () => (await client.listProjectAgents(p.id)).agents, [client, p.id]);
-  return (
-    <section className="machine-section">
-      <h3>Mes agents du projet</h3>
-      <ErrLine err={err} />
-      {items?.length ? (
-        <ul className="secret-list">
-          {items.map((a) => (
-            <li key={a.id}>
-              <code>{a.name}</code>
-              <span className="fine">{a.role}</span>
-            </li>
-          ))}
-        </ul>
-      ) : items ? (
-        <p className="fine">{abilities(p.role).attachAgents ? "Aucun de tes agents n'est rattaché à ce projet." : "En lecture, tu ne rattaches pas d'agent."}</p>
-      ) : null}
-    </section>
-  );
-}

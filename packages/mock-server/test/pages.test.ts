@@ -31,7 +31,7 @@ describe("pages (BUBBLES.md §10)", () => {
     expect(pageId).toMatch(/^pg_[0-9a-f]{16}$/);
     expect(bubble.state).toMatchObject({ path: "tarifs-d-automne.html", title: "Tarifs d'automne", mime: "text/html", version: 1, public: false });
     expect(JSON.stringify(bubble.state)).not.toContain("<html");
-    expect(bubble.actions.map((a) => a.id)).toEqual(["publish"]);
+    expect(bubble.actions.map((a) => a.id)).toEqual([]); // publier est un geste du client (BUBBLES §10.4)
   });
 
   it("une page privée est 404 sans preuve, servie sous CSP sandbox avec un lien signé", async () => {
@@ -88,18 +88,40 @@ describe("pages (BUBBLES.md §10)", () => {
     expect(seen.some((e) => e.type === "tool.result" && e.call_id === writing!.call_id)).toBe(true);
   });
 
-  it("publier rend la page lisible sans preuve, dépublier la referme", async () => {
+  it("publier passe par une carte forte ; publiée, la page se lit par son id public seulement ; dépublier tue l'URL", async () => {
     const { bubble, pageId } = await newPage();
-    await client.bubbleAction(bubble.id, "publish");
-    await new Promise((r) => setTimeout(r, 300));
-    const pub = await client.getBubble(bubble.id);
-    expect((pub.state as { public: boolean }).public).toBe(true);
-    expect(pub.actions.map((a) => a.id)).toEqual(["unpublish"]);
-    expect((await fetch(`${mock.url}/v1/pages/${pageId}`)).status).toBe(200);
-    expect((await client.getPageLink(pageId)).public_url).toBe(`/v1/pages/${pageId}`);
-    await client.bubbleAction(bubble.id, "unpublish");
-    await new Promise((r) => setTimeout(r, 300));
-    expect((await fetch(`${mock.url}/v1/pages/${pageId}`)).status).toBe(404);
+    expect(bubble.actions.map((a) => a.id)).not.toContain("publish"); // geste du client, pas une action de la bulle
+    const req = await client.publishPage(pageId, { index: false });
+    expect(req).toMatchObject({ strength: "strong", rule: "pages:publish", version: 1 });
+    expect((await client.getBubble(bubble.id)).state).toMatchObject({ public: false });
+    const dev = (b: unknown) => fetch(`${mock.url}/v1/dev/pages-mock`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
+    await dev({ approve: req.approval_id });
+    expect((await client.getBubble(bubble.id)).state).toMatchObject({ public: true, public_version: 1, public_index: false });
+    expect((await fetch(`${mock.url}/v1/pages/${pageId}`)).status).toBe(404); // jamais par le page_id sans preuve
+    const link = await client.getPageLink(pageId);
+    expect(link.public_url).toMatch(/^\/v1\/pages\/public\/[A-Za-z0-9_-]{24}$/);
+    expect(link.public_url).not.toContain(pageId);
+    const res = await fetch(`${mock.url}${link.public_url}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-security-policy")).toContain("connect-src 'none'");
+    expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    expect(await client.unpublishPage(pageId)).toEqual({ page_id: pageId, public: false, purge: "done" });
+    expect((await fetch(`${mock.url}${link.public_url}`)).status).toBe(404);
+    expect((await client.getBubble(bubble.id)).state).toMatchObject({ public: false, public_version: null });
+  });
+
+  it("publication : page épinglée local refusée (409), compte sans droit (403), refus de la carte", async () => {
+    const { bubble, pageId } = await newPage();
+    const fail = (p: Promise<unknown>) => p.then(() => null, (e: { status: number; body: { error: { code?: string } } }) => [e.status, e.body.error.code]);
+    await fetch(`${mock.url}/v1/dev/pages-mock`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pages_public: false }) });
+    expect(await fail(client.publishPage(pageId))).toEqual([403, "pages_public_not_allowed"]);
+    await fetch(`${mock.url}/v1/dev/pages-mock`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pages_public: true }) });
+    const req = await client.publishPage(pageId);
+    await fetch(`${mock.url}/v1/dev/pages-mock`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reject: req.approval_id }) });
+    expect((await client.getBubble(bubble.id)).state).toMatchObject({ public: false });
+    expect((await client.setPageLocality(pageId, "local")).locality).toBe("local");
+    expect(await fail(client.publishPage(pageId))).toEqual([409, "local_page"]);
+    expect((await client.getBubble(bubble.id)).state).toMatchObject({ locality: "local" });
   });
 
   it("télécharger : pièce jointe par lien signé download seulement ; pas d'adresse publique d'une page privée", async () => {

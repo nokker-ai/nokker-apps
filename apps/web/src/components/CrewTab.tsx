@@ -102,6 +102,7 @@ export function CrewTab(props: CrewProps): React.ReactElement {
                       <span className="agent-card-name">{a.name}</span>
                     </span>
                     <span className="agent-role">{a.role}</span>
+                    {a.origin?.pack ? <span className="agent-origin">depuis le pack « {a.origin.pack} »</span> : null}
                     <span className="agent-trigger">
                       <Icon name="timer" size={13} />
                       <span>
@@ -270,6 +271,12 @@ function AgentPopout({ agent, client, agentRuns, onOpenThread, toast, onClose }:
             <dl className="agent-grid">
               <dt>Mission</dt>
               <dd>{agent.instructions || agent.role}</dd>
+              {agent.origin?.pack ? (
+                <>
+                  <dt>Origine</dt>
+                  <dd>depuis le pack « {agent.origin.pack} » (modèle {agent.origin.template})</dd>
+                </>
+              ) : null}
               <dt>Déclencheur</dt>
               <dd>
                 {triggerLabel(agent.trigger)}

@@ -27,6 +27,18 @@ describe("mise en forme du coût par tour", () => {
     expect(formatTokens(-3)).toBe("0");
   });
 
+  it("anglais (extension VS Code) : point décimal, symbole devant, « tokens »", () => {
+    expect(formatTokens(12_400, "en")).toBe("12.4k");
+    expect(formatTokens(1_230_000, "en")).toBe("1.23M");
+    expect(formatAmount(0.0312, "EUR", "en")).toBe("€0.03");
+    expect(formatAmount(0.004, "CHF", "en")).toBe("< CHF 0.01");
+    expect(formatAmount(0, "USD", "en")).toBe("$0");
+    expect(formatCostLine({ total_tokens: 12_400, cost: { EUR: 0.0312 } }, "en")).toBe("12.4k tokens · €0.03");
+    expect(formatCostLine({ total_tokens: 900, cost: null }, "en")).toBe("900 tokens");
+    // Défaut inchangé : français.
+    expect(formatCostLine({ total_tokens: 12_400, cost: { EUR: 0.0312 } })).toBe("12,4 k jetons · 0,03 €");
+  });
+
   it("montants : devise du noyau, jamais convertie ; sous le centime affiché comme tel", () => {
     expect(formatAmount(0.0312, "EUR")).toBe("0,03 €");
     expect(formatAmount(1.5, "usd")).toBe("1,50 $");

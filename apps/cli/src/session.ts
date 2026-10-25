@@ -12,7 +12,10 @@ import {
   type Bubble,
   type ApprovalScope,
   type ChatCompletionChunk,
+  type CancelResult,
   type LocalCostTotals,
+  type LocalMemoryStatus,
+  type SkillsTrustResult,
   type LocalSessionSummary,
   type LocalToolName,
   type LocalToolOutcome,
@@ -26,10 +29,12 @@ import {
 } from "@nokker-apps/sdk";
 import type { DeviceIdentity } from "./auth.js";
 import { signWithDevice } from "./auth.js";
+import { t } from "./i18n/index.js";
+import type { ProjectSkillsState } from "./localtools.js";
 
 export class StrongApprovalRequiresDeviceError extends Error {
   constructor() {
-    super("Une approbation de niveau strong exige une preuve biométrique (téléphone) — jamais de TOTP ni de clé logicielle (APPROVALS.md §1).");
+    super(t("A strong approval needs a biometric proof (phone) — never a TOTP or a software key."));
   }
 }
 
@@ -71,7 +76,7 @@ export class CliSession {
 
   /** Session de code sur `cwd` : reprend le fil local le plus récent de ce dossier, sinon en crée un
    * (LOKKAL.md §7.4.1). Renvoie l'historique du fil repris (vide pour un fil neuf). */
-  async openLocal(cwd: string): Promise<{ resumed: boolean; messages: ThreadView["messages"] }> {
+  async openLocal(cwd: string): Promise<{ resumed: boolean; messages: ThreadView["messages"]; skills: ProjectSkillsState }> {
     const mine = (await this.client.listLocalSessions()).filter((s) => s.cwd === cwd);
     // La plus récente : plus grand `last_turn_at` s'il est connu, sinon la dernière de la liste (le noyau les liste
     // de la plus ancienne à la plus récente).
@@ -80,19 +85,46 @@ export class CliSession {
       : undefined;
     // Fil connu pour ce dossier : on le reprend sans rappeler POST (le noyau ouvre un fil neuf à chaque POST, `resume`
     // ou non — il laisserait des fils vides).
-    this.threadId = existing ? existing.thread_id : (await this.client.createLocalSession({ cwd })).thread_id;
+    const opened = existing ? null : await this.client.createLocalSession({ cwd });
+    this.threadId = existing ? existing.thread_id : opened!.thread_id;
     this.cwd = cwd;
-    if (!existing) return { resumed: false, messages: [] };
+    // Skills du dépôt (§7.21.3) : seulement dans la réponse d'ouverture ; une session reprise n'en sait rien.
+    if (!existing) return { resumed: false, messages: [], skills: opened!.skills ?? "off" };
     try {
-      return { resumed: true, messages: (await this.client.getThread(this.threadId)).messages };
+      return { resumed: true, messages: (await this.client.getThread(this.threadId)).messages, skills: "unknown" };
     } catch {
-      return { resumed: true, messages: [] }; // fil sans tour encore (404 côté noyau)
+      return { resumed: true, messages: [], skills: "unknown" }; // fil sans tour encore (404 côté noyau)
     }
   }
 
   /** Appel d'un outil du noyau sur ce fil (route locale proposée) : 200 {content, is_error} ou 202 {approval_id}. */
   callTool(name: LocalToolName, args: Record<string, unknown> = {}): Promise<LocalToolOutcome> {
     return this.client.callLocalTool(this.threadId, name, args);
+  }
+
+  /** `/skills trust` : confiance aux skills du dépôt de ce fil, pour l'empreinte relue (`POST /v1/local/skills/trust`). */
+  trustSkills(sha256: string): Promise<SkillsTrustResult> {
+    return this.client.trustProjectSkills(this.threadId, sha256);
+  }
+
+  /** État de la mémoire longue (`GET /v1/local/memory`) ; `null` si le noyau ne le donne pas. */
+  async memoryStatus(): Promise<LocalMemoryStatus | null> {
+    try {
+      return await this.client.getLocalMemory();
+    } catch {
+      return null;
+    }
+  }
+
+  /** Arrête un sous-agent de fond : `delegate_cancel {ids}` par la route d'appel d'outil. Le noyau ne l'appelle pas
+   * directement aujourd'hui (403) : l'appelant replie alors sur `cancelAllSubagents`. */
+  cancelSubagent(id: string): Promise<LocalToolOutcome> {
+    return this.client.callLocalTool(this.threadId, "delegate_cancel", { ids: [id] });
+  }
+
+  /** Arrête TOUS les sous-agents du fil (fond et premier plan) et le tour en cours : `POST /v1/threads/{id}/cancel`. */
+  cancelAllSubagents(): Promise<CancelResult> {
+    return this.client.cancelTurn(this.threadId);
   }
 
   /** `/cost` : totaux de ce fil (sous-agents compris) et du jour, lus sur `GET /v1/local/cost` (lecture seule). */
@@ -107,7 +139,7 @@ export class CliSession {
   /** Échap / `/cancel` : demande au noyau d'arrêter le tour ; le flux se ferme par `turn.done {cancelled}`. */
   async cancel(): Promise<boolean> {
     const r = await this.client.cancelTurn(this.threadId);
-    return r.cancelled || r.approvals_cancelled > 0;
+    return r.cancelled === true || r.approvals_cancelled > 0 || (r.subagents_cancelled ?? 0) > 0;
   }
 
   /** Coupe la connexion du tour en cours (dernier recours, p. ex. au départ). */
@@ -222,7 +254,7 @@ export class CliSession {
    * signature logicielle » suffit). Le vrai noyau refuse cette preuve sur `strong` (`ProofInvalid`) : la CLI ne
    * signe donc plus jamais une carte forte, elle attend qu'elle soit décidée sur téléphone. */
   async decideByDevice(approval: Approval | string, decision: "approve" | "reject"): Promise<Approval> {
-    if (!this.identity) throw new Error("Aucun appareil enrôlé — lancer /login d'abord.");
+    if (!this.identity) throw new Error(t("No enrolled device — run /login first."));
     const a = typeof approval === "string" ? await this.client.getApproval(approval) : approval;
     if (a.strength !== "standard") throw new StrongApprovalRequiresDeviceError();
     const { challenge } = await this.client.requestChallenge(a.id);
@@ -242,7 +274,7 @@ export class CliSession {
     if (approval.strength !== "standard") {
       throw new StrongApprovalRequiresDeviceError();
     }
-    if (!this.user) throw new Error("Utilisateur non résolu — lancer /login d'abord.");
+    if (!this.user) throw new Error(t("User not resolved — run /login first."));
     const { challenge } = await this.client.requestChallenge(approval.id);
     return this.client.decideApproval(approval.id, { decision, challenge, totp, totp_user: this.user });
   }

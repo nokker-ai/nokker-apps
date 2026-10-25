@@ -9,9 +9,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startMockServer, type MockServerHandle } from "@nokker-apps/mock-server";
 import { resolveTokenPath } from "@nokker-apps/cli/src/lokkal.js";
+import { readFileSync } from "node:fs";
 import { ChatController, imageMentions, type StoredDiff } from "../../src/controller.js";
 import { readLocalToken, resolveServerUrl, tokenPath } from "../../src/connection.js";
+import { fromBundle } from "../../src/i18n.js";
+import type { LiveView } from "../../src/live.js";
 import type { ToView } from "../../src/protocol.js";
+import type { StatusInfo } from "../../src/status.js";
+
+/** Le panneau en français (paquet l10n de l'extension), comme VS Code réglé en `fr`. */
+const T = fromBundle(JSON.parse(readFileSync(join(__dirname, "..", "..", "l10n", "bundle.l10n.fr.json"), "utf-8")) as Record<string, string>);
 
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 async function until<T>(fn: () => T | undefined | false | null, ms = 6000): Promise<T> {
@@ -64,13 +71,15 @@ describe("jeton et serveur : mêmes fichiers que la CLI", () => {
 
   it("jamais de jeton local vers un serveur distant", async () => {
     const t = await readLocalToken("https://example.org");
-    expect("error" in t && t.error).toMatch(/pas un noyau local/);
+    expect("error" in t && t.error).toMatch(/is not a local kernel/);
+    const tf = await readLocalToken("https://example.org", T);
+    expect("error" in tf && tf.error).toMatch(/pas un noyau local/);
   });
 
   it("serveur : réglage > NOKKER_SERVER_URL > lokkal.json > défaut", async () => {
     expect(resolveServerUrl("http://127.0.0.1:9", {}).url).toBe("http://127.0.0.1:9");
     expect(resolveServerUrl("", { NOKKER_SERVER_URL: "http://127.0.0.1:7" }).url).toBe("http://127.0.0.1:7");
-    expect(resolveServerUrl(undefined, {})).toEqual({ url: "http://127.0.0.1:8742", source: "défaut" });
+    expect(resolveServerUrl(undefined, {})).toEqual({ url: "http://127.0.0.1:8742", source: "default" });
     await writeFile(
       join(dir, "config", "lokkal.json"),
       JSON.stringify({ compose: "/x/c.yml", project: "nokker", version: "0.1.0", core_service: "core", api_url: "http://127.0.0.1:18742", web_url: "http://127.0.0.1:7420", token_path: join(dir, "config", "local-token"), env_file: "/x/.env" }),
@@ -83,12 +92,14 @@ describe("jeton et serveur : mêmes fichiers que la CLI", () => {
 describe("ChatController contre le mock", () => {
   const posted: ToView[] = [];
   const opened: StoredDiff[] = [];
+  const lives: LiveView[] = [];
+  const statuses: StatusInfo[] = [];
   let ctl: ChatController;
 
   it("se connecte sur la session du dossier", async () => {
     ctl = new ChatController(
-      { post: (m) => posted.push(m), openDiff: async (d) => void opened.push(d) },
-      { serverUrl: mock.url, folder: proj, fs: fsReader },
+      { post: (m) => posted.push(m), openDiff: async (d) => void opened.push(d), live: (v) => void lives.push(v), status: (s) => void statuses.push(s) },
+      { serverUrl: mock.url, folder: proj, fs: fsReader, t: T, lang: "fr" },
     );
     expect(await ctl.connect()).toBe(true);
     expect(ctl.threadId).toMatch(/^th_/);
@@ -102,6 +113,7 @@ describe("ChatController contre le mock", () => {
     const card = (await until(() => posted.find((m) => m.type === "card" && m.card.choices))) as Extract<ToView, { type: "card" }>;
     expect(card.card.tool).toBe("terminal");
     expect(card.card.choices!.map((c) => c.label)[0]).toBe("Pour cette session");
+    expect(card.card.choices!.map((c) => c.id)).toEqual(["session", "once", "always", "always", "reject"]);
     await ctl.decide(card.card.id, card.card.choices![0]!.index);
     // Un second clic sur la même carte n'envoie rien.
     await ctl.decide(card.card.id, card.card.choices![0]!.index);
@@ -130,6 +142,16 @@ describe("ChatController contre le mock", () => {
     expect(tools.find((t) => t.name === "terminal" && t.status === "in_progress")?.effect).toBe("écriture");
     const cost = posted.find((m) => m.type === "cost") as Extract<ToView, { type: "cost" }>;
     expect(cost.line).toMatch(/jetons · .*€/);
+    // Barre d'état : coût du tour, modèle et palier du mock, plus occupé.
+    expect(statuses.at(-1)).toMatchObject({ connected: true, busy: false, turnCost: cost.line, tier: "mock" });
+    expect(statuses.some((s) => s.busy)).toBe(true);
+    // Écriture en direct (X22) du patch : le texte proposé, puis le bloc fermé par le tool.result.
+    const live = lives.filter((v) => v.name === "patch");
+    expect(live.at(-1)).toMatchObject({ path: "src/app.py", field: "new_string", done: true, discarded: false });
+    expect(live.at(-1)!.text).toContain('"""Somme de a et b."""');
+    expect(live.some((v) => !v.done)).toBe(true);
+    const liveMsg = posted.filter((m) => m.type === "live") as Array<Extract<ToView, { type: "live" }>>;
+    expect(liveMsg.at(-1)!.live.tail.length).toBeLessThanOrEqual(6);
     const reply = posted.filter((m) => m.type === "text").map((m) => (m as { append: string }).append).join("");
     expect(reply.trim()).toBe("J'ai corrigé `src/app.py` (add retournait a - b) et le test add passe. Je n'ai pas nettoyé `build/` : suppression refusée.");
     expect(posted.find((m) => m.type === "turnEnd")).toEqual({ type: "turnEnd", stopReason: "end_turn" });
@@ -222,7 +244,7 @@ describe("ChatController contre le mock", () => {
 
   it("dossier hors des racines : message clair", async () => {
     const out: ToView[] = [];
-    const c = new ChatController({ post: (m) => out.push(m), openDiff: async () => {} }, { serverUrl: mock.url, folder: join(dir, "ailleurs"), fs: fsReader });
+    const c = new ChatController({ post: (m) => out.push(m), openDiff: async () => {} }, { serverUrl: mock.url, folder: join(dir, "ailleurs"), fs: fsReader, t: T });
     expect(await c.connect()).toBe(false);
     expect((out.filter((m) => m.type === "state").pop() as { error: string }).error).toMatch(/hors des racines/);
   });

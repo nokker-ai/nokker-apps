@@ -1,84 +1,162 @@
-# Nokker pour VS Code
+# Nokker for VS Code
 
-Une session de code Nokker Lokkal dans VS Code : un panneau de chat sur le dossier ouvert, contre le noyau qui tourne sur
-votre machine. Même session, mêmes règles et mêmes cartes d'approbation que la commande `nokker` dans un terminal.
+A Nokker Lokkal coding session inside VS Code: a chat panel on the open folder, against the kernel that runs on your
+machine. Same session, same permission rules and same approval cards as the `nokker` command in a terminal.
 
-> **Marketplace : bientôt.** L'extension n'est publiée ni sur le Visual Studio Marketplace ni sur Open VSX ; elle
-> s'installe pour l'instant depuis un paquet `.vsix` construit localement (ci-dessous).
+> **Marketplace: soon.** The extension is not published on the Visual Studio Marketplace or Open VSX yet; install it
+> from a `.vsix` package built locally (see [Build, test, package](#build-test-package)).
 
-## Ce que fait le panneau
+Labels follow the language of VS Code: English by default, French when VS Code is in French.
 
-- **Session du dossier ouvert** : à l'ouverture, le panneau reprend le fil le plus récent de ce dossier
-  (`GET /v1/local/sessions`), sinon en ouvre un (`POST /v1/local/sessions {cwd}`). Bouton « + » : nouveau fil sur le même
-  dossier. Le dossier doit être sous une racine déclarée de Lokkal, sinon le panneau le dit.
-- **Réponses en direct**, appels d'outil avec leur effet (`lecture`, `écriture`, `destructif`…), aperçu du résultat
-  replié, sous-agents indentés.
-- **Patchs dans le diff natif** : sous chaque `patch` / `write_file`, « Voir le diff » ouvre l'éditeur de diff de VS Code
-  (avant ↔ fichier actuel). Le texte « avant » est lu sur le disque au moment de l'appel ; à défaut, il est refait à partir
-  du passage remplacé, seulement s'il est sans ambiguïté (jamais deviné, jamais tiré d'un argument tronqué).
-- **Cartes d'approbation** : mêmes choix et même ordre que la CLI — `1. Une fois · 2. Pour cette session · 3. Toujours cette
-  commande · 3b. Toujours les commandes qui commencent par … · 4. Refuser` (pour une commande de test, « Pour cette
-  session » passe en premier) ; la règle exacte qui sera écrite s'affiche sous « Toujours ». Décision par
-  `POST /v1/local/approvals/{id}/decide`, une seule fois par carte, et au plus 25 décisions par tour. Une **carte forte**
-  n'a pas de bouton ; elle dit où elle attend : « Action forte : elle attend ton téléphone » si elle est partie chez
-  nokker.ai (machine liée), sinon « Action forte : à décider dans le terminal (`nokker`) ». Panneau caché : une
-  notification VS Code signale la carte.
-- **Ligne de coût** sous chaque tour (`12,4 k jetons · 0,03 €`, mise en forme `formatCostLine` du SDK, partagée avec la CLI
-  et le web) ; jetons seuls quand le modèle n'a pas de prix.
-- **Envoyer la sélection** (menu contextuel de l'éditeur, palette « Nokker : Envoyer la sélection à Nokker »,
-  `Ctrl+Alt+N` / `Cmd+Alt+N`) : le fichier et les lignes rejoignent le prochain message comme bloc de contexte
-  (`src/app.py:10-24`), retirable avant l'envoi.
-- **Images** : `@capture.png` dans le message joint l'image du dossier (le noyau la lit, rien n'est encodé côté éditeur).
-- **Arrêter** (ou Échap dans la zone de saisie) : `POST /v1/threads/{id}/cancel`.
+## Requirements
 
-Un tour dure jusqu'au bout de ses suites : sur le noyau, une carte rend la main au modèle ; une approbation exécute l'outil
-(sa vraie sortie ferme l'appel) puis lance un tour de suite, un refus ne lance rien ; le panneau reste « occupé » tant
-qu'une carte est ouverte, qu'une décision est en vol, qu'un outil approuvé attend son résultat ou qu'un tour de suite tourne.
+- Nokker Lokkal installed and running on this machine (the installer writes `~/.config/nokker/lokkal.json`).
+- A **trusted** folder under one of the roots declared to Lokkal. Problems with the connection: run `nokker doctor`
+  in a terminal.
 
-## Connexion et jeton
+## Features
 
-L'extension lit **exactement les mêmes fichiers que la CLI** (code partagé) :
+### Session panel
 
-- noyau : réglage `nokker.serverUrl` (portée machine, jamais synchronisé) > `$NOKKER_SERVER_URL` > `api_url` de
-  `~/.config/nokker/lokkal.json` (écrit par l'installeur) > `http://127.0.0.1:8742` ;
-- jeton local : `token_path` de `lokkal.json`, à défaut `~/.config/nokker/local-token`.
+- **Session of the open folder**: the panel resumes the most recent session of the folder (`GET /v1/local/sessions`),
+  or opens one (`POST /v1/local/sessions {cwd}`). "+" starts a new session in the same folder.
+- **Live replies**, tool calls with their effect (`read`, `write`, `destructive`…), a folded preview of the result,
+  sub-agents indented, and a cost line under each turn (`12.4k tokens · €0.03`, tokens only when the model has no
+  price). Amounts come from the kernel as they are, never converted.
+- **Stop** (or Escape in the input box) cancels the turn (`POST /v1/threads/{id}/cancel`).
 
-Le jeton n'est **jamais** dans les réglages de VS Code (Settings Sync les copie entre machines) et n'est envoyé qu'à un
-noyau en boucle locale (`127.0.0.1`, `localhost`). Il ne quitte pas l'hôte d'extension : le panneau (webview) n'a ni jeton
-ni accès réseau. Problème de connexion : `nokker doctor` dans un terminal.
+### Sessions view
 
-## Sécurité du panneau
+All the coding sessions of the local kernel, those of the open folder first: title, live state (working, cards
+waiting, strong cards among them) and cumulated cost (`GET /v1/local/cost?thread_id=`). Click a session of this folder
+to resume it (its history is replayed); a session of another folder offers to open that folder in a new window. A
+session opened elsewhere (for example by `nokker` in a terminal) shows up as soon as it runs a turn.
 
-- CSP stricte : `default-src 'none'`, un seul script (nonce), une seule feuille servie par VS Code, `connect-src 'none'`,
-  aucun style ni script en ligne, aucune ressource distante.
-- Tout texte venu du noyau est posé par `textContent` (Markdown minimal construit en nœuds, jamais en HTML).
-- L'extension exige un dossier de confiance (`untrustedWorkspaces: false`).
+### Reviewing the changes of a turn
 
-## Construire, tester, empaqueter
+- **Changes view**: the files written by the last turn (`write_file`, `patch`), each with its native diff
+  (before ↔ now), and **Accept** / **Refuse** per file — inline in the view, or from the title bar of the diff.
+- **Refuse** restores the file from the **restore point the kernel took before the turn** (see the checkpoints
+  documentation: one point before the first non-read tool call of each turn). The extension calls
+  `checkpoint_restore {hash, file}`; restoring is destructive, so the kernel asks for a **strong card**, which is
+  never decided in VS Code: it waits in the terminal (`nokker`), or on your phone when the machine is linked to a
+  nokker.ai account. Rejecting that card keeps the file.
+- A file **created** by the turn is not in the restore point. A kernel that links its restore points to turns deletes it
+  itself (same strong card), after a fresh "before rollback" point that keeps a copy; with an older kernel, refusing it
+  moves it to the trash, after you confirm.
+
+### Live writing
+
+While the model writes a file, its proposal streams in (`tool.input.delta`): the last lines scroll under the tool
+call in the panel, and a **read-only editor** opens beside the current one with the whole text as it grows
+(setting `nokker.liveWrite.openEditor`). Nothing is written to disk before the tool runs: the approval card stays the
+gate.
+
+### Context for the next message
+
+Everything comes from the editor, never made up:
+
+- **Selection** (editor context menu, `Ctrl+Alt+N` / `Cmd+Alt+N`): file and lines, as a context block.
+- **Files** (`@` button, explorer or editor context menu, "Add a file to the message"): a saved file is sent as
+  `@path` (the kernel reads it in the session folder); a file with unsaved changes is sent with its current text;
+  an image (png, jpeg, webp, gif) is attached by path. Typing `@capture.png` in the message attaches it too.
+- **Problems**: the **Fix with Nokker** quick fix on a diagnostic adds the problems (message, source, code) with the
+  real lines around them, and fills the input with "Fix this problem." — press Enter to send. "Add the problems of
+  this file" does the same for every problem of the active file.
+- **Terminal**: "Add the last terminal output" adds the last command of the active terminal, its exit code and its
+  last lines (ANSI sequences removed). The output is read through VS Code's terminal shell integration; without it,
+  the extension says so instead of guessing.
+
+Each piece shows as a chip above the input box and can be removed before sending.
+
+### Approval cards
+
+- In the panel: the same choices in the same order as the terminal client — *Once*, *For this session*, *Always
+  this command* (the exact rule is shown), *Always commands starting with…*, *Reject*; for a test command, *For this
+  session* comes first.
+- **Notifications** when the panel is hidden: *Once*, *For this session*, *Reject* for a standard card.
+- A **strong card** has no button anywhere in VS Code (panel or notification): the extension only says where it
+  waits — "waits for your phone" when the kernel forwarded it to your account, otherwise "decide it in the terminal
+  (`nokker`)".
+- At most one decision per card and 25 per turn.
+
+### Status bar
+
+Tier, model and cost of the last turn, a spinner while a turn runs, and the number of cards waiting. Click to open
+the panel.
+
+## Connection and token
+
+The extension reads **exactly the same files as the `nokker` CLI** (shared code):
+
+- kernel: setting `nokker.serverUrl` (machine scope, never synced) > `$NOKKER_SERVER_URL` > `api_url` of
+  `~/.config/nokker/lokkal.json` > `http://127.0.0.1:8742`;
+- local token: `token_path` of `lokkal.json`, otherwise `~/.config/nokker/local-token`.
+
+The token is **never** stored in VS Code settings (Settings Sync copies them between machines) and is only sent to a
+kernel on the loopback interface (`127.0.0.1`, `localhost`). It never leaves the extension host: the panel has
+neither the token nor network access.
+
+## Security of the panel
+
+- Strict Content Security Policy: `default-src 'none'`, one script (nonce), one stylesheet served by VS Code,
+  `connect-src 'none'`, no inline style or script, nothing remote.
+- Every text from the kernel is set with `textContent` (minimal Markdown built as nodes, never HTML).
+- The extension requires a trusted workspace. It sends no telemetry.
+
+## Settings
+
+| Setting | Default | |
+|---|---|---|
+| `nokker.serverUrl` | empty | address of the local kernel (machine scope) |
+| `nokker.liveWrite.openEditor` | `true` | open live writes in a read-only editor beside the current one |
+
+## Build, test, package
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm --filter nokker-vscode build          # dist/extension.cjs + dist/webview.js (esbuild)
-pnpm --filter nokker-vscode test           # unitaires (vitest, contre le mock-server)
-pnpm --filter nokker-vscode test:electron  # vrai VS Code sous xvfb (@vscode/test-electron, télécharge VS Code)
-pnpm --filter nokker-vscode package        # nokker-vscode-0.1.0.vsix (local, aucune publication)
-code --install-extension apps/vscode/nokker-vscode-0.1.0.vsix
+pnpm --filter nokker-vscode build            # dist/extension.cjs + dist/webview.js (esbuild, no runtime dependency)
+pnpm --filter nokker-vscode test             # unit tests (vitest, against the mock server)
+pnpm --filter nokker-vscode test:electron    # real VS Code under xvfb (@vscode/test-electron)
+pnpm --filter nokker-vscode package          # nokker-vscode-<version>.vsix, local only
+pnpm --filter nokker-vscode publish:check    # dry run of a publication: package + checks, nothing is uploaded
+code --install-extension apps/vscode/nokker-vscode-0.2.0.vsix
 ```
 
-`test:electron` démarre le mock-server, ouvre un dossier jetable dans VS Code avec l'extension en développement, puis
-vérifie : activation, commandes, connexion par le jeton local, envoyer la sélection, un tour avec deux cartes (décidées par
-l'API, bornées), diff natif ouvert sur le bon fichier, nouveau fil. Version de VS Code : `$NOKKER_VSCODE_VERSION`
-(défaut `stable` ; essayé aussi sur 1.95.3, minimum déclaré). `NOKKER_E2E_SHOT=<fichier.png>` (écran xvfb
-`-s "-screen 0 1400x900x24"`) enregistre des captures du panneau.
+`test:electron` starts the mock server with real writes, opens a throw-away folder in VS Code with the extension in
+development mode, and checks: activation, commands and views, labels, connection by the local token, the Sessions
+view, send selection, the quick fix on a problem, the last terminal output, a turn with two cards decided through the
+API, the live editor, the native diff, refusing a file (strong card decided "in the terminal", file restored on disk),
+a new session and resuming the first one. VS Code version: `$NOKKER_VSCODE_VERSION` (default `stable`; also run on
+1.95.3, the declared minimum). `NOKKER_E2E_LOCALE=fr` runs it with VS Code in French; it needs the French language
+pack once:
 
-## Fichiers
+```sh
+.vscode-test/vscode-linux-x64-<version>/bin/code --extensions-dir .vscode-test/extensions-fr \
+  --install-extension ms-ceintl.vscode-language-pack-fr
+```
 
-| Fichier | Rôle |
+`NOKKER_E2E_SHOT=<file.png>` (xvfb screen `-s "-screen 0 1400x900x24"`) saves screenshots of the panel.
+
+`publish:check` builds the package and verifies what both registries require, offline: the `vsce package` checks,
+the files in the package (no sources, source maps or `node_modules`), the icon, `engines.vscode`, no runtime
+dependency, and the pre-upload checks of `ovsx` (publisher, name, version, license; `ovsx publish` has no dry-run
+mode). Publishing itself needs a publisher account and is not done by any script here.
+
+## Files
+
+| File | Role |
 |---|---|
-| `src/extension.ts` | branchement VS Code : vue webview, commandes, diff natif, notifications |
-| `src/controller.ts` | logique du panneau, sans l'API VS Code (testée contre le mock) |
-| `src/connection.ts` | noyau et jeton, par le code de la CLI (`apps/cli/src/lokkal.ts`) |
-| `src/webview/` | panneau (DOM, Markdown en arbre) |
-| `src/html.ts` | page et CSP |
-| `src/selection.ts` | « envoyer la sélection » |
-| `packages/sdk/src/editor-session.ts` | tour vu d'un éditeur, partagé avec `nokker acp` |
+| `src/extension.ts` | VS Code wiring: views, commands, native diff, live editor, notifications, status bar |
+| `src/controller.ts` | logic of the extension, without the VS Code API (tested against the mock server) |
+| `src/sessions.ts` | Sessions view model |
+| `src/review.ts` | review of the writes of a turn, restore point, per-file restore |
+| `src/live.ts` | live writing (`tool.input.delta`) |
+| `src/context.ts` | context pieces: selection, files, problems, terminal output |
+| `src/status.ts` | status bar and card notifications |
+| `src/i18n.ts` | labels (`vscode.l10n`), translated choices and strong-card text |
+| `src/connection.ts` | kernel and token, through the CLI code (`apps/cli/src/lokkal.ts`) |
+| `src/webview/` | panel (DOM, Markdown as a tree) |
+| `src/html.ts` | page and CSP |
+| `l10n/`, `package.nls*.json` | French translations |
+| `packages/sdk/src/editor-session.ts` | a turn seen from an editor, shared with `nokker acp` |

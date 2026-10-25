@@ -46,7 +46,7 @@ function touch(state: MockState, a: Agent, patch: Partial<Agent>): Agent {
   return a;
 }
 
-export function createAgentFull(state: MockState, req: CreateAgentRequest, user: string): Agent {
+export function createAgentFull(state: MockState, req: CreateAgentRequest, user: string, origin: Agent["origin"] = null): Agent {
   const now = new Date().toISOString();
   const trigger = req.trigger ?? { kind: "manual" as const };
   const agent: Agent = {
@@ -70,6 +70,7 @@ export function createAgentFull(state: MockState, req: CreateAgentRequest, user:
     budget: req.budget ?? null,
     auto_approve: req.auto_approve ?? [],
     placement: null,
+    ...(origin ? { origin } : {}),
   };
   state.agents.set(agent.id, agent);
   state.publish({ type: "agent.created", agent: structuredClone(agent) });

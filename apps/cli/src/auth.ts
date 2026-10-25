@@ -23,6 +23,7 @@ import {
 } from "@nokker-apps/sdk";
 import { openKeychain } from "./keychain.js";
 import { deviceKeyFilePath, sessionFilePath } from "./config.js";
+import { t } from "./i18n/index.js";
 import { cliLog } from "./log.js";
 import { resolveTokenPath } from "./lokkal.js";
 
@@ -171,7 +172,7 @@ export async function login(client: NokkerClient, deviceName: string, opts: Logi
         announced = true;
         opts.onPending?.({ ...device, status: "pending" });
       }
-      if (Date.now() > deadline) throw new Error("Appareil non confirmé (délai dépassé) — relance nokker une fois le code confirmé.");
+      if (Date.now() > deadline) throw new Error(t("Device not confirmed (timed out) — rerun nokker once the code is confirmed."));
       await new Promise((r) => setTimeout(r, opts.pollMs ?? 2000));
     }
   }
@@ -188,8 +189,8 @@ export function isLocalServer(url: string): boolean {
 
 export async function readLocalToken(): Promise<string | null> {
   try {
-    const t = (await readFile(resolveTokenPath(), "utf-8")).trim();
-    return t || null;
+    const token = (await readFile(resolveTokenPath(), "utf-8")).trim();
+    return token || null;
   } catch {
     return null;
   }
@@ -211,10 +212,10 @@ export async function connect(client: NokkerClient, serverUrl: string, deviceNam
       client.setToken(local);
       try {
         await client.listThreads();
-        cliLog("info", `connexion par jeton local sur ${serverUrl}`);
+        cliLog("info", `connected with the local token on ${serverUrl}`);
         return { user: "local-owner", mode: "local", identity: null };
       } catch (err) {
-        cliLog("warn", `jeton local refusé sur ${serverUrl} : ${String(err)}`);
+        cliLog("warn", `local token rejected on ${serverUrl}: ${String(err)}`);
       }
     }
   }
@@ -226,7 +227,7 @@ export async function connect(client: NokkerClient, serverUrl: string, deviceNam
       const { identity } = await ensureDeviceIdentity(client, deviceName, saved.user);
       return { user: saved.user, mode: "device", identity };
     } catch {
-      cliLog("warn", "session enregistrée refusée, nouvelle connexion");
+      cliLog("warn", "saved session rejected, signing in again");
     }
   }
   const token = await login(client, deviceName, opts);

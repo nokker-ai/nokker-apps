@@ -21,19 +21,21 @@ import {
   formatCostLine,
   hostPathOf,
   parseToolJson,
-  strongCardText,
   type ChatAttachment,
   type CheckpointDiff,
   type CheckpointInfo,
   type EditorApprovalCard,
   type EditorDiff,
   type EditorFs,
+  type EditorTexts,
   type EditorToolCall,
   type LocalChoice,
   type NokkerClient,
   type TodoResult,
   type TurnCostEvent,
 } from "@nokker-apps/sdk";
+import { choiceLabel, strongText } from "../approval-model.js";
+import { costLang, t } from "../i18n/index.js";
 import { RPC, RpcFailure, type JsonRpcId, type RpcPeer } from "./rpc.js";
 
 /** Version du protocole ACP parlée ici (schéma v1 du SDK officiel `@agentclientprotocol/sdk`, entrée stable). */
@@ -59,12 +61,28 @@ export interface AcpAgentDeps {
   costLine?: boolean;
 }
 
-const COMMANDS = [
-  { name: "cost", description: "Coût de la session et du jour (sans appel modèle)" },
-  { name: "diff", description: "Diff depuis le dernier point de retour (sans appel modèle)" },
-  { name: "plan", description: "Plan du fil (sans appel modèle)" },
-  { name: "checkpoints", description: "Points de retour du fil (sans appel modèle)" },
-] as const;
+/** Commandes annoncées à l'éditeur (calculées à l'annonce : la langue peut être choisie après le chargement du module). */
+function commands(): Array<{ name: string; description: string }> {
+  return [
+    { name: "cost", description: t("Cost of the session and of the day (no model call)") },
+    { name: "diff", description: t("Diff since the last checkpoint (no model call)") },
+    { name: "plan", description: t("Plan of the thread (no model call)") },
+    { name: "checkpoints", description: t("Checkpoints of the thread (no model call)") },
+  ];
+}
+
+/** Textes que la session du SDK produit elle-même (notices), dans la langue du client. */
+function editorTexts(): EditorTexts {
+  return {
+    subagentStarted: (goal) => t("Sub-agent started: {0}", goal),
+    subagentFinished: (status, commits) => (commits ? t("Sub-agent finished ({0}): {1} commit(s)", status, commits) : t("Sub-agent finished ({0})", status)),
+    imageSkipped: t("Image not read: the model has no vision."),
+    approvedExecuted: t("Approved: run by the kernel."),
+    executionFailed: t("Run failed."),
+    cardExpired: t("Card expired: not run."),
+    rejected: t("Rejected: not run."),
+  };
+}
 
 const MAX_IMAGES = 4;
 
@@ -81,7 +99,7 @@ export function toolKind(name: string, effect: string | null): string {
 }
 
 export function toolTitle(name: string, args: Record<string, unknown>, cwd: string): string {
-  if (name === "terminal" && typeof args.command === "string") return `terminal : ${args.command}`;
+  if (name === "terminal" && typeof args.command === "string") return t("terminal: {0}", args.command);
   for (const key of ["path", "pattern", "query", "url", "goal"]) {
     const v = args[key];
     if (typeof v === "string" && v) {
@@ -113,14 +131,14 @@ export function promptToRequest(blocks: ContentBlock[], cwd: string): { text: st
     } else if (b.type === "resource") {
       const r = b.resource;
       const label = relFromUri(r.uri, cwd) ?? r.uri;
-      if (typeof r.text === "string") parts.push(`\n${label} :\n\`\`\`\n${r.text}\n\`\`\`\n`);
+      if (typeof r.text === "string") parts.push(t("\n{0}:\n```\n{1}\n```\n", label, r.text));
       else if (typeof r.blob === "string" && /^image\//.test(r.mimeType ?? "")) {
         images += 1;
         attachments.push({ data: r.blob, media_type: r.mimeType ?? undefined, name: label.split(/[\\/]/).pop() ?? "image" });
       } else parts.push(label);
     }
   }
-  if (images > MAX_IMAGES) throw new RpcFailure(RPC.invalidParams, `${MAX_IMAGES} images au plus par message`);
+  if (images > MAX_IMAGES) throw new RpcFailure(RPC.invalidParams, t("At most {0} images per message", MAX_IMAGES));
   return { text: parts.join(" ").replace(/ \n/g, "\n").trim(), attachments };
 }
 
@@ -162,14 +180,14 @@ function apiFailure(err: unknown, cwd?: string): RpcFailure {
         // corps non JSON
       }
     }
-    if (err.status === 401) return new RpcFailure(RPC.authRequired, "jeton local refusé par le noyau (nokker doctor)");
-    if (err.status === 403 && cwd) return new RpcFailure(RPC.invalidParams, `dossier hors des racines déclarées de Lokkal : ${cwd} (${msg})`);
+    if (err.status === 401) return new RpcFailure(RPC.authRequired, t("local token rejected by the kernel (nokker doctor)"));
+    if (err.status === 403 && cwd) return new RpcFailure(RPC.invalidParams, t("folder outside the roots declared in Lokkal: {0} ({1})", cwd, msg));
     if (err.status === 404) return new RpcFailure(RPC.resourceNotFound, msg);
     if (err.status === 400) return new RpcFailure(RPC.invalidParams, msg);
     return new RpcFailure(RPC.internalError, msg);
   }
   const m = err instanceof Error ? err.message : String(err);
-  if (/fetch failed|ECONNREFUSED|ENOTFOUND/.test(m)) return new RpcFailure(RPC.internalError, "noyau injoignable (Lokkal tourne-t-il ? nokker doctor)");
+  if (/fetch failed|ECONNREFUSED|ENOTFOUND/.test(m)) return new RpcFailure(RPC.internalError, t("kernel unreachable (is Lokkal running? nokker doctor)"));
   return new RpcFailure(RPC.internalError, m);
 }
 
@@ -206,7 +224,7 @@ export class AcpAgent {
   }
 
   private log(level: "info" | "warn" | "error", msg: string): void {
-    this.deps.log?.(level, `acp : ${msg}`);
+    this.deps.log?.(level, `acp: ${msg}`);
   }
 
   private async initialize(params: unknown): Promise<unknown> {
@@ -233,14 +251,14 @@ export class AcpAgent {
       } catch (err) {
         throw err instanceof RpcFailure ? err : new RpcFailure(RPC.authRequired, err instanceof Error ? err.message : String(err));
       }
-      this.hub = new LocalEventHub(this.client, (err) => this.log("warn", `événements : ${String(err)}`));
+      this.hub = new LocalEventHub(this.client, (err) => this.log("warn", `events: ${String(err)}`));
     }
     return { client: this.client, hub: this.hub! };
   }
 
   private session(sessionId: unknown): AcpSession {
     const s = typeof sessionId === "string" ? this.sessions.get(sessionId) : undefined;
-    if (!s) throw new RpcFailure(RPC.resourceNotFound, `session inconnue : ${String(sessionId)}`);
+    if (!s) throw new RpcFailure(RPC.resourceNotFound, t("unknown session: {0}", String(sessionId)));
     return s;
   }
 
@@ -248,17 +266,17 @@ export class AcpAgent {
     const s: AcpSession = { core, permissionRequests: new Map(), announced: new Set(), strongCalls: new Map(), cancelling: false };
     this.sessions.set(core.threadId, s);
     // Les commandes s'annoncent juste après la réponse à session/new|load.
-    setTimeout(() => this.update(core.threadId, { sessionUpdate: "available_commands_update", availableCommands: COMMANDS.map((c) => ({ ...c })) }), 0);
+    setTimeout(() => this.update(core.threadId, { sessionUpdate: "available_commands_update", availableCommands: commands() }), 0);
     return s;
   }
 
   private async newSession(params: unknown): Promise<unknown> {
     const { cwd, mcpServers } = (params ?? {}) as { cwd?: unknown; mcpServers?: unknown[] };
-    if (typeof cwd !== "string" || !cwd) throw new RpcFailure(RPC.invalidParams, "cwd absent");
-    if (Array.isArray(mcpServers) && mcpServers.length) this.log("info", `${mcpServers.length} serveur(s) MCP de l'éditeur ignorés (les connecteurs vivent dans le noyau)`);
+    if (typeof cwd !== "string" || !cwd) throw new RpcFailure(RPC.invalidParams, t("cwd missing"));
+    if (Array.isArray(mcpServers) && mcpServers.length) this.log("info", `${mcpServers.length} MCP server(s) from the editor ignored (connectors live in the kernel)`);
     const { client, hub } = await this.ensureClient();
     try {
-      const core = await EditorSession.open(client, hub, cwd, this.deps.fs);
+      const core = await EditorSession.open(client, hub, cwd, this.deps.fs, { texts: editorTexts() });
       this.register(core);
       this.log("info", `session ${core.threadId} sur ${cwd}`);
       return { sessionId: core.threadId };
@@ -269,7 +287,7 @@ export class AcpAgent {
 
   private async loadSession(params: unknown): Promise<unknown> {
     const { sessionId, cwd } = (params ?? {}) as { sessionId?: unknown; cwd?: unknown };
-    if (typeof sessionId !== "string" || typeof cwd !== "string") throw new RpcFailure(RPC.invalidParams, "sessionId et cwd requis");
+    if (typeof sessionId !== "string" || typeof cwd !== "string") throw new RpcFailure(RPC.invalidParams, t("sessionId and cwd required"));
     const { client, hub } = await this.ensureClient();
     let known;
     try {
@@ -277,9 +295,9 @@ export class AcpAgent {
     } catch (err) {
       throw apiFailure(err);
     }
-    if (!known) throw new RpcFailure(RPC.resourceNotFound, `session locale inconnue : ${sessionId}`);
+    if (!known) throw new RpcFailure(RPC.resourceNotFound, t("unknown local session: {0}", sessionId));
     this.sessions.get(sessionId)?.core.dispose();
-    const core = await EditorSession.open(client, hub, known.cwd, this.deps.fs, { threadId: sessionId });
+    const core = await EditorSession.open(client, hub, known.cwd, this.deps.fs, { threadId: sessionId, texts: editorTexts() });
     // L'historique est rejoué AVANT la réponse (ACP : session/load).
     for (const m of await core.history().catch(() => [])) {
       this.update(sessionId, {
@@ -314,7 +332,7 @@ export class AcpAgent {
     const { sessionId, prompt } = (params ?? {}) as { sessionId?: unknown; prompt?: unknown };
     const s = this.session(sessionId);
     const sid = s.core.threadId;
-    if (!Array.isArray(prompt)) throw new RpcFailure(RPC.invalidParams, "prompt absent");
+    if (!Array.isArray(prompt)) throw new RpcFailure(RPC.invalidParams, t("prompt missing"));
     const { text, attachments } = promptToRequest(prompt as ContentBlock[], s.core.cwd);
     const command = text.match(/^\/(cost|diff|plan|checkpoints)\b\s*(.*)$/s);
     if (command && attachments.length === 0) {
@@ -337,7 +355,7 @@ export class AcpAgent {
           // Une ligne sous chaque tour : celui de la demande, puis chaque tour de suite (après une décision).
           onCost: (c) => {
             if (this.deps.costLine !== false && !s.cancelling) {
-              this.update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `\n\n_${formatCostLine(c)}_\n\n` } });
+              this.update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `\n\n_${formatCostLine(c, costLang())}_\n\n` } });
             }
           },
           onNotice: (n) => this.update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `\n\n> ${n}\n\n` } }),
@@ -404,7 +422,7 @@ export class AcpAgent {
     }
     const options = card.choices.map((c, i) => ({
       optionId: `${c.id}:${i}`,
-      name: c.rule ? `${c.label} : ${c.rule}` : c.label,
+      name: c.rule ? t("{0}: {1}", choiceLabel(c, a.tool_name), c.rule) : choiceLabel(c, a.tool_name),
       kind: c.id === "reject" ? "reject_once" : c.id === "once" ? "allow_once" : "allow_always",
     }));
     const { id, promise } = this.deps.peer.request<PermissionOutcome>("session/request_permission", {
@@ -429,7 +447,7 @@ export class AcpAgent {
         if (!picked || !optionId.startsWith(`${picked.id}:`)) picked = undefined;
       }
     } catch (err) {
-      this.log("warn", `request_permission ${a.id} : ${String(err)}`);
+      this.log("warn", `request_permission ${a.id}: ${String(err)}`);
     } finally {
       s.permissionRequests.delete(a.id);
     }
@@ -440,12 +458,12 @@ export class AcpAgent {
     try {
       await s.core.decide(a.id, choice);
     } catch (err) {
-      this.log("warn", `décision ${a.id} : ${String(err)}`);
+      this.log("warn", `decision ${a.id}: ${String(err)}`);
     }
   }
 
   private strongWhere(sid: string, toolCallId: string, card: EditorApprovalCard): void {
-    this.update(sid, { sessionUpdate: "tool_call_update", toolCallId, status: "pending", content: [textContent(`${strongCardText(card)}\n${card.approval.reason}`)] });
+    this.update(sid, { sessionUpdate: "tool_call_update", toolCallId, status: "pending", content: [textContent(`${strongText(card)}\n${card.approval.reason}`)] });
   }
 
   /** Carte forte déposée chez nokker.ai après avoir été montrée : « au terminal » devient « attend ton téléphone ». */
@@ -478,14 +496,15 @@ export class AcpAgent {
     try {
       if (name === "cost") {
         const c = await client.getLocalCost(sid);
-        say(`Session : ${c.session ? `${formatCostLine(c.session)} (${c.session.turns} tour(s))` : "aucun tour"}\nJour (UTC ${c.day.date}) : ${formatCostLine(c.day)} (${c.day.turns} tour(s))`);
+        const mine = c.session ? t("{0} ({1} turn(s))", formatCostLine(c.session, costLang()), c.session.turns) : t("no turns");
+        say(t("Session: {0}\nDay (UTC {1}): {2} ({3} turn(s))", mine, c.day.date, formatCostLine(c.day, costLang()), c.day.turns));
         return;
       }
       const tool = name === "diff" ? "checkpoint_diff" : name === "plan" ? "todo" : "checkpoint_list";
       const args = name === "diff" && arg ? { hash: arg } : {};
       const r = await client.callLocalTool(sid, tool, args);
       if (!r || !("content" in r)) {
-        say("Action à approuver dans le fil.");
+        say(t("Action to approve in the thread."));
         return;
       }
       if (r.is_error) {
@@ -497,10 +516,10 @@ export class AcpAgent {
         const body = d?.diff ?? r.content;
         say(d?.message && !d.diff ? d.message : `${d?.stat ? `${d.stat}\n\n` : ""}\`\`\`diff\n${body}\n\`\`\``);
       } else if (name === "plan") {
-        const t = parseToolJson<TodoResult>(r.content);
-        const todos = (t?.todos ?? []).filter((x) => x.status !== "cancelled");
+        const plan = parseToolJson<TodoResult>(r.content);
+        const todos = (plan?.todos ?? []).filter((x) => x.status !== "cancelled");
         if (!todos.length) {
-          say("Aucun plan sur ce fil.");
+          say(t("No plan on this thread."));
           return;
         }
         this.update(sid, {
@@ -512,14 +531,14 @@ export class AcpAgent {
         const list = Array.isArray(raw) ? raw : (raw?.checkpoints ?? []);
         say(
           list.length
-            ? list.map((c, i) => `${i + 1}. \`${c.short_hash}\` ${c.timestamp} — ${c.reason} (${c.files_changed} fichier(s))`).join("\n")
-            : "Aucun point de retour sur ce fil.",
+            ? list.map((c, i) => t("{0}. `{1}` {2} — {3} ({4} file(s))", i + 1, c.short_hash, c.timestamp, c.reason, c.files_changed)).join("\n")
+            : t("No checkpoints on this thread."),
         );
       }
     } catch (err) {
-      if (err instanceof NokkerApiError && err.status === 409) say("Un tour est en cours, réessayez après.");
-      else if (err instanceof NokkerApiError && err.status === 404) say("Non disponible sur ce serveur.");
-      else say(`Erreur : ${apiFailure(err).message}`);
+      if (err instanceof NokkerApiError && err.status === 409) say(t("A turn is in progress, try again afterwards."));
+      else if (err instanceof NokkerApiError && err.status === 404) say(t("Not available on this server."));
+      else say(t("Error: {0}", apiFailure(err).message));
     }
   }
 }

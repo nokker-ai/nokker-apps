@@ -6,6 +6,9 @@
  * Mode par défaut `accept_edits` : patch / write_file passent sans carte ; `terminal` (pytest, build) demande une
  * carte locale, le destructif une carte « forte-locale » (sans « toujours »), sauf règle `allow` (fichier de
  * réglages ou règle de session). `deny`, `plan` et hardline refusent sans carte (hardline : tool.result en erreur).
+ *
+ * Avant le premier appel non-READ exécuté d'un tour, un point de retour automatique (`autoCheckpoint`, comme le noyau).
+ * `state.localWrites` : `patch` et `write_file` écrivent vraiment dans le dossier de la session.
  */
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import {
@@ -16,9 +19,13 @@ import {
   type ApprovalContinuation,
   type LocalToolEffect,
 } from "@nokker-apps/sdk";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 import { streamToolInput } from "./live-input.js";
+import { autoCheckpoint } from "./localtools.js";
 import { LOCAL_OWNER, MockState, normalize, randomId, type ApprovalOutcome } from "./state.js";
 import { publishTurnCost } from "./cost.js";
+import { children, type MockChild } from "./project.js";
 
 const APPROVAL_TTL_MS = 300_000;
 
@@ -88,11 +95,12 @@ function sleep(state: MockState, ms: number, signal: AbortSignal): Promise<void>
   });
 }
 
-function scenarioFor(text: string): { kind: "fix" | "hardline" | "delegate" | "plain"; test: string } {
+function scenarioFor(text: string): { kind: "fix" | "hardline" | "delegate" | "background" | "plain"; test: string } {
   const n = normalize(text);
   const test = text.match(/\btest[\s_:]*([\w./-]+)/i)?.[1] ?? "test_app";
   if (/rm -rf \/|mkfs|fork bomb|efface tout le disque/.test(n)) return { kind: "hardline", test };
-  if (/sous-?agent|delegu|en parallele/.test(n)) return { kind: "delegate", test };
+  if (/arriere-plan|background/.test(n)) return { kind: "background", test };
+  if (/sous-?agent|sub-?agent|delegu|delegate|en parallele/.test(n)) return { kind: "delegate", test };
   if (/(corrig|repar|fix|debug)/.test(n) && /test/.test(n)) return { kind: "fix", test };
   return { kind: "plain", test };
 }
@@ -122,6 +130,8 @@ export async function runLocalTurn(
   } else if (sc.kind === "delegate") {
     const r = await runDelegate(state, threadId, turnId, signal);
     return r;
+  } else if (sc.kind === "background") {
+    return runBackgroundDelegate(state, threadId, turnId);
   } else {
     steps.push(
       { name: "read_file", effect: "read", args: { path: testFile }, ms: 12, preview: `def test_add():\n    assert add(2, 3) == 5\n# ${testFile}` },
@@ -224,7 +234,15 @@ async function runSteps(
         approvalId = undefined;
       }
     }
+    if (ok && step.effect !== "read") autoCheckpoint(state, threadId, turnId, step.name);
     if (ok) await sleep(state, step.ms, signal);
+    if (ok && !signal.aborted && state.localWrites) {
+      const w = await applyWrite(state, threadId, step);
+      if (w) {
+        ok = false;
+        preview = w;
+      }
+    }
     if (signal.aborted) {
       state.publish({ type: "tool.result", thread_id: threadId, turn_id: turnId, call_id: callId, name: step.name, is_error: true, ms: step.ms, effect: step.effect, preview: "annulé" });
       return { cancelled: true, rejected, rest: [] };
@@ -246,6 +264,34 @@ async function runSteps(
   return { cancelled: false, rejected, rest: [] };
 }
 
+/** `localWrites` : `patch {path, old, new}` remplace le passage, `write_file {path, content}` écrit le fichier, dans le
+ * dossier de la session. Rend l'erreur (passage introuvable, chemin hors du dossier), `null` si c'est écrit. */
+async function applyWrite(state: MockState, threadId: string, step: Step): Promise<string | null> {
+  if (step.name !== "patch" && step.name !== "write_file") return null;
+  const cwd = state.localSessions.get(threadId.split("/sa-")[0]!)?.cwd;
+  const rel = typeof step.args.path === "string" ? step.args.path : "";
+  if (!cwd || !rel) return null;
+  const target = resolve(cwd, rel);
+  const rootRel = relative(cwd, target);
+  if (rootRel.startsWith("..") || isAbsolute(rootRel)) return `chemin hors du dossier : ${rel}`;
+  if (step.name === "write_file") {
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, String(step.args.content ?? ""));
+    return null;
+  }
+  const old = String(step.args.old ?? step.args.old_string ?? "");
+  const now = String(step.args.new ?? step.args.new_string ?? "");
+  let text: string;
+  try {
+    text = await readFile(target, "utf-8");
+  } catch {
+    return `fichier introuvable : ${rel}`;
+  }
+  if (!old || !text.includes(old)) return `passage introuvable dans ${rel}`;
+  await writeFile(target, text.replace(old, now));
+  return null;
+}
+
 /** Style `kernel`, après une APPROBATION, verrou du fil tenu (`scheduleLocalDecision`) — comme l'exécuteur du noyau
  * (LOKKAL.md §7.4.9) : l'outil de la carte s'exécute, son `tool.result` part avec le `call_id` de l'appel resté en
  * attente, `approval_id` et le `turn_id` du tour qui a posé la carte ; puis un tour de suite joue les étapes restantes,
@@ -259,6 +305,7 @@ async function continueAfterDecision(
   test: string,
 ): Promise<void> {
   const ran = new AbortController();
+  if (step.effect !== "read") autoCheckpoint(state, threadId, `${card.thread_id}:${card.turn_index}`, step.name);
   await sleep(state, step.ms, ran.signal);
   card.status = "executed";
   card.result_summary = step.preview.split("\n")[0] ?? "exécuté";
@@ -361,20 +408,97 @@ export function scheduleLocalDecision(state: MockState, approval: Approval): App
   return immediate ? "running" : "queued";
 }
 
+/** Numéro du tour en cours du fil (le noyau publie `parent_turn` en entier). */
+function turnIndex(state: MockState, threadId: string): number {
+  return state.threads.get(threadId)?.turns.length ?? 0;
+}
+
+function newChild(state: MockState, threadId: string, goal: string, index: number, background: boolean): MockChild {
+  const id = randomId("sa").replace(/^sa_?/, "").slice(0, 8);
+  const c: MockChild = {
+    parent: threadId,
+    background,
+    created: Date.now(),
+    abort: new AbortController(),
+    done: false,
+    view: {
+      child_id: id,
+      thread_id: `${threadId}/sa-${id}`,
+      task_index: index,
+      goal,
+      elapsed_s: 0,
+      status: "queued",
+      worktree: { path: `/workspace/.nokker/worktrees/${id}`, branch: `nokker/sa-${id}` },
+    },
+  };
+  children(state).set(id, c);
+  return c;
+}
+
+/** Un enfant : lecture, recherche, patch (`subagent.progress` par outil) puis `subagent.finished` (forme du noyau). */
+async function runChild(state: MockState, c: MockChild, tools: string[], stepMs: number, outer?: AbortSignal): Promise<void> {
+  const signal = outer ?? c.abort.signal;
+  c.view.status = "running";
+  let cancelled = false;
+  for (const tool of tools) {
+    await sleep(state, stepMs, c.abort.signal);
+    if (c.abort.signal.aborted || signal.aborted) {
+      cancelled = true;
+      break;
+    }
+    c.view.last_tool = tool;
+    state.publish({ type: "subagent.progress", parent_thread_id: c.parent, child_id: c.view.child_id, tool, ms: 20 });
+  }
+  if (c.done) return; // noyau « redémarré » (restartSubagents) : l'enfant est mort avec lui, rien n'est publié
+  const { last_tool: _l, ...rest } = c.view;
+  void _l;
+  const wt = c.view.worktree!;
+  c.view = cancelled
+    ? { ...rest, status: "interrupted", exit_reason: "cancelled", summary: "", worktree: { ...wt, commits: 0, dirty: true, kept: true } }
+    : { ...rest, status: "completed", exit_reason: "completed", summary: `Read the tests and fixed add() on ${wt.branch}: 1 commit, tests pass.`, worktree: { ...wt, commits: 1, dirty: false, kept: true }, tokens: 4210, cost: 0.0042 };
+  c.done = true;
+  const w = c.view.worktree!;
+  state.publish({
+    type: "subagent.finished",
+    parent_thread_id: c.parent,
+    child_id: c.view.child_id,
+    status: c.view.status,
+    commits: w.commits ?? 0,
+    dirty: w.dirty ?? false,
+    kept: w.kept ?? false,
+    ...(c.background ? { background: true, exit_reason: c.view.exit_reason ?? null } : {}),
+  });
+}
+
 async function runDelegate(state: MockState, threadId: string, turnId: string, signal: AbortSignal): Promise<LocalTurnResult> {
   const callId = randomId("call");
   const goal = "lire les tests et proposer un correctif";
   state.publish({ type: "tool.call", thread_id: threadId, turn_id: turnId, call_id: callId, name: "delegate", effect: "write", args: { goal } });
-  const child = randomId("sa");
-  state.publish({ type: "subagent.started", thread_id: threadId, parent_turn: turnId, child_id: child, goal });
-  for (const tool of ["read_file", "search_files", "patch"]) {
-    await sleep(state, 60, signal);
-    if (signal.aborted) return { reply: "", cancelled: true };
-    state.publish({ type: "subagent.progress", thread_id: threadId, child_id: child, tool, ms: 20 });
-  }
-  state.publish({ type: "subagent.finished", thread_id: threadId, child_id: child, status: "ok", commits: 1, dirty: false });
+  const c = newChild(state, threadId, goal, 0, false);
+  state.publish({ type: "subagent.started", thread_id: threadId, parent_thread_id: threadId, parent_turn: turnIndex(state, threadId), child_id: c.view.child_id, child_thread_id: c.view.thread_id, goal });
+  const stop = (): void => c.abort.abort();
+  signal.addEventListener("abort", stop, { once: true });
+  await runChild(state, c, ["read_file", "search_files", "patch"], 60);
+  signal.removeEventListener("abort", stop);
+  if (signal.aborted) return { reply: "", cancelled: true };
   state.publish({ type: "tool.result", thread_id: threadId, turn_id: turnId, call_id: callId, name: "delegate", is_error: false, ms: 180, effect: "write", preview: "sous-agent terminé : 1 commit" });
   return { reply: "Le sous-agent a terminé : un commit sur sa branche, arbre propre.", cancelled: false };
+}
+
+/** `delegate(tasks, background: true)` (LOKKAL.md §7.22.1) : rend TOUT DE SUITE les ids ; deux enfants tournent ensuite
+ * sans tenir le fil (le parent reste libre), suivis par `delegate_status`, arrêtés par l'annulation du fil. */
+function runBackgroundDelegate(state: MockState, threadId: string, turnId: string): LocalTurnResult {
+  const callId = randomId("call");
+  const goals = ["audit the test suite for flaky tests", "update the README examples"];
+  state.publish({ type: "tool.call", thread_id: threadId, turn_id: turnId, call_id: callId, name: "delegate", effect: "write", args: { background: true, tasks: goals.map((goal) => ({ goal })) } });
+  const kids = goals.map((goal, i) => newChild(state, threadId, goal, i, true));
+  for (const c of kids) {
+    state.publish({ type: "subagent.started", thread_id: threadId, parent_thread_id: threadId, parent_turn: turnIndex(state, threadId), child_id: c.view.child_id, child_thread_id: c.view.thread_id, goal: c.view.goal, background: true });
+    void runChild(state, c, ["read_file", "search_files", "terminal", "patch"], 400);
+  }
+  const content = { background: true, children: kids.map((c) => ({ ...c.view })), note: "les sous-agents tournent en arrière-plan : delegate_status pour l'état ou le résultat (wait_s pour attendre), delegate_cancel pour arrêter ; tu seras prévenu au tour suivant" };
+  state.publish({ type: "tool.result", thread_id: threadId, turn_id: turnId, call_id: callId, name: "delegate", is_error: false, ms: 15, effect: "write", preview: JSON.stringify(content).slice(0, 1200) });
+  return { reply: `Two sub-agents are running in the background (${kids.map((c) => c.view.child_id).join(", ")}). /agents to follow them.`, cancelled: false };
 }
 
 /** Machine liée (`state.strongRelay`) : une carte forte part chez nokker.ai peu après sa pose, comme le dépôt du noyau
