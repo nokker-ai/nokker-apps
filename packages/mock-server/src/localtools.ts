@@ -125,7 +125,7 @@ export async function handleLocalToolCall(state: MockState, body: Record<string,
   if (!state.localSessions.has(threadId)) return { status: 404, body: { error: { message: "session locale inconnue" } } };
   const args = body.arguments && typeof body.arguments === "object" ? (body.arguments as Record<string, unknown>) : {};
   if (name === "todo" && Object.keys(args).length > 0) return { status: 400, body: { error: { message: "arguments invalides (todo : lecture seule, sans argument)" } } };
-  if (state.activeTurns.has(threadId)) return { status: 409, body: { error: { message: "un tour est en cours sur ce fil" } } };
+  if (state.activeTurns.has(threadId) || state.threadBusy(threadId)) return { status: 409, body: { error: { message: "un tour est en cours sur ce fil" } } };
   const effect = EFFECTS[name];
   // checkpoint_create : le noyau réel répond encore 202 (carte) ; il passera à 200 en accept_edits — la CLI gère les deux.
   const verdict = name === "checkpoint_create" ? "ask" : decide(state.effectiveSettings(threadId), name, args, effect);

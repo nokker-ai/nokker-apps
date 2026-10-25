@@ -61,7 +61,7 @@ afterEach(async () => {
 describe("fils (§1)", () => {
   it("liste les fils de démo triés par updated_at desc, crée et renomme un fil", async () => {
     const threads = await client.listThreads();
-    expect(threads.map((t) => t.title)).toEqual(["Général", "Infra", "Compta", "Ninjob"]);
+    expect(threads.map((t) => t.title)).toEqual(["Général", "Infra", "Compta", "Recrutement"]);
     expect(threads[0]!.id).toMatch(/^th_[0-9a-f]{12}$/);
     const t = await client.createThread("Perso");
     expect((await client.listThreads())[0]!.id).toBe(t.id);
@@ -156,16 +156,16 @@ describe("transfert (§3)", () => {
 
 describe("partage (§2)", () => {
   it("remplace la liste ; un fil partagé voit la bulle en lecture (shared: true) ; membre inconnu refusé", async () => {
-    const { general, ninjob } = mock.demo!;
+    const { general, recrutement } = mock.demo!;
     const b = await client.createBubble(general, { kind: "timer", title: "Partagée", state: { label: "x", started_at: "a", ends_at: "b" } });
-    const s1 = await client.shareBubble(b.id, { members: ["bob"], threads: [ninjob] });
-    expect(s1.shared_with).toEqual({ members: ["bob"], threads: [ninjob] });
+    const s1 = await client.shareBubble(b.id, { members: ["bob"], threads: [recrutement] });
+    expect(s1.shared_with).toEqual({ members: ["bob"], threads: [recrutement] });
     expect(s1.version).toBe(b.version + 1);
-    const seen = (await client.listBubbles(ninjob)).find((x) => x.id === b.id);
+    const seen = (await client.listBubbles(recrutement)).find((x) => x.id === b.id);
     expect(seen?.shared).toBe(true);
     const s2 = await client.shareBubble(b.id, { threads: [] });
     expect(s2.shared_with).toEqual({ members: ["bob"], threads: [] });
-    expect((await client.listBubbles(ninjob)).some((x) => x.id === b.id)).toBe(false);
+    expect((await client.listBubbles(recrutement)).some((x) => x.id === b.id)).toBe(false);
     await expect(client.shareBubble(b.id, { members: ["mallory"] })).rejects.toMatchObject({ status: 400 });
   });
 });
@@ -314,10 +314,10 @@ describe("sessions qui se parlent (§4)", () => {
   });
 
   it("PATCH members (propriétaire, utilisateurs connus) ; messages par tours (before/limit)", async () => {
-    const { ninjob, general } = mock.demo!;
-    const t = await client.patchThread(ninjob, { members: ["bob"] });
+    const { recrutement, general } = mock.demo!;
+    const t = await client.patchThread(recrutement, { members: ["bob"] });
     expect(t.members.sort()).toEqual(["alice", "bob"]);
-    await expect(client.patchThread(ninjob, { members: ["mallory"] })).rejects.toMatchObject({ status: 400 });
+    await expect(client.patchThread(recrutement, { members: ["mallory"] })).rejects.toMatchObject({ status: 400 });
     await say(general, "un");
     await say(general, "deux");
     const last = await client.getThread(general, { limit: 1 });
@@ -405,5 +405,34 @@ describe("approbations (APPROVALS.md §5)", () => {
 
     const stillPending = await client.getApproval(a!.id);
     expect(stillPending.status).toBe("pending");
+  });
+});
+
+describe("relais web → Lokkal (X21, LOKKAL §7.16)", () => {
+  it("proposé → accepté → terminé avec la réponse ; une seconde décision : 409", async () => {
+    const thread = (await client.createThread("Relais")).id;
+    await client.chatCompletion(thread, [{ role: "user", content: "passe le relais a atelier pour le depot site : corrige le test" }]);
+    await new Promise((r) => setTimeout(r, 100));
+    const b = (await client.listBubbles(thread)).find((x) => x.kind === "handoff")!;
+    expect(b.state).toMatchObject({ state: "proposed", online: true, need: { kind: "repo", name: "site" }, machine_name: "Atelier" });
+    const r = (await client.bubbleAction(b.id, "accept")) as unknown as { handoff: { state: string } };
+    expect(r.handoff.state).toBe("accepted");
+    await expect(client.bubbleAction(b.id, "accept")).rejects.toMatchObject({ status: 409 });
+    await new Promise((res) => setTimeout(res, 200));
+    const done = await client.getBubble(b.id);
+    expect(done.status).toBe("done");
+    expect((done.state as { reply: string }).reply).toMatch(/^\(démo\)/);
+  });
+
+  it("machine éteinte : accepté → waiting, « Annuler » = refuse", async () => {
+    const thread = (await client.createThread("Relais 2")).id;
+    await client.chatCompletion(thread, [{ role: "user", content: "passe le relais au portable pour le depot api" }]);
+    await new Promise((r) => setTimeout(r, 100));
+    const b = (await client.listBubbles(thread)).find((x) => x.kind === "handoff")!;
+    expect((b.state as { online: boolean }).online).toBe(false);
+    await client.bubbleAction(b.id, "accept");
+    expect(((await client.getBubble(b.id)).state as { state: string }).state).toBe("waiting");
+    await client.bubbleAction(b.id, "refuse");
+    expect(((await client.getBubble(b.id)).state as { state: string }).state).toBe("refused");
   });
 });

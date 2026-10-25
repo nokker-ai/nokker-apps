@@ -2,11 +2,14 @@
  * État applicatif du client web, branché sur le SDK (BUBBLES.md) : fils, messages du fil courant, bulles
  * visibles (fil courant + notify sans fil + bulles partagées), agents (Crew), flux d'événements §6.
  */
+import { messageContent } from "./composer/images.js";
+import { applyLiveInputEvent, formatCostLine, type LiveInputs } from "@nokker-apps/sdk";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   NokkerApiError,
   applyBubbleEvent,
   type Agent,
+  type AgentRun,
   type Approval,
   type Bubble,
   type NokkerClient,
@@ -45,6 +48,8 @@ export interface NokkerStore {
   retryAccess(): void;
   mock: boolean;
   authMode: AuthResult["mode"] | null;
+  /** Lokkal local (jeton local) : décision d'une carte d'une session locale (`/v1/local/approvals/{id}/decide`). */
+  decideLocal(approval: Approval, decision: "approve" | "reject", scope?: "once" | "session"): Promise<void>;
   /** Signe un défi avec l'appareil de ce navigateur (approbations à distance, page `/approve/…`). */
   signDecision: AuthResult["signDecision"] | null;
   threads: Thread[];
@@ -60,6 +65,21 @@ export interface NokkerStore {
   sending: boolean;
   bubbles: Bubble[];
   agents: Agent[];
+  /** Dernier passage reçu par événement, par agent (`agent.run`, §9.5) : le popout le fusionne à sa liste. */
+  agentRuns: Record<string, AgentRun>;
+  /** X2 : ligne de coût par tour (`turn_id` → « 12,4 k jetons · 0,03 € »), reçue par `turn.cost` (LOKKAL §7.8). */
+  turnCosts: Record<string, string>;
+  /** X22 : ce que le modèle est en train d'écrire, par `call_id` (BUBBLES §6) ; clos au `tool.result` ou au `turn.done`. */
+  liveInputs: LiveInputs;
+  /** X3 : hooks du dépôt pas encore de confiance, par fil (`hook.untrusted`). */
+  hookNotices: Record<string, { sha256: string; count: number; notice: string }>;
+  /** Cartes fortes déposées chez nokker.ai (`approval.forwarded`) : elles attendent le téléphone, pas le terminal. */
+  forwardedApprovals: ReadonlySet<string>;
+  /** X18 : change à chaque `incident.updated` / `plan.*` — les onglets Incidents et Plan relisent. */
+  opsTick: number;
+  trustHooks(threadId: string): Promise<void>;
+  /** X2 : totaux de la session courante et du jour (GET /v1/local/cost), `null` si la route n'est pas disponible. */
+  costTotals: { session: string | null; day: string } | null;
   crewPulse: number;
   focusBubble: string | null;
   toasts: Toast[];
@@ -70,7 +90,8 @@ export interface NokkerStore {
   selectThread(id: string): void;
   createThread(title: string): Promise<void>;
   deleteThread(id: string): Promise<void>;
-  send(text: string): Promise<void>;
+  /** `images` : `data:` des images jointes (X7) ; le message part alors en parties texte + image. */
+  send(text: string, images?: string[]): Promise<void>;
   closeBubble(b: Bubble): Promise<void>;
   transfer(b: Bubble, toThread: string, mode: TransferMode): Promise<void>;
   share(b: Bubble, req: ShareRequest): Promise<void>;
@@ -116,6 +137,28 @@ export function useNokker(): NokkerStore {
   const [sending, setSending] = useState(false);
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [agentRuns, setAgentRuns] = useState<Record<string, AgentRun>>({});
+  const [turnCosts, setTurnCosts] = useState<Record<string, string>>({});
+  const [liveInputs, setLiveInputs] = useState<LiveInputs>(() => new Map());
+  const [hookNotices, setHookNotices] = useState<Record<string, { sha256: string; count: number; notice: string }>>({});
+  const [forwardedApprovals, setForwardedApprovals] = useState<ReadonlySet<string>>(() => new Set());
+  const [opsTick, setOpsTick] = useState(0);
+  const [costTotals, setCostTotals] = useState<{ session: string | null; day: string } | null>(null);
+  // X2 : totaux relus sur la route du noyau (aucun montant recalculé ici) ; absente (hébergé, mock ancien) = pas d'encart.
+  const refreshCost = useCallback(
+    async (threadId: string | null) => {
+      try {
+        const t = await client.getLocalCost(threadId ?? undefined);
+        setCostTotals({ session: t.session ? formatCostLine(t.session) : null, day: formatCostLine(t.day) });
+      } catch {
+        setCostTotals(null);
+      }
+    },
+    [client],
+  );
+  useEffect(() => {
+    if (ready) void refreshCost(currentId);
+  }, [ready, currentId, refreshCost]);
   const [members, setMembers] = useState<Member[]>([]);
   const [live, setLive] = useState<{ turn_id: string; text: string } | null>(null);
   const [unseen, setUnseen] = useState<Record<string, number>>({});
@@ -204,6 +247,8 @@ export function useNokker(): NokkerStore {
 
   const onEvent = useCallback(
     (e: NokkerEvent) => {
+      // X22 : accumulation pure (SDK) ; la même fonction clôt un bloc au tool.result ou au turn.done.
+      if (e.type === "tool.input.delta" || e.type === "tool.result" || e.type === "turn.done") setLiveInputs((l) => applyLiveInputEvent(l, e));
       switch (e.type) {
         case "thread.updated":
           setThreads((list) => sortThreads(list.some((t) => t.id === e.thread.id) ? list.map((t) => (t.id === e.thread.id ? e.thread : t)) : [...list, e.thread]));
@@ -223,6 +268,42 @@ export function useNokker(): NokkerStore {
             return next;
           });
           return;
+        case "attachment.skipped":
+          toast(
+            e.count === 1
+              ? "Le modèle de ce tour ne lit pas les images : la tienne a été remplacée par une note."
+              : `Le modèle de ce tour ne lit pas les images : les ${e.count} ont été remplacées par une note.`,
+            "error",
+          );
+          return;
+        case "incident.updated":
+        case "plan.card.updated":
+        case "plan.card.deleted":
+        case "plan.proposal.updated":
+          setOpsTick((n) => n + 1);
+          return;
+        case "approval.forwarded":
+          setForwardedApprovals((cur) => (cur.has(e.approval_id) ? cur : new Set(cur).add(e.approval_id)));
+          return;
+        case "hook.untrusted":
+          setHookNotices((h) => ({ ...h, [e.thread_id]: { sha256: e.sha256, count: e.count, notice: e.notice } }));
+          return;
+        case "memory.noted":
+          // X1 : la mémoire du projet (ou de l'utilisateur) vient d'apprendre quelque chose : visible, jamais muet.
+          toast(`Noté en mémoire${e.scope === "user" ? " (pour toi)" : ""} : ${e.title}`, "ok");
+          return;
+        case "memory.forgotten":
+          toast(`Oublié : ${e.name}`, "ok");
+          return;
+        case "agent.updated":
+          setAgents((a) => (a.some((x) => x.id === e.agent.id) ? a.map((x) => (x.id === e.agent.id ? e.agent : x)) : [...a, e.agent]));
+          return;
+        case "agent.deleted":
+          setAgents((a) => a.filter((x) => x.id !== e.id));
+          return;
+        case "agent.run":
+          setAgentRuns((r) => ({ ...r, [e.agent_id]: e.run }));
+          return;
         case "agent.created":
           setAgents((a) => [...a.filter((x) => x.id !== e.agent.id), e.agent]);
           setCrewPulse((n) => n + 1);
@@ -236,6 +317,10 @@ export function useNokker(): NokkerStore {
             setUnseen((u) => ({ ...u, [e.thread_id]: (u[e.thread_id] ?? 0) + 1 }));
           }
           return;
+        case "turn.cost":
+          setTurnCosts((c) => ({ ...c, [e.turn_id]: formatCostLine(e) }));
+          if (e.thread_id === currentRef.current) void refreshCost(e.thread_id);
+          return;
         case "turn.done":
           if (e.thread_id === currentRef.current) scheduleRefresh();
           return;
@@ -246,7 +331,7 @@ export function useNokker(): NokkerStore {
           return;
       }
     },
-    [scheduleRefresh],
+    [scheduleRefresh, toast, refreshCost],
   );
 
   // Connexion, chargement initial, flux d'événements.
@@ -358,18 +443,20 @@ export function useNokker(): NokkerStore {
   );
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, images: string[] = []) => {
       const id = currentRef.current;
-      if (!id || !text.trim()) return;
+      if (!id || (!text.trim() && images.length === 0)) return;
       setSending(true);
       sendingRef.current = true;
-      setMessages((m) => [...m, { index: (m.at(-1)?.index ?? -1) + 1, role: "user", content: text }]);
+      const shown = images.length ? `${text}${text ? "\n\n" : ""}_${images.length === 1 ? "1 image jointe" : `${images.length} images jointes`}_` : text;
+      setMessages((m) => [...m, { index: (m.at(-1)?.index ?? -1) + 1, role: "user", content: shown }]);
       setStreaming("");
       try {
         // Jetons en direct (CLIENT-API.md §Streaming) : `nokker.reset` vide le texte en cours (l'appel a fini en
         // outils → l'animation de réflexion reprend), le chunk final `nokker.final` porte la réponse qui fait foi.
         let current = "";
-        await client.streamChatCompletion(id, [{ role: "user", content: text }], (chunk) => {
+        const content = messageContent(text, images.map((dataUrl) => ({ dataUrl })));
+        await client.streamChatCompletion(id, [{ role: "user", content }], (chunk) => {
           const next = applyChatChunk(current, chunk);
           if (next !== current) {
             current = next;
@@ -436,6 +523,42 @@ export function useNokker(): NokkerStore {
     [client, selectThread],
   );
 
+  const decideLocal = useCallback(
+    async (approval: Approval, decision: "approve" | "reject", scope: "once" | "session" = "once") => {
+      const r = await client.decideLocalApproval(approval.id, { decision, scope } as Parameters<typeof client.decideLocalApproval>[1]);
+      // 202 : une suite tourne (continuation) ; refus : rien ne tourne après.
+      if (decision === "approve" && (r as { continuation?: string }).continuation === "queued") toast("Approuvé : l'action passera après le tour en cours.", "ok");
+    },
+    [client, toast],
+  );
+
+  const trustHooks = useCallback(
+    async (threadId: string) => {
+      const n = hookNotices[threadId];
+      if (!n) return;
+      try {
+        await client.trustProjectHooks(threadId, n.sha256);
+        setHookNotices((h) => {
+          const next = { ...h };
+          delete next[threadId];
+          return next;
+        });
+        toast("Hooks du dépôt approuvés pour ce dossier.", "ok");
+      } catch (err) {
+        const st = err instanceof NokkerApiError ? err.status : 0;
+        toast(
+          st === 409
+            ? "Le fichier des hooks a changé depuis l'ouverture : rouvre la session pour relire ce qu'il contient."
+            : st === 403
+              ? "La confiance se donne seulement sur la machine elle-même."
+              : errText(err),
+          "error",
+        );
+      }
+    },
+    [client, hookNotices, toast],
+  );
+
   const getApproval = useCallback((id: string) => client.getApproval(id), [client]);
 
   const decide = useCallback(
@@ -492,6 +615,7 @@ export function useNokker(): NokkerStore {
     mock,
     authMode: auth?.mode ?? null,
     signDecision: auth?.signDecision ?? null,
+    decideLocal,
     user: auth?.user ?? null,
     threads,
     current: threads.find((t) => t.id === currentId) ?? null,
@@ -503,6 +627,14 @@ export function useNokker(): NokkerStore {
     sending,
     bubbles,
     agents,
+    agentRuns,
+    turnCosts,
+    liveInputs,
+    hookNotices,
+    forwardedApprovals,
+    opsTick,
+    trustHooks,
+    costTotals,
     crewPulse,
     focusBubble,
     toasts,

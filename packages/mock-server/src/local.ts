@@ -13,9 +13,12 @@ import {
   decide,
   suggestRules,
   type Approval,
+  type ApprovalContinuation,
   type LocalToolEffect,
 } from "@nokker-apps/sdk";
+import { streamToolInput } from "./live-input.js";
 import { LOCAL_OWNER, MockState, normalize, randomId, type ApprovalOutcome } from "./state.js";
+import { publishTurnCost } from "./cost.js";
 
 const APPROVAL_TTL_MS = 300_000;
 
@@ -68,6 +71,8 @@ interface Step {
   ms: number;
   ok?: boolean;
   preview: string;
+  /** Écriture en direct (X22) : ce que le « modèle » écrit, montré avant le `tool.call`. */
+  live?: { field: "content" | "new_string" | "patch"; text: string };
 }
 
 function sleep(state: MockState, ms: number, signal: AbortSignal): Promise<void> {
@@ -127,47 +132,28 @@ export async function runLocalTurn(
         args: { path: "src/app.py", old: "return a - b", new: "return a + b" },
         ms: 120,
         preview: "--- src/app.py\n-    return a - b\n+    return a + b",
+        live: {
+          field: "new_string",
+          text: 'def add(a, b):\n    """Somme de a et b."""\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n',
+        },
       },
       { name: "terminal", effect: "write", args: { command: `pytest -q ${testFile}` }, ms: 480, preview: ".                                  [100%]\n1 passed in 0.12s" },
       { name: "terminal", effect: "destructive", args: { command: "rm -rf build" }, ms: 60, preview: "build/ supprimé" },
     );
   }
 
-  for (const step of steps) {
-    if (signal.aborted) return { reply: "", cancelled: true };
-    const callId = randomId("call");
-    const shownArgs = redactArgs(step.args);
-    state.publish({ type: "tool.call", thread_id: threadId, turn_id: turnId, call_id: callId, name: step.name, effect: step.effect, args: shownArgs });
-    const hard = step.name === "terminal" && isHardline(String(step.args.command ?? ""));
-    // Hardline : refus direct SANS carte, l'outil revient en erreur (permissions:hardline).
-    const verdict = hard ? "deny" : decide(state.effectiveSettings(threadId), step.name, step.args, step.effect);
-    let ok = step.ok ?? true;
-    let preview = step.preview;
-    if (hard) {
-      ok = false;
-      preview = "refusé : commande interdite (hardline)";
-    } else if (verdict === "deny") {
-      ok = false;
-      preview = "refusé par une règle (deny)";
-    } else if (verdict === "ask") {
-      const outcome = await askLocalApproval(state, threadId, turnId, step);
-      if (outcome === "cancelled") {
-        state.publish({ type: "tool.result", thread_id: threadId, turn_id: turnId, call_id: callId, name: step.name, is_error: true, ms: 0, effect: step.effect, preview: "annulé" });
-        return { reply: "", cancelled: true };
-      }
-      if (outcome !== "approved") {
-        ok = false;
-        rejected = true;
-        preview = outcome === "expired" ? "approbation expirée — refusé" : "refusé par l'utilisateur";
-      }
-    }
-    if (ok) await sleep(state, step.ms, signal);
-    if (signal.aborted) {
-      state.publish({ type: "tool.result", thread_id: threadId, turn_id: turnId, call_id: callId, name: step.name, is_error: true, ms: step.ms, effect: step.effect, preview: "annulé" });
-      return { reply: "", cancelled: true };
-    }
-    state.publish({ type: "tool.result", thread_id: threadId, turn_id: turnId, call_id: callId, name: step.name, is_error: !ok, ms: ok ? step.ms : 0, effect: step.effect, preview: preview.split("\n").slice(0, 3).join("\n") });
+  const r = await runSteps(state, threadId, turnId, steps, signal);
+  if (r.cancelled) return { reply: "", cancelled: true };
+  if (r.pending) {
+    // Style `kernel` : le tour s'arrête sur la carte ; une approbation lancera la suite (`continueAfterDecision`).
+    const { pending, pendingStep, rest } = r;
+    state.continuations.set(pending.id, {
+      threadId,
+      run: () => continueAfterDecision(state, threadId, pending, pendingStep!, rest, sc.test),
+    });
+    return { reply: `La commande \`${String(pending.arguments.command ?? pending.tool_name)}\` attend ton approbation sur la carte.`, cancelled: false };
   }
+  rejected = r.rejected;
 
   if (sc.kind === "hardline") {
     return { reply: "Cette commande est interdite par le noyau, je ne l'exécute pas.", cancelled: false };
@@ -178,6 +164,201 @@ export async function runLocalTurn(
       : `J'ai corrigé \`src/app.py\` (add retournait a - b), le test ${sc.test} passe et \`build/\` est nettoyé.`,
     cancelled: false,
   };
+}
+
+/** Joue des étapes d'outil ; en style `kernel`, s'arrête sur la première carte (`pending`, étapes restantes dans `rest`). */
+async function runSteps(
+  state: MockState,
+  threadId: string,
+  turnId: string,
+  steps: Step[],
+  signal: AbortSignal,
+): Promise<{ cancelled: boolean; rejected: boolean; pending?: Approval; pendingStep?: Step; rest: Step[] }> {
+  let rejected = false;
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i]!;
+    if (signal.aborted) return { cancelled: true, rejected, rest: [] };
+    const callId = randomId("call");
+    const shownArgs = redactArgs(step.args);
+    if (step.live && (step.name === "write_file" || step.name === "patch")) {
+      await streamToolInput(state, { threadId, turnId, callId, name: step.name, path: String(step.args.path ?? ""), ...step.live }, signal);
+      if (signal.aborted) return { cancelled: true, rejected, rest: [] };
+    }
+    state.publish({ type: "tool.call", thread_id: threadId, turn_id: turnId, call_id: callId, name: step.name, effect: step.effect, args: shownArgs });
+    const hard = step.name === "terminal" && isHardline(String(step.args.command ?? ""));
+    // Hardline : refus direct SANS carte, l'outil revient en erreur (permissions:hardline).
+    const verdict = hard ? "deny" : decide(state.effectiveSettings(threadId), step.name, step.args, step.effect);
+    let ok = step.ok ?? true;
+    let preview = step.preview;
+    let approvalId: string | undefined;
+    if (hard) {
+      ok = false;
+      preview = "refusé : commande interdite (hardline)";
+    } else if (verdict === "deny") {
+      ok = false;
+      preview = "refusé par une règle (deny)";
+    } else if (verdict === "ask" && state.approvalStyle === "kernel") {
+      const card = postLocalApproval(state, threadId, turnId, step, "cli", callId);
+      state.publish({
+        type: "tool.result",
+        thread_id: threadId,
+        turn_id: turnId,
+        call_id: callId,
+        name: step.name,
+        is_error: false,
+        ms: 0,
+        effect: step.effect,
+        preview: `EN ATTENTE D'APPROBATION HUMAINE (${card.rule}) [approval:${card.id}]. L'action n'a pas été exécutée. L'utilisateur décide sur la carte : ne rappelle pas l'outil.`,
+      });
+      return { cancelled: false, rejected, pending: card, pendingStep: step, rest: steps.slice(i + 1) };
+    } else if (verdict === "ask") {
+      const outcome = await askLocalApproval(state, threadId, turnId, step, (a) => (approvalId = a.id), "cli", callId);
+      if (outcome === "cancelled") {
+        state.publish({ type: "tool.result", thread_id: threadId, turn_id: turnId, call_id: callId, name: step.name, is_error: true, ms: 0, effect: step.effect, preview: "annulé" });
+        return { cancelled: true, rejected, rest: [] };
+      }
+      if (outcome !== "approved") {
+        ok = false;
+        rejected = true;
+        preview = outcome === "expired" ? "approbation expirée — refusé" : "refusé par l'utilisateur";
+        approvalId = undefined;
+      }
+    }
+    if (ok) await sleep(state, step.ms, signal);
+    if (signal.aborted) {
+      state.publish({ type: "tool.result", thread_id: threadId, turn_id: turnId, call_id: callId, name: step.name, is_error: true, ms: step.ms, effect: step.effect, preview: "annulé" });
+      return { cancelled: true, rejected, rest: [] };
+    }
+    state.publish({
+      type: "tool.result",
+      thread_id: threadId,
+      turn_id: turnId,
+      call_id: callId,
+      name: step.name,
+      is_error: !ok,
+      ms: ok ? step.ms : 0,
+      effect: step.effect,
+      preview: preview.split("\n").slice(0, 3).join("\n"),
+      // Outil exécuté après sa carte : le résultat porte la carte, comme celui de l'exécuteur du noyau.
+      ...(approvalId ? { approval_id: approvalId } : {}),
+    });
+  }
+  return { cancelled: false, rejected, rest: [] };
+}
+
+/** Style `kernel`, après une APPROBATION, verrou du fil tenu (`scheduleLocalDecision`) — comme l'exécuteur du noyau
+ * (LOKKAL.md §7.4.9) : l'outil de la carte s'exécute, son `tool.result` part avec le `call_id` de l'appel resté en
+ * attente, `approval_id` et le `turn_id` du tour qui a posé la carte ; puis un tour de suite joue les étapes restantes,
+ * éventuellement arrêtées sur une nouvelle carte. */
+async function continueAfterDecision(
+  state: MockState,
+  threadId: string,
+  card: Approval,
+  step: Step,
+  rest: Step[],
+  test: string,
+): Promise<void> {
+  const ran = new AbortController();
+  await sleep(state, step.ms, ran.signal);
+  card.status = "executed";
+  card.result_summary = step.preview.split("\n")[0] ?? "exécuté";
+  state.publish({
+    type: "tool.result",
+    thread_id: card.thread_id,
+    turn_id: `${card.thread_id}:${card.turn_index}`,
+    ...(card.call_id ? { call_id: card.call_id } : {}),
+    approval_id: card.id,
+    name: card.tool_name,
+    ok: true,
+    is_error: false,
+    preview: step.preview.slice(0, 1200),
+    ms: step.ms,
+  });
+
+  const rec = state.ensureThread(threadId, "");
+  const turnId = `${threadId}:${rec.turns.length}`;
+  const block = `[Approbation]\nOutil : ${card.tool_name}\nDécision : approved\n[/Approbation]`;
+  state.publish({ type: "turn.started", thread_id: threadId, turn_id: turnId });
+  const ctl = new AbortController();
+  state.activeTurns.set(threadId, { turnId, abort: ctl });
+  let reply: string;
+  let cancelled = false;
+  try {
+    const r = await runSteps(state, threadId, turnId, rest, ctl.signal);
+    if (r.cancelled) {
+      reply = "";
+      cancelled = true;
+    } else if (r.pending) {
+      const { pending, pendingStep, rest: left } = r;
+      state.continuations.set(pending.id, { threadId, run: () => continueAfterDecision(state, threadId, pending, pendingStep!, left, test) });
+      reply = `La commande \`${String(pending.arguments.command ?? pending.tool_name)}\` attend ton approbation sur la carte.`;
+    } else reply = `Le test ${test} passe.${r.rejected ? " Une action a été refusée." : ""}`;
+  } finally {
+    state.activeTurns.delete(threadId);
+  }
+  state.appendTurn(threadId, block, cancelled ? "(tour annulé)" : reply, { sender: null, channel: "cli", silent: true });
+  state.publish({ type: "turn.delta", thread_id: threadId, turn_id: turnId, text: reply });
+  publishTurnCost(state, threadId, turnId, block, reply);
+  state.publish({
+    type: "turn.done",
+    thread_id: threadId,
+    turn_id: turnId,
+    usage: { prompt_tokens: block.length, completion_tokens: reply.length, total_tokens: block.length + reply.length },
+    tier: "mock",
+    ...(cancelled ? { cancelled: true } : {}),
+  });
+}
+
+/**
+ * Suite d'une carte locale décidée (route `/v1/local/approvals/{id}/decide`), sans l'attendre — LOKKAL.md §7.4.3/§7.4.9.
+ * Style `kernel` : une approbation prend sa place dans la file du fil (`queued` si un tour tourne ou attend, `running`
+ * sinon) ; l'outil puis le tour de suite tournent quand vient son tour ; un fil annulé entre-temps abandonne la suite
+ * (carte `failed`, `tool.result` en erreur). Un refus ne lance rien (`none`). Style `inline` : le tour en cours attend
+ * la décision et exécute l'outil lui-même (`running`).
+ */
+export function scheduleLocalDecision(state: MockState, approval: Approval): ApprovalContinuation {
+  const cont = state.continuations.get(approval.id);
+  state.continuations.delete(approval.id);
+  const waiter = state.approvalWaiters.get(approval.id);
+  if (approval.status !== "approved") {
+    waiter?.("rejected");
+    return "none";
+  }
+  if (!cont) {
+    waiter?.("approved"); // l'action s'exécute, puis le tour reprend
+    return "running";
+  }
+  const root = cont.threadId.split("/sa-")[0]!;
+  const epoch = state.cancelEpochs.get(root) ?? 0;
+  const immediate = !state.threadBusy(cont.threadId);
+  const place = state.lockThread(cont.threadId);
+  void (async () => {
+    const release = await place;
+    try {
+      if ((state.cancelEpochs.get(root) ?? 0) !== epoch) {
+        approval.status = "failed";
+        approval.error = "annulé par l'utilisateur";
+        state.publish({
+          type: "tool.result",
+          thread_id: approval.thread_id,
+          turn_id: `${approval.thread_id}:${approval.turn_index}`,
+          ...(approval.call_id ? { call_id: approval.call_id } : {}),
+          approval_id: approval.id,
+          name: approval.tool_name,
+          ok: false,
+          is_error: true,
+          preview: "annulé par l'utilisateur",
+        });
+        return;
+      }
+      await cont.run();
+    } catch {
+      // le mock ne lève pas ici ; une suite cassée ne doit pas bloquer la file
+    } finally {
+      release();
+    }
+  })();
+  return immediate ? "running" : "queued";
 }
 
 async function runDelegate(state: MockState, threadId: string, turnId: string, signal: AbortSignal): Promise<LocalTurnResult> {
@@ -196,17 +377,51 @@ async function runDelegate(state: MockState, threadId: string, turnId: string, s
   return { reply: "Le sous-agent a terminé : un commit sur sa branche, arbre propre.", cancelled: false };
 }
 
-/** Émet la carte `local`, attend la décision (une fois / session / toujours se règle dans la route de décision). */
-export async function askLocalApproval(
+/** Machine liée (`state.strongRelay`) : une carte forte part chez nokker.ai peu après sa pose, comme le dépôt du noyau
+ * (LOKKAL.md §7.3) — `forwarded: true` dans `GET /v1/local/approvals` et l'événement `approval.forwarded`. */
+function relayStrongCard(state: MockState, approval: Approval): void {
+  if (!state.strongRelay || approval.strength !== "strong") return;
+  state.later(state.strongRelayMs, () => {
+    if (approval.status !== "pending") return;
+    approval.forwarded = true;
+    state.publish({ type: "approval.forwarded", approval_id: approval.id, thread_id: approval.thread_id });
+  });
+}
+
+/** Pose une carte locale SANS l'attendre (style `kernel`). */
+export function postLocalApproval(
   state: MockState,
   threadId: string,
   turnId: string,
   step: Pick<Step, "name" | "effect" | "args">,
-  onCreated?: (approval: Approval) => void,
   channel: Approval["channel"] = "cli",
-): Promise<ApprovalOutcome> {
+  callId: string | null = null,
+): Approval {
+  const approval = newLocalApproval(threadId, turnId, step, channel, callId);
+  state.approvals.set(approval.id, approval);
+  const { suggested_rules: _rules, forwarded: _fwd, ...onWire } = approval;
+  void _rules;
+  void _fwd;
+  state.publish({ type: "approval.requested", approval: onWire });
+  relayStrongCard(state, approval);
+  state.later(APPROVAL_TTL_MS, () => {
+    if (approval.status !== "pending") return;
+    approval.status = "expired";
+    state.continuations.delete(approval.id);
+    state.publish({ type: "approval.decided", approval_id: approval.id, decision: "expired", by: LOCAL_OWNER, via: "local" });
+  });
+  return approval;
+}
+
+function newLocalApproval(
+  threadId: string,
+  turnId: string,
+  step: Pick<Step, "name" | "effect" | "args">,
+  channel: Approval["channel"],
+  callId: string | null,
+): Approval {
   const args = redactArgs(step.args);
-  const approval: Approval = {
+  return {
     id: randomId("appr"),
     thread_id: threadId,
     turn_index: Number(turnId.slice(turnId.lastIndexOf(":") + 1)) || 0,
@@ -233,15 +448,32 @@ export async function askLocalApproval(
     decided_at: null,
     result_summary: null,
     error: null,
+    call_id: callId,
     // Carte destructive = « forte-locale » : jamais d'« always » (aucune règle proposée).
     suggested_rules: step.effect === "destructive" ? [] : suggestRules(step.name, step.args),
+    forwarded: false,
   };
+}
+
+/** Émet la carte `local`, attend la décision (une fois / session / toujours se règle dans la route de décision). */
+export async function askLocalApproval(
+  state: MockState,
+  threadId: string,
+  turnId: string,
+  step: Pick<Step, "name" | "effect" | "args">,
+  onCreated?: (approval: Approval) => void,
+  channel: Approval["channel"] = "cli",
+  callId: string | null = null,
+): Promise<ApprovalOutcome> {
+  const approval = newLocalApproval(threadId, turnId, step, channel, callId);
   state.approvals.set(approval.id, approval);
   const waiter = new Promise<ApprovalOutcome>((res) => state.approvalWaiters.set(approval.id, res));
-  // L'événement ne porte pas `suggested_rules` : la CLI récupère la carte par GET /v1/local/approvals.
-  const { suggested_rules: _rules, ...onWire } = approval;
+  // L'événement ne porte ni `suggested_rules` ni `forwarded` : la CLI récupère la carte par GET /v1/local/approvals.
+  const { suggested_rules: _rules, forwarded: _fwd, ...onWire } = approval;
   void _rules;
+  void _fwd;
   state.publish({ type: "approval.requested", approval: onWire });
+  relayStrongCard(state, approval);
   onCreated?.(approval);
   state.later(APPROVAL_TTL_MS, () => {
     if (approval.status !== "pending") return;

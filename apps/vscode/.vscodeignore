@@ -1,0 +1,9 @@
+**
+!package.json
+!README.md
+!LICENSE
+!dist/extension.cjs
+!dist/webview.js
+!media/chat.css
+!media/activity.svg
+!media/icon.png

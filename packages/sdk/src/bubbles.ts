@@ -8,6 +8,7 @@
  * événements `turn.*` historiques gardent leur forme camelCase tant que le noyau n'a pas tranché
  * (voir le rapport du chantier feat/bubbles) ; tout ce qui est nouveau suit BUBBLES.md.
  */
+import type { BriefState, PlanSplitState } from "./ops.js";
 
 // ---------------------------------------------------------------------------
 // §1 — Fil (« session » dans l'UI), permanent
@@ -26,7 +27,12 @@ export interface Thread {
   unread: number;
   bubble_count: number;
   last_snippet: string;
+  /** §9.5 : fil d'un passage d'agent ; absent pour un fil de session ordinaire. Rangé sous l'agent, pas dans la liste. */
+  origin?: { kind: "agent"; agent_id: string; run_id: string };
 }
+
+/** Un fil de session ordinaire (à montrer dans la liste des sessions), pas un fil de passage d'agent. */
+export const isSessionThread = (t: Pick<Thread, "origin">): boolean => t.origin?.kind !== "agent";
 
 /**
  * Un message d'un fil = une moitié de TOUR (noyau, BUBBLES.md §8) : chaque tour donne un message `user` puis
@@ -44,6 +50,8 @@ export interface ThreadMessage {
   channel?: string;
   /** Absent côté noyau (P1) ; le mock le pose. */
   created_at?: string;
+  /** LOKKAL §7.6 (X7) : images jointes au message user ; octets par `GET /v1/threads/{id}/images/{sha256}`. */
+  images?: { sha256: string; media_type: string; size: number; name?: string | null }[];
 }
 
 export interface ThreadView {
@@ -81,7 +89,7 @@ export interface SessionMessageResult {
 // §2 — Bulle
 // ---------------------------------------------------------------------------
 
-export const BUBBLE_KINDS = ["monitor", "search", "notify", "timer", "script", "media", "artifact", "agent_draft", "approval"] as const;
+export const BUBBLE_KINDS = ["monitor", "search", "notify", "timer", "script", "media", "artifact", "agent_draft", "approval", "handoff", "plan_split", "brief"] as const;
 export type BubbleKind = (typeof BUBBLE_KINDS)[number];
 
 export const BUBBLE_STATUSES = ["idle", "working", "done", "failed"] as const;
@@ -183,7 +191,20 @@ export interface ArtifactState {
   size: number;
   /** Publique : choix explicite page par page ; privée sinon. */
   public: boolean;
-  updated_at: string;
+  /** Dernière écriture de la page, en secondes epoch (`nokker/pages/store.py`). */
+  updated_at: number;
+  /** Écriture en direct (X22, BUBBLES.md §10.2) : le modèle écrit le fichier de la page. Pendant ce temps, le client
+   * montre le texte des `tool.input.delta` de ce `call_id` (vue du code, sans l'exécuter) et ne recharge pas
+   * l'aperçu ; la bulle se recale (`bubble.updated` sans `writing`, nouvelle `version` si l'outil a écrit). */
+  writing?: ArtifactWriting;
+}
+
+export interface ArtifactWriting {
+  call_id: string;
+  turn_id: string;
+  name: string;
+  /** Début de l'écriture, en secondes epoch. */
+  since: number;
 }
 
 /** `POST /v1/pages/{id}/link` (local) ou `pages-token` de nokker.ai (passerelle) — lien signé d'une page. */
@@ -231,6 +252,29 @@ export interface BubbleStateByKind {
   artifact: ArtifactState;
   agent_draft: AgentDraftState;
   approval: ApprovalBubbleState;
+  handoff: HandoffState;
+  plan_split: PlanSplitState;
+  brief: BriefState;
+}
+
+/** X21 (LOKKAL §7.16) : relais d'une session web vers une machine Lokkal. Actions `accept`/`refuse` = décision de
+ * l'utilisateur, jamais un tour ; montrées selon `state` (`proposed` : les deux ; `waiting` : « Annuler » = refuse). */
+export interface HandoffState {
+  handoff_id: string;
+  state: "proposed" | "waiting" | "accepted" | "running" | "awaiting_approval" | "done" | "refused" | "expired" | "failed";
+  need: { kind: "repo" | "host" | "connector" | "mcp" | (string & {}); name: string };
+  machine_id: string;
+  machine_name: string;
+  /** `false` : la machine est éteinte, la demande attendra. */
+  online: boolean;
+  task: string;
+  lokkal_thread: string | null;
+  /** Réponse finale de la machine (caviardée par nokker.ai, ≤ 8 000 car.). */
+  reply: string | null;
+  error: string | null;
+  pending_approvals: number;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface BubbleBase<K extends BubbleKind = BubbleKind> {
@@ -321,10 +365,25 @@ export type BubbleActionResult =
 // ---------------------------------------------------------------------------
 
 /** Couleur d'état côté client (deck Crew) : idle = bleu, armed = vert, running = orange, error = rouge. */
-export type AgentStatus = "idle" | "armed" | "running" | "error";
+/** BUBBLES.md §9.5 (X14, contrat provisoire du 25.10) : paused = au repos/désarmé (bleu), armed = prêt (vert),
+ * running = un passage en cours (orange), failed = dernier passage en échec (rouge). */
+export type AgentStatus = "paused" | "armed" | "running" | "failed";
 
-/** Agent du Crew — forme du noyau (BUBBLES.md §9.4). `status` vaut toujours `armed` en P1 (pas d'exécution
- * réelle d'agent) ; les autres états servent au deck (et à la démo du mock). */
+export type AgentTrigger =
+  | { kind: "manual" }
+  | { kind: "schedule"; cron: string; tz: string }
+  | { kind: "once"; at: string }
+  | { kind: "event"; event: string };
+
+export type AgentRunStatus = "queued" | "running" | "waiting_approval" | "succeeded" | "failed" | "cancelled" | "skipped";
+
+export interface AgentBudget {
+  max_calls: number;
+  max_cost: number;
+  currency: string;
+}
+
+/** Agent du Crew — §9.4, plus le moteur de §9.5 (champs facultatifs : un noyau P1 ne les envoie pas). */
 export interface Agent {
   id: string;
   name: string;
@@ -335,8 +394,44 @@ export interface Agent {
   created_by: string;
   created_at: string;
   updated_at: string;
-  /** Mock seulement (démo du deck) : dernier lancement. Absent côté noyau P1. */
-  last_run?: string | null;
+  instructions?: string;
+  trigger?: AgentTrigger;
+  next_run_at?: string | null;
+  last_run?: { run_id: string; status: AgentRunStatus; ended_at: string | null } | null;
+  /** Noms du coffre (X4), jamais de valeur. */
+  secrets?: string[];
+  budget?: AgentBudget | null;
+  /** Règles levées sans carte pendant un passage, `outil(motif)`. */
+  auto_approve?: string[];
+  placement?: { machine: "auto" | "web" | string } | null;
+  /** X15 : ce que l'agent exige de sa machine, par noms. */
+  needs?: { repos?: string[]; hosts?: string[]; connectors?: string[]; mcp?: string[]; gpu?: boolean } | null;
+  /** X17 : projet d'équipe (`pj_…`), `null` hors projet. */
+  project?: string | null;
+  /** Carte forte d'armement en attente (règle d'écriture à approuver), sinon `null`. */
+  arm_approval_id?: string | null;
+}
+
+export interface AgentRun {
+  run_id: string;
+  agent_id: string;
+  trigger: AgentTrigger["kind"];
+  scheduled_for: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  status: AgentRunStatus;
+  thread_id: string | null;
+  cost: { tokens_in: number; tokens_out: number; amount: number; currency: string; calls?: number; amounts?: Record<string, number> } | null;
+  summary: string | null;
+  /** Échéance manquée rattrapée. */
+  catch_up?: boolean;
+  /** Événement déclencheur (`alert:…`, `webhook:…`, `mail:…`), sinon `null`. */
+  event?: string | null;
+}
+
+export interface AgentRunPage {
+  runs: AgentRun[];
+  next_before: string | null;
 }
 
 export interface CreateAgentRequest {
@@ -344,7 +439,14 @@ export interface CreateAgentRequest {
   role: string;
   model?: string;
   tools?: string[];
+  instructions?: string;
+  trigger?: AgentTrigger;
+  secrets?: string[];
+  budget?: AgentBudget | null;
+  auto_approve?: string[];
 }
+
+export type PatchAgentRequest = Partial<CreateAgentRequest>;
 
 /** `GET /v1/users` (§9.2) : utilisateurs connus de la config — seules cibles valides d'un partage. */
 export interface KnownUser {
@@ -405,6 +507,24 @@ export interface AgentCreatedEvent {
   agent: Agent;
 }
 
+/** §9.5 : tout changement d'un agent (status, next_run_at, last_run…). */
+export interface AgentUpdatedEvent {
+  type: "agent.updated";
+  agent: Agent;
+}
+
+export interface AgentDeletedEvent {
+  type: "agent.deleted";
+  id: string;
+}
+
+/** §9.5 : chaque changement d'état d'un passage. */
+export interface AgentRunEvent {
+  type: "agent.run";
+  agent_id: string;
+  run: AgentRun;
+}
+
 export type BubbleEvent =
   | ThreadUpdatedEvent
   | ThreadDeletedEvent
@@ -413,7 +533,10 @@ export type BubbleEvent =
   | BubbleClosedEvent
   | BubbleTransferredEvent
   | SessionMessageEvent
-  | AgentCreatedEvent;
+  | AgentCreatedEvent
+  | AgentUpdatedEvent
+  | AgentDeletedEvent
+  | AgentRunEvent;
 
 export const BUBBLE_EVENT_TYPES = [
   "thread.updated",
@@ -424,6 +547,9 @@ export const BUBBLE_EVENT_TYPES = [
   "bubble.transferred",
   "session.message",
   "agent.created",
+  "agent.updated",
+  "agent.deleted",
+  "agent.run",
 ] as const satisfies readonly BubbleEvent["type"][];
 
 // ---------------------------------------------------------------------------
@@ -485,6 +611,12 @@ export function summarizeState(bubble: Bubble): string {
       return `${bubble.state.name} (${bubble.state.role}, ${bubble.state.model}) outils ${bubble.state.tools.join(", ")}`;
     case "approval":
       return `approbation ${bubble.state.approval_id}`;
+    case "plan_split":
+      return `découpage proposé de « ${bubble.state.card_title} » : ${bubble.state.children.map((c) => c.title).join(" · ")} (${bubble.state.state})`;
+    case "brief":
+      return `brief du ${bubble.state.date.slice(0, 10)} : ${bubble.state.text.slice(0, 300)}`;
+    case "handoff":
+      return `relais vers « ${bubble.state.machine_name} » (${bubble.state.need.kind} « ${bubble.state.need.name} ») : ${bubble.state.state}${bubble.state.reply ? ` — ${bubble.state.reply}` : ""}`;
     default:
       return `bulle « ${(bubble as { kind: string }).kind} »`;
   }

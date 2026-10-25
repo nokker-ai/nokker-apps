@@ -13,6 +13,7 @@ import { formatChecks, runDoctor } from "./doctor.js";
 import { resolveServer } from "./lokkal.js";
 import { runLogs } from "./logs.js";
 import { runUpdate } from "./update.js";
+import { runAcp } from "./acp/run.js";
 
 const args = parseArgs(process.argv.slice(2));
 // --server > NOKKER_SERVER_URL > api_url de lokkal.json > http://127.0.0.1:8742
@@ -66,6 +67,10 @@ async function runSubcommand(opts: ParsedArgs): Promise<number> {
     process.stdout.write(`${formatChecks(checks)}\n`);
     return code;
   }
+  if (opts.command === "acp") {
+    // Agent Client Protocol sur stdio (Zed, JetBrains, Neovim…) : stdout ne porte que le protocole.
+    return runAcp(opts.serverUrl);
+  }
   if (opts.command === "logs") {
     return runLogs({ follow: opts.follow, lines: opts.lines, since: opts.since, component: opts.component });
   }
@@ -80,16 +85,17 @@ Usage :
   ${BRAND.cliBin}                        session de code dans le dossier courant (reprend le fil de ce dossier)
   ${BRAND.cliBin} -p "demande"           un tour dans le dossier courant, réponse sur stdout (scripts/CI) ;
                                       tout effet sans règle est REFUSÉ (mode sans surveillance)
-  ${BRAND.cliBin} -p "demande" --json    même chose, sortie JSON {reply, thread_id, cwd, pending_approvals, refused}
+  ${BRAND.cliBin} -p "demande" --json    même chose, sortie JSON {reply, thread_id, cwd, pending_approvals, refused, cost}
   ${BRAND.cliBin} doctor [--fix]         contrôles : docker, compose, serveur, authentification, version, git
   ${BRAND.cliBin} logs [-f] [-n N] [--since 1h|30m|2d] [--component core|cli]
   ${BRAND.cliBin} update [--check]       mise à jour du noyau (docker compose pull + up -d) ; --check compare les digests
+  ${BRAND.cliBin} acp                    agent ACP sur stdio pour un éditeur (Zed, JetBrains, Neovim…) : session du dossier de l'éditeur
   ${BRAND.cliBin} --server <url>         serveur (défaut ${args.serverUrl}, ou $NOKKER_SERVER_URL)
   ${BRAND.cliBin} --sound                sonnette terminal (BEL) à chaque bulle — coupée par défaut
   ${BRAND.cliBin} --help                 cette aide
   ${BRAND.cliBin} --version              version du client
 
-En session, /help liste les commandes (/sessions, /thread, /diff, /checkpoints, /rollback, /skills, /plan, /agents, /cancel, /approvals…). Échap annule le
+En session, /help liste les commandes (/sessions, /thread, /diff, /checkpoints, /rollback, /skills, /plan, /agents, /cost, /cancel, /approvals…). Échap annule le
 tour en cours. Une carte forte se décide localement une fois seulement ; depuis le web ou la passerelle, sur le téléphone.
 `);
 }

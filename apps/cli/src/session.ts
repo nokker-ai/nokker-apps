@@ -8,9 +8,11 @@ import {
   NokkerClient,
   applyChatChunk,
   type Approval,
+  type LocalApprovalResult,
   type Bubble,
   type ApprovalScope,
   type ChatCompletionChunk,
+  type LocalCostTotals,
   type LocalSessionSummary,
   type LocalToolName,
   type LocalToolOutcome,
@@ -91,6 +93,11 @@ export class CliSession {
   /** Appel d'un outil du noyau sur ce fil (route locale proposée) : 200 {content, is_error} ou 202 {approval_id}. */
   callTool(name: LocalToolName, args: Record<string, unknown> = {}): Promise<LocalToolOutcome> {
     return this.client.callLocalTool(this.threadId, name, args);
+  }
+
+  /** `/cost` : totaux de ce fil (sous-agents compris) et du jour, lus sur `GET /v1/local/cost` (lecture seule). */
+  getCost(): Promise<LocalCostTotals> {
+    return this.client.getLocalCost(this.threadId);
   }
 
   listLocalSessions(): Promise<LocalSessionSummary[]> {
@@ -195,7 +202,8 @@ export class CliSession {
 
   /** Carte d'une session locale (`POST /v1/local/approvals/{id}/decide`) : jeton local, sans signature. `always` écrit la règle
    * choisie (`rule`, l'une des `suggested_rules`) dans les réglages de l'utilisateur côté noyau. */
-  decideLocal(approvalId: string, decision: "approve" | "reject", scope: ApprovalScope = "once", rule?: string): Promise<Approval> {
+  /** Répond tout de suite (LOKKAL.md §7.4.3) : l'issue de l'outil arrive par son `tool.result`. */
+  decideLocal(approvalId: string, decision: "approve" | "reject", scope: ApprovalScope = "once", rule?: string): Promise<LocalApprovalResult> {
     return this.client.decideLocalApproval(approvalId, { decision, scope, ...(rule ? { rule } : {}) });
   }
 

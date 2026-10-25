@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import type { Thread } from "@nokker-apps/sdk";
+import { isSessionThread, type Thread } from "@nokker-apps/sdk";
 import { BRAND } from "@nokker-apps/brand";
 import { Icon } from "../icons.js";
 
@@ -72,7 +72,7 @@ export function Drawer({
       ) : null}
 
       <nav className="drawer-list" aria-label="Liste des sessions">
-        {threads.map((t) => {
+        {threads.filter(isSessionThread).map((t) => {
           const current = t.id === currentId;
           const unread = t.unread || (current ? 0 : unseen[t.id] ?? 0);
           const cls = ["session-row", current ? "current" : "", t.working ? "working" : "", dropTargetId === t.id ? "drop" : ""].join(" ");

@@ -11,9 +11,10 @@
  */
 import { NokkerApiError, NokkerClient, generateDeviceKeyPair, signChallenge, type AcceptInvitationResult } from "@nokker-apps/sdk";
 import { registerPasskey, signDecisionWithPasskey } from "./webauthn.js";
+import { takeLocalToken } from "./onboarding/localToken.js";
 import { AUTHORIZE_BASE, GatewayAuthError, RETRY_MS, beginLogin, completeCallback, gatewayHost, refreshDelayMs, refreshToken, type GatewayToken } from "./gateway/auth.js";
 
-export type AuthMode = "device-key" | "passkey" | "demo" | "gateway";
+export type AuthMode = "device-key" | "passkey" | "demo" | "gateway" | "local";
 
 export interface AuthResult {
   mode: AuthMode;
@@ -318,9 +319,22 @@ async function gatewayLogin(client: NokkerClient, host: string): Promise<AuthRes
   }
 }
 
+/** Servi par un Lokkal en boucle locale (127.0.0.1 / localhost) avec son jeton local (§7.1, `/setup#token=…`). */
+export function localTokenContext(): string | null {
+  const h = location.hostname;
+  if (h !== "127.0.0.1" && h !== "localhost" && h !== "[::1]") return null;
+  return takeLocalToken();
+}
+
 export async function restoreLogin(client: NokkerClient, mock: boolean): Promise<AuthResult | null> {
   const gw = gatewayContext();
   if (gw) return gatewayLogin(client, gw);
+  // Lokkal local : le jeton local vaut session (pas d'appareil à enrôler sur sa propre machine).
+  const local = localTokenContext();
+  if (local) {
+    client.setToken(local);
+    return { mode: "local", user: "local-owner" };
+  }
   if (isSecure()) {
     const stored = await readStoredDeviceKey();
     if (stored) return deviceKeyLogin(client, stored);

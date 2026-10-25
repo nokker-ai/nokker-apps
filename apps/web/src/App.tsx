@@ -6,6 +6,10 @@ import { Drawer } from "./components/Drawer.js";
 import { Chat } from "./components/Chat.js";
 import { BubbleLayer } from "./components/BubbleLayer.js";
 import { CrewTab } from "./components/CrewTab.js";
+import { MachineTab } from "./components/MachineTab.js";
+import { TeamTab } from "./components/TeamTab.js";
+import { IncidentsTab } from "./components/IncidentsTab.js";
+import { PlanTab } from "./components/PlanTab.js";
 import { AccountTab } from "./components/AccountTab.js";
 import { ConnectorsTab, uiLang } from "./components/ConnectorsTab.js";
 import { t } from "./onboarding/i18n.js";
@@ -37,7 +41,7 @@ function useMedia(q: string): boolean {
   return m;
 }
 
-type Tab = "chat" | "crew" | "connectors" | "account";
+type Tab = "chat" | "crew" | "incidents" | "plan" | "team" | "connectors" | "account" | "machine";
 
 /** Bureau Nokker : tiroir de sessions + chat ; les bulles flottent au-dessus ; Crew en onglet. */
 export function App(): React.ReactElement {
@@ -61,6 +65,39 @@ export function App(): React.ReactElement {
   }, [store.current]);
 
   useEffect(() => writeJson("tab", tab), [tab]);
+
+  // X17 : l'onglet Équipe n'existe que si nokker.ai sert les projets (drapeau `team` ; sinon 404 comme avant).
+  const [teamInvites, setTeamInvites] = useState<number | null>(null);
+  useEffect(() => {
+    if (!store.ready || store.authMode === "local") return;
+    let live = true;
+    store.client.listProjects().then(
+      (r) => live && setTeamInvites(r.invitations),
+      () => live && setTeamInvites(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [store.ready, store.authMode, store.client]);
+
+  // X18 : Incidents (drapeau `operate`) et Plan (drapeau `plan`) n'existent que si leurs routes répondent.
+  const [liveIncidents, setLiveIncidents] = useState<number | null>(null);
+  const [planOn, setPlanOn] = useState(false);
+  useEffect(() => {
+    if (!store.ready) return;
+    let live = true;
+    store.client.listIncidents({ state: "live" }).then(
+      (r) => live && setLiveIncidents(r.incidents.length),
+      () => live && setLiveIncidents(null),
+    );
+    store.client.listPlanCards({ roots: true }).then(
+      () => live && setPlanOn(true),
+      () => live && setPlanOn(false),
+    );
+    return () => {
+      live = false;
+    };
+  }, [store.ready, store.client]);
 
   useEffect(() => {
     if (!store.crewPulse) return;
@@ -110,12 +147,42 @@ export function App(): React.ReactElement {
               >
                 Crew<span className="tab-count">{store.agents.length}</span>
               </button>
+              {liveIncidents !== null ? (
+                <button type="button" className={`tab-main ${tab === "incidents" ? "on" : ""}`} aria-current={tab === "incidents" ? "page" : undefined} onClick={() => setTab("incidents")}>
+                  Incidents
+                  {liveIncidents ? (
+                    <span className="tab-count" aria-label={`${liveIncidents} incident(s) vivant(s)`}>
+                      {liveIncidents}
+                    </span>
+                  ) : null}
+                </button>
+              ) : null}
+              {planOn ? (
+                <button type="button" className={`tab-main ${tab === "plan" ? "on" : ""}`} aria-current={tab === "plan" ? "page" : undefined} onClick={() => setTab("plan")}>
+                  Plan
+                </button>
+              ) : null}
+              {teamInvites !== null ? (
+                <button type="button" className={`tab-main ${tab === "team" ? "on" : ""}`} aria-current={tab === "team" ? "page" : undefined} onClick={() => setTab("team")}>
+                  Équipe
+                  {teamInvites ? (
+                    <span className="tab-count" aria-label={`${teamInvites} invitation(s)`}>
+                      {teamInvites}
+                    </span>
+                  ) : null}
+                </button>
+              ) : null}
               <button type="button" className={`tab-main ${tab === "connectors" ? "on" : ""}`} aria-current={tab === "connectors" ? "page" : undefined} onClick={() => setTab("connectors")}>
                 {t(uiLang(), "tabConnectors")}
               </button>
               <button type="button" className={`tab-main ${tab === "account" ? "on" : ""}`} aria-current={tab === "account" ? "page" : undefined} onClick={() => setTab("account")}>
                 {t(uiLang(), "tabAccount")}
               </button>
+              {store.authMode === "local" ? (
+                <button type="button" className={`tab-main ${tab === "machine" ? "on" : ""}`} aria-current={tab === "machine" ? "page" : undefined} onClick={() => setTab("machine")}>
+                  Machine
+                </button>
+              ) : null}
             </nav>
             <div className="topbar-session">
               <span className="fine">Session</span>
@@ -153,11 +220,45 @@ export function App(): React.ReactElement {
                 streaming={store.streaming}
                 live={store.live}
                 sending={store.sending}
-                onSend={(t) => void store.send(t)}
+                onSend={(t, images) => void store.send(t, images)}
+                threadId={store.current?.id ?? null}
+                client={store.client}
+                turnCosts={store.turnCosts}
+                costTotals={store.costTotals}
+                writing={[...store.liveInputs.values()].filter((w) => w.threadId === store.current?.id)}
+                hookNotice={store.current ? (store.hookNotices[store.current.id] ?? null) : null}
+                onTrustHooks={store.authMode === "local" && store.current ? () => void store.trustHooks(store.current!.id) : undefined}
               />
             </div>
           ) : tab === "crew" ? (
-            <CrewTab agents={store.agents} freshId={freshAgent} />
+            <CrewTab
+              agents={store.agents}
+              freshId={freshAgent}
+              client={store.client}
+              agentRuns={store.agentRuns}
+              toast={store.toast}
+              onOpenThread={(id) => {
+                store.selectThread(id);
+                setTab("chat");
+              }}
+            />
+          ) : store.ready && tab === "incidents" && liveIncidents !== null ? (
+            <IncidentsTab
+              client={store.client}
+              tick={store.opsTick}
+              toast={store.toast}
+              onLive={setLiveIncidents}
+              onOpenThread={(id) => {
+                store.selectThread(id);
+                setTab("chat");
+              }}
+            />
+          ) : store.ready && tab === "plan" && planOn ? (
+            <PlanTab client={store.client} tick={store.opsTick} toast={store.toast} currentThread={store.current ? { id: store.current.id, title: store.current.title } : null} />
+          ) : store.ready && tab === "team" && teamInvites !== null ? (
+            <TeamTab client={store.client} toast={store.toast} onInvitations={setTeamInvites} />
+          ) : store.ready && tab === "machine" && store.authMode === "local" ? (
+            <MachineTab client={store.client} toast={store.toast} />
           ) : store.ready && tab === "account" ? (
             <AccountTab client={store.client} lang={uiLang()} />
           ) : store.ready ? (

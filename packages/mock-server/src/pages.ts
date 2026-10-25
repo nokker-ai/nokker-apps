@@ -7,7 +7,8 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Bubble } from "@nokker-apps/sdk";
 import { MockHttpError } from "./errors.js";
 import { createBubble, getBubble, registerAction, updateBubble } from "./bubbles.js";
-import type { MockState } from "./state.js";
+import { streamToolInput } from "./live-input.js";
+import { randomId, type MockState } from "./state.js";
 
 const PAGE_SECRET = Buffer.from("mock-pages-secret-" + Math.random());
 const LINK_TTL_S = 3600;
@@ -20,6 +21,8 @@ export interface MockPage {
   title: string;
   public: boolean;
   versions: string[];
+  /** Dernière écriture, en secondes epoch (comme `nokker/pages/store.py`). */
+  updated_at: number;
 }
 
 /** `download` est dans la signature : on ne transforme pas un lien d'affichage en téléchargement (ni l'inverse). */
@@ -50,7 +53,7 @@ main{text-align:center}b{color:#C3E26B}</style>
 
 function stateOf(p: MockPage): Record<string, unknown> {
   const v = p.versions[p.versions.length - 1]!;
-  return { page_id: p.id, path: p.path, title: p.title, mime: "text/html", version: p.versions.length, size: Buffer.byteLength(v), public: p.public, updated_at: new Date().toISOString() };
+  return { page_id: p.id, path: p.path, title: p.title, mime: "text/html", version: p.versions.length, size: Buffer.byteLength(v), public: p.public, updated_at: p.updated_at };
 }
 
 function actionsOf(p: MockPage) {
@@ -62,21 +65,35 @@ export function createPage(state: MockState, threadId: string, path: string, tit
   const existing = [...state.pages.values()].find((p) => p.thread_id === threadId && p.path === path);
   if (existing) return state.bubbles.get(existing.bubble_id)!;
   const id = "pg_" + randomBytes(8).toString("hex");
-  const page: MockPage = { id, thread_id: threadId, bubble_id: "", path, title, public: false, versions: [html(title, 1)] };
+  const page: MockPage = { id, thread_id: threadId, bubble_id: "", path, title, public: false, versions: [html(title, 1)], updated_at: Date.now() / 1000 };
   const b = createBubble(state, threadId, { kind: "artifact", title, status: "done", state: stateOf(page) as never, actions: actionsOf(page) });
   page.bubble_id = b.id;
   state.pages.set(id, page);
   return b;
 }
 
-/** Modification du fichier : version + 1, `working` pendant le tour puis `done`. */
-export function updatePage(state: MockState, pageId: string): void {
+/** Modification du fichier : le « modèle » réécrit la page en direct (X22 : `tool.input.delta` du `write_file`, bulle
+ * en `state.writing`, `working`), puis l'outil s'exécute, version + 1 et la bulle se recale (`writing` retiré, `done`). */
+export function updatePage(state: MockState, pageId: string, turnId = ""): void {
   const p = state.pages.get(pageId);
   if (!p) return;
-  updateBubble(state, p.bubble_id, { status: "working" });
-  state.later(1500, () => {
-    p.versions.push(html(p.title, p.versions.length + 1));
-    updateBubble(state, p.bubble_id, { state: stateOf(p), status: "done" });
+  const callId = randomId("call");
+  const tid = turnId || `${p.thread_id}:0`;
+  const next = html(p.title, p.versions.length + 1);
+  updateBubble(state, p.bubble_id, {
+    status: "working",
+    state: { writing: { call_id: callId, turn_id: tid, name: "write_file", since: Date.now() / 1000 } },
+  });
+  void streamToolInput(state, { threadId: p.thread_id, turnId: tid, callId, name: "write_file", path: p.path, field: "content", text: next }).then(() => {
+    state.later(100, () => {
+      state.publish({ type: "tool.call", thread_id: p.thread_id, turn_id: tid, call_id: callId, name: "write_file", effect: "write", args: { path: p.path, content: `${next.slice(0, 200)}…` } });
+      p.versions.push(next);
+      p.updated_at = Date.now() / 1000;
+      const b = getBubble(state, p.bubble_id);
+      delete (b.state as { writing?: unknown }).writing;
+      updateBubble(state, p.bubble_id, { state: stateOf(p), status: "done" });
+      state.publish({ type: "tool.result", thread_id: p.thread_id, turn_id: tid, call_id: callId, name: "write_file", is_error: false, ms: 4, effect: "write" });
+    });
   });
 }
 

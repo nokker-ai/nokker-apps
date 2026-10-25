@@ -1,7 +1,7 @@
 import React from "react";
 
 type IconName =
-  | "disk" | "search" | "bell" | "timer" | "terminal" | "play" | "page" | "bot" | "shield"
+  | "disk" | "search" | "bell" | "timer" | "terminal" | "play" | "page" | "image" | "bot" | "shield"
   | "chevronDown" | "chevronUp" | "share" | "close" | "send" | "plus" | "grip" | "arrowRight"
   | "link" | "check" | "soundOn" | "soundOff" | "menu" | "chat" | "crew" | "goto" | "sun" | "moon";
 
@@ -12,6 +12,7 @@ const P: Record<IconName, React.ReactNode> = {
   timer: (<><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2.5 2.5M9 2h6" /></>),
   terminal: (<><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M7 9l3 3-3 3M12 15h5" /></>),
   play: (<><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M10 9v6l5-3z" /></>),
+  image: (<><rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="9" cy="10" r="2" /><path d="M21 17l-5-5-9 9" /></>),
   page: (<><path d="M6 3h8l4 4v14H6z" /><path d="M14 3v4h4M9 12h6M9 16h6" /></>),
   bot: (<><rect x="4" y="8" width="16" height="12" rx="4" /><path d="M12 8V4M8 14h.01M16 14h.01M9 17h6" /></>),
   shield: (<><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z" /><path d="M9 12l2 2 4-4" /></>),

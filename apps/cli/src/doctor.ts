@@ -1,10 +1,10 @@
 /**
  * `nokker doctor` — contrôles en table : docker joignable, compose Lokkal présent, `/healthz` du serveur,
- * jeton local ou appareil valide, version du client contre la minimale annoncée, git présent ; coffre OpenBao si
- * l'installation en a un (`NOKKER_SECRETS_PROVIDER=openbao`).
+ * jeton local ou appareil valide, mémoire longue du noyau (`GET /v1/local/memory`), version du client contre la minimale
+ * annoncée, git présent ; coffre OpenBao si l'installation en a un (`NOKKER_SECRETS_PROVIDER=openbao`).
  * Aucune exception ne remonte : un binaire absent est un résultat, pas une trace d'erreur.
  */
-import { NokkerClient } from "@nokker-apps/sdk";
+import { NokkerApiError, NokkerClient, type LocalMemoryStatus } from "@nokker-apps/sdk";
 import { BRAND } from "@nokker-apps/brand";
 import { isLocalServer, loadSession, readLocalToken } from "./auth.js";
 import { existsSync } from "node:fs";
@@ -36,6 +36,37 @@ export interface DoctorOptions {
 }
 
 const CANDIDATES = ["http://127.0.0.1:8742", "http://127.0.0.1:4310"];
+
+/** Contrôle « mémoire » (LOKKAL.md §7.13.6) : `direct` et `ok` → ok ; `mcp`/`off` → avertissement ; `ok: false` → échec
+ * avec la raison du noyau. */
+export function memoryCheck(m: LocalMemoryStatus): Check {
+  if (m.ok === false) {
+    return { name: "mémoire", status: "ko", detail: `mémoire longue (${m.mode}) en panne — ${m.error ?? m.last_error ?? "raison inconnue"}` };
+  }
+  if (m.mode === "off") return { name: "mémoire", status: "warn", detail: "mémoire longue désactivée (memory_mode: off) : rien n'est rappelé d'un fil à l'autre" };
+  if (m.mode === "mcp") return { name: "mémoire", status: "warn", detail: "mémoire longue par MCP : état non contrôlé ici (le service distant a le sien)" };
+  if (m.mode !== "direct" || m.ok !== true) return { name: "mémoire", status: "warn", detail: `mode ${String(m.mode)} inattendu` };
+  const parts: string[] = ["directe"];
+  if (m.store?.notes != null) parts.push(`${m.store.notes} note(s)`);
+  if (m.embed?.dim) parts.push(`plongements ${m.embed.dim} dim${m.embed.ms != null ? ` en ${m.embed.ms} ms` : ""}`);
+  if (m.last_recall_ms != null) parts.push(`dernier rappel ${m.last_recall_ms} ms`);
+  const tail = m.last_error ? ` — dernière erreur : ${m.last_error}` : "";
+  return { name: "mémoire", status: "ok", detail: `${parts.join(", ")}${tail}` };
+}
+
+async function probeMemory(client: NokkerClient): Promise<Check> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 8000);
+  try {
+    return memoryCheck(await client.getLocalMemory(ctl.signal));
+  } catch (err) {
+    if (err instanceof NokkerApiError && err.status === 404) return { name: "mémoire", status: "warn", detail: "noyau sans GET /v1/local/memory (antérieur à la mémoire directe)" };
+    if (err instanceof NokkerApiError && err.status === 401) return { name: "mémoire", status: "warn", detail: "non vérifiable sans le jeton local" };
+    return { name: "mémoire", status: "warn", detail: `état illisible (${ctl.signal.aborted ? "délai dépassé" : String(err).replace(/^Error: /, "")})` };
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 async function probe(url: string, fetchImpl: DoctorOptions["fetchImpl"]): Promise<{ ok: boolean; body?: Awaited<ReturnType<NokkerClient["healthz"]>>; error?: string }> {
   const ctl = new AbortController();
@@ -134,6 +165,8 @@ export async function runDoctor(opts: DoctorOptions): Promise<{ checks: Check[];
       checks.push(ok
         ? { name: "authentification", status: "ok", detail: "jeton local accepté (aucun enrôlement nécessaire)" }
         : { name: "authentification", status: "ko", detail: "jeton local présent mais refusé par le serveur (périmé ? relance le noyau)" });
+      // Mémoire longue : route sous jeton local seulement (un mock de dev n'en a pas toujours une).
+      if (ok) checks.push(await probeMemory(client));
     } else if (saved) {
       client.setToken(saved.token);
       const ok = await client.listThreads().then(() => true, () => false);

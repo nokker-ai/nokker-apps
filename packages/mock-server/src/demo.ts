@@ -3,7 +3,7 @@
  * marquées « démo » : aucun chiffre ni résultat ici ne vient d'une vraie machine ou d'un vrai
  * moteur de recherche. Le but est d'exercer le contrat de bout en bout depuis apps/web et la CLI :
  *
- *  - fils permanents Général / Infra / Compta / Ninjob, quelques agents dans Crew ;
+ *  - fils permanents Général / Infra / Compta / Recrutement, quelques agents dans Crew ;
  *  - « disque » → bulle monitor qui travaille (glow) puis se stabilise ; action « Proposer une
  *    purge » → carte d'approbation (une action à effet ne s'exécute jamais en direct) ;
  *  - « cherche … » → bulle search, 4 résultats, aperçus §5 remplis après coup (bubble.updated) ;
@@ -14,9 +14,11 @@
  *    Général (§4) : bulle notify sans fil, affichée dans le fil courant.
  */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { argsSha256, type Approval, type Bubble, type BubbleKind, type Preview, type SearchResult } from "@nokker-apps/sdk";
+import { argsSha256, type AgentStatus, type AgentTrigger, type Approval, type Bubble, type BubbleKind, type Preview, type SearchResult } from "@nokker-apps/sdk";
 import { backgroundTurn, closeBubble, createBubble, registerAction, registerNotifyAction, shareBubble, transferBubble, updateBubble } from "./bubbles.js";
 import { MockHttpError } from "./errors.js";
+import { createAgentFull, seedRuns } from "./agents.js";
+import { proposeHandoff } from "./handoff.js";
 import { createPage, updatePage } from "./pages.js";
 import { MOCK_USER, hexId, normalize, randomId, type MockState } from "./state.js";
 
@@ -24,7 +26,7 @@ export interface DemoIds {
   general: string;
   infra: string;
   compta: string;
-  ninjob: string;
+  recrutement: string;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -38,7 +40,7 @@ export function seedDemo(state: MockState): DemoIds {
     rec.thread.created_at = ago(minutes + 60 * 24 * 12);
     return rec;
   };
-  const ninjob = mk("Ninjob", ["alice"], 180);
+  const recrutement = mk("Recrutement", ["alice"], 180);
   const compta = mk("Compta", ["alice", "bob"], 95);
   const infra = mk("Infra", ["alice", "bob"], 40);
   const general = mk("Général", ["alice"], 3);
@@ -48,7 +50,7 @@ export function seedDemo(state: MockState): DemoIds {
     t.created_at = ago(min);
     state.threads.get(id)!.thread.updated_at = t.created_at;
   };
-  turn(ninjob.thread.id, "Relance les recruteurs qui n'ont pas répondu depuis 10 jours.", "3 relances prêtes (démo), je les poste demain 9 h ; minuteur posé.", 180);
+  turn(recrutement.thread.id, "Relance les recruteurs qui n'ont pas répondu depuis 10 jours.", "3 relances prêtes (démo), je les poste demain 9 h ; minuteur posé.", 180);
   turn(compta.thread.id, "Rapproche les relevés d'octobre quand la banque aura publié.", "D'accord, je surveille et je te préviens dans le fil où tu seras.", 95);
   turn(infra.thread.id, "Le backup nocturne de host-1 est passé ?", "Oui, terminé à 03:12, 0 erreur (démo). Bulle de log ci-contre.", 40);
   turn(
@@ -72,7 +74,7 @@ export function seedDemo(state: MockState): DemoIds {
     },
   });
   backup.created_at = ago(40);
-  const relance = createBubble(state, ninjob.thread.id, {
+  const relance = createBubble(state, recrutement.thread.id, {
     kind: "timer",
     title: "Relances recruteurs",
     status: "working",
@@ -80,28 +82,21 @@ export function seedDemo(state: MockState): DemoIds {
   });
   relance.created_at = ago(180);
 
-  const agents: [string, string, string, "idle" | "armed" | "running" | "error", string[]][] = [
-    ["Veille disque host-1", "Surveille l'espace disque et propose une purge au-delà de 90 %", "Apertus 70B", "idle", ["infra_disk_usage", "bubble_update"]],
-    ["Relances factures", "Relance les factures impayées à J+15", "Qwen3 27B", "running", ["mail_draft", "erp_read"]],
-    ["Matching ninjob", "Trie les nouvelles offres pour Alice et Bob", "Apertus 70B", "armed", ["ninjob_search", "session_send"]],
-    ["Digest CortHeXis", "Résume la santé du corpus chaque matin", "Qwen3 8B", "error", ["memory_search", "telegram_send"]],
+  // Crew de démo (§9.5) : un agent par état et par type de déclencheur. Un nom avec « échec » échoue toujours.
+  const crew: { name: string; role: string; model: string; tools: string[]; trigger: AgentTrigger; status: AgentStatus; runs: number; failedLast?: boolean }[] = [
+    { name: "Veille disque host-1", role: "Surveille l'espace disque et propose une purge au-delà de 90 %", model: "Apertus 70B", tools: ["infra_disk_usage", "bubble_update"], trigger: { kind: "event", event: "alert:disque-plein" }, status: "paused", runs: 2 },
+    { name: "Relances factures", role: "Relance les factures impayées à J+15", model: "Qwen3 27B", tools: ["mail_draft", "erp_read"], trigger: { kind: "schedule", cron: "0 7 * * 1-5", tz: "Europe/Zurich" }, status: "armed", runs: 5 },
+    { name: "Tri des offres d'emploi", role: "Trie les nouvelles offres pour Alice et Bob", model: "Apertus 70B", tools: ["job_search", "session_send"], trigger: { kind: "manual" }, status: "armed", runs: 3 },
+    { name: "Digest mémoire (échec)", role: "Résume la santé de la mémoire chaque matin", model: "Qwen3 8B", tools: ["memory_search", "telegram_send"], trigger: { kind: "schedule", cron: "30 6 * * *", tz: "Europe/Zurich" }, status: "failed", runs: 4, failedLast: true },
   ];
-  for (const [name, role, model, status, tools] of agents) {
-    const id = hexId("ag");
-    state.agents.set(id, {
-      id,
-      name: `${name} (démo)`,
-      role,
-      model,
-      tools,
-      status,
-      created_by: "alice",
-      created_at: ago(60 * 24 * 3),
-      updated_at: ago(60 * 24 * 3),
-      last_run: status === "idle" ? ago(50) : status === "error" ? ago(300) : ago(4),
-    });
+  for (const c of crew) {
+    const a = createAgentFull(state, { name: `${c.name} (démo)`, role: c.role, model: c.model, tools: c.tools, instructions: c.role, trigger: c.trigger }, "alice");
+    a.status = c.status;
+    a.created_at = a.updated_at = ago(60 * 24 * 3);
+    a.next_run_at = c.status === "armed" && c.trigger.kind === "schedule" ? new Date(Date.now() + 5 * 3600_000).toISOString() : null;
+    seedRuns(state, a, c.runs, c.failedLast);
   }
-  const ids = { general: general.thread.id, infra: infra.thread.id, compta: compta.thread.id, ninjob: ninjob.thread.id };
+  const ids = { general: general.thread.id, infra: infra.thread.id, compta: compta.thread.id, recrutement: recrutement.thread.id };
   demoIds.set(state, ids);
   return ids;
 }
@@ -120,20 +115,20 @@ export function startDemoTimers(state: MockState): void {
       state,
       ids.compta,
       "[Relevé bancaire d'octobre publié (démo)]",
-      () => "Relevé rapproché (démo) : 42 écritures, une facture Swisscom de 89.90 CHF sans écriture.",
+      () => "Relevé rapproché (démo) : 42 écritures, une facture télécom de 89.90 CHF sans écriture.",
       {
         sender: null,
         delayMs: 6_000,
         onReply: () =>
-          sessionMessage(state, ids.compta, ids.general, "Facture Swisscom d'octobre reçue (démo) : 89.90 CHF, échéance 31.10. Je prépare l'écriture ?", {
+          sessionMessage(state, ids.compta, ids.general, "Facture télécom d'octobre reçue (démo) : 89.90 CHF, échéance 31.10. Je prépare l'écriture ?", {
             actions: [{ id: "prepare", label: "Préparer l'écriture", primary: true }],
           }),
       },
     ),
   );
-  // Ninjob respire un moment (point vivant dans le tiroir), sans notification.
-  state.later(20_000, () => state.setWorking(ids.ninjob, true));
-  state.later(27_000, () => state.setWorking(ids.ninjob, false));
+  // Recrutement respire un moment (point vivant dans le tiroir), sans notification.
+  state.later(20_000, () => state.setWorking(ids.recrutement, true));
+  state.later(27_000, () => state.setWorking(ids.recrutement, false));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -435,7 +430,16 @@ export function interpretDemo(
   if (/^(?:modifie|mets a jour|change|refais)\s+(?:la\s+)?page/.test(n)) {
     const page = [...state.pages.values()].filter((p) => p.thread_id === threadId).pop();
     if (!page) return { reply: "Je n'ai pas encore de page dans cette session : demande-m'en une (« crée une page … »)." };
-    return { reply: `Je mets à jour « ${page.title} » : la bulle se rafraîchit toute seule.`, after: () => updatePage(state, page.id) };
+    return { reply: `Je mets à jour « ${page.title} » : la bulle se rafraîchit toute seule.`, after: () => updatePage(state, page.id, turn.turnId) };
+  }
+
+  // X21 : « passe le relais à l'atelier pour le dépôt site : … » → bulle handoff (machine hors ligne si « portable »).
+  const ho = n.match(/passe(?:r)? le relais (?:a |au |a l )?(\S+)(?: pour le depot (\S+))?\s*[:,]?\s*(.*)$/);
+  if (ho) {
+    const machine = ho[1]!.charAt(0).toUpperCase() + ho[1]!.slice(1);
+    const repo = ho[2] ?? "site";
+    proposeHandoff(state, threadId, { kind: "repo", name: repo, task: ho[3]?.trim() || "corrige le test qui échoue", machine, online: !/portable/.test(ho[1]!) });
+    return { reply: `Ce travail demande le dépôt « ${repo} », qui est sur « ${machine} ». Je te propose de passer le relais : rien ne part sans ton accord.` };
   }
 
   // 3) Création d'agent → carte agent_draft
@@ -444,7 +448,7 @@ export function interpretDemo(
     const role = capitalize(tail || "Assistant généraliste");
     const nm = normalize(tail);
     const name = /factur/.test(nm) ? "Relanceur factures" : /veill|surveil/.test(nm) ? "Veilleur" : /mail|courrier/.test(nm) ? "Courrier" :
-      /offre|ninjob|recrut|emploi/.test(nm) ? "Chasseur d'offres" : /disque|infra|serveur/.test(nm) ? "Gardien infra" : "Nouvel agent";
+      /offre|recrut|emploi/.test(nm) ? "Chasseur d'offres" : /disque|infra|serveur/.test(nm) ? "Gardien infra" : "Nouvel agent";
     const tools = [
       ...(/factur|compta/.test(nm) ? ["erp_read", "mail_draft"] : []),
       ...(/mail|relan/.test(nm) ? ["mail_draft"] : []),

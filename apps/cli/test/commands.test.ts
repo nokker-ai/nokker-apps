@@ -6,7 +6,7 @@ describe("tokenize", () => {
     expect(tokenize("bulle session")).toEqual(["bulle", "session"]);
   });
   it("respecte les guillemets doubles", () => {
-    expect(tokenize('"Disque host-1" "Ninjob équipe"')).toEqual(["Disque host-1", "Ninjob équipe"]);
+    expect(tokenize('"Disque host-1" "Recrutement équipe"')).toEqual(["Disque host-1", "Recrutement équipe"]);
   });
   it("ignore les espaces multiples", () => {
     expect(tokenize("  a   b  ")).toEqual(["a", "b"]);
@@ -54,6 +54,7 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/checkpoints")).toEqual({ kind: "checkpoints" });
     expect(parseSlashCommand("/plan")).toEqual({ kind: "plan" });
     expect(parseSlashCommand("/agents")).toEqual({ kind: "agents" });
+    expect(parseSlashCommand("/cost")).toEqual({ kind: "cost" });
     expect(parseSlashCommand("/cancel")).toEqual({ kind: "cancel" });
     expect(parseSlashCommand("/out")).toEqual({ kind: "out" });
     expect(parseSlashCommand("/confirm 123456")).toEqual({ kind: "confirm", totp: "123456" });

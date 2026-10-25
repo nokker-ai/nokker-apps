@@ -1,5 +1,5 @@
 /**
- * Connexion par la passerelle (LOKKAL.md §7.3, contrat onboarding/dev/brosim du 24.10) — mock.
+ * Connexion par la passerelle (LOKKAL.md §7.3, contrat de la passerelle du 24.10) — mock.
  *
  *   POST /v1/gateway/authorize {host, code_challenge, code_challenge_method} (session) → {code, redirect, expires_in}
  *   POST /_gw/token {code, code_verifier} → {access_token, expires_in} + cookie de renouvellement (relais)

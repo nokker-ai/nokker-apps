@@ -1,0 +1,143 @@
+{
+  "name": "nokker-vscode",
+  "displayName": "Nokker",
+  "description": "Nokker Lokkal dans VS Code : une session de code sur le dossier ouvert, contre le noyau de votre machine.",
+  "version": "0.1.0",
+  "publisher": "nokker",
+  "license": "Apache-2.0",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nokker-ai/nokker-apps.git",
+    "directory": "apps/vscode"
+  },
+  "icon": "media/icon.png",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "keywords": [
+    "nokker",
+    "lokkal",
+    "agent",
+    "local"
+  ],
+  "main": "./dist/extension.cjs",
+  "activationEvents": [],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Nokker agit sur les fichiers du dossier : il exige un dossier de confiance."
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "nokker",
+          "title": "Nokker",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "nokker": [
+        {
+          "type": "webview",
+          "id": "nokker.chat",
+          "name": "Session"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "nokker.sendSelection",
+        "title": "Envoyer la sélection à Nokker",
+        "category": "Nokker"
+      },
+      {
+        "command": "nokker.newThread",
+        "title": "Nouveau fil",
+        "category": "Nokker",
+        "icon": "$(add)"
+      },
+      {
+        "command": "nokker.cancel",
+        "title": "Arrêter le tour",
+        "category": "Nokker",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "nokker.reconnect",
+        "title": "Se reconnecter au noyau",
+        "category": "Nokker",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "nokker.sendSelection",
+          "when": "editorHasSelection",
+          "group": "nokker@1"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "nokker.newThread",
+          "when": "view == nokker.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nokker.reconnect",
+          "when": "view == nokker.chat",
+          "group": "navigation@2"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "nokker.sendSelection",
+        "key": "ctrl+alt+n",
+        "mac": "cmd+alt+n",
+        "when": "editorTextFocus && editorHasSelection"
+      }
+    ],
+    "configuration": {
+      "title": "Nokker",
+      "properties": {
+        "nokker.serverUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Adresse du noyau local. Vide : `api_url` de `~/.config/nokker/lokkal.json` (écrit par l'installeur), sinon `http://127.0.0.1:8742`. Le jeton local n'est jamais un réglage : il est lu au même endroit que la CLI `nokker`."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:electron": "node scripts/build.mjs && xvfb-run -a node test/electron/run.mjs",
+    "package": "node scripts/package.mjs"
+  },
+  "devDependencies": {
+    "@nokker-apps/brand": "workspace:*",
+    "@nokker-apps/cli": "workspace:*",
+    "@nokker-apps/mock-server": "workspace:*",
+    "@nokker-apps/sdk": "workspace:*",
+    "@types/node": "^22.9.0",
+    "@types/vscode": "1.95.0",
+    "@vscode/test-electron": "2.5.2",
+    "@vscode/vsce": "4.0.0",
+    "esbuild": "0.28.2",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  }
+}

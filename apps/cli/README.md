@@ -8,11 +8,12 @@ Client terminal de Nokker Lokkal : une session de code dans le dossier courant, 
 ```
 nokker                          session de code sur le dossier courant (reprend le fil de ce dossier)
 nokker -p "demande"             un tour, réponse sur stdout (mode non interactif)
-nokker -p "demande" --json      {reply, thread_id, cwd, pending_approvals, refused, cancelled}
-nokker doctor [--fix]           contrôles : docker, compose Lokkal, serveur, authentification, version, git
+nokker -p "demande" --json      {reply, thread_id, cwd, pending_approvals, refused, cancelled, cost?}
+nokker doctor [--fix]           contrôles : docker, compose Lokkal, serveur, authentification, mémoire, version, git
 nokker logs [-f] [-n N] [--since 1h|30m|2d] [--component core|cli]
 nokker update [--check]         met à jour le noyau (install.sh --update, sinon env_file + compose pull/up) puis remplace le binaire ;
                                 --check compare la version installée à la dernière release lokkal-v*
+nokker acp                      agent ACP (Agent Client Protocol v1) sur stdio, pour un éditeur : Zed, JetBrains, Neovim…
 nokker --server <url>           serveur (priorité : --server > $NOKKER_SERVER_URL > api_url de lokkal.json > http://127.0.0.1:8742)
 nokker --sound                  sonnette terminal sur les bulles (coupée par défaut)
 ```
@@ -42,8 +43,14 @@ nokker --sound                  sonnette terminal sur les bulles (coupée par d�
   `/help` s'exécutent tout de suite). L'en-tête tronque le titre du fil à 32 caractères ; le compte à rebours d'une carte
   s'affiche « 24 h », « 59 min » puis « m:ss ».
 - Échap pendant un tour = `POST /v1/threads/{id}/cancel` (le noyau arrête le tour), pas seulement l'affichage.
+- **Coût par tour** : sous chaque tour, une ligne discrète tirée de l'événement `turn.cost` (publié juste avant
+  `turn.done`) : `· 12,4 k jetons · 0,03 €`, ou les jetons seuls quand le modèle n'a pas de prix dans le catalogue du
+  noyau (jamais un prix deviné ; la devise est celle du catalogue, plusieurs devises sont jointes par « + »). `/cost`
+  affiche la session (fil et sous-agents) et le jour UTC, lus sur `GET /v1/local/cost` ; ailleurs que sur un noyau local :
+  « non disponible sur ce serveur ». Mise en forme partagée avec le web : `formatCostLine` du SDK. En `-p --json`, le
+  champ `cost` recopie l'événement (sans `type`). Le mock publie un `turn.cost` en EUR à chaque tour.
 - Commandes : `/sessions` (dossiers), `/threads`, `/goto`, `/thread [titre]` (nouveau fil ; `/new` est réservé à la
-  frontière d'épisode du noyau), `/cancel`, `/out`, `/tools`, `/bubbles`, `/bubble`, `/send`, `/ask`, `/approvals`,
+  frontière d'épisode du noyau), `/cost`, `/cancel`, `/out`, `/tools`, `/bubbles`, `/bubble`, `/send`, `/ask`, `/approvals`,
   `/confirm <TOTP>`, `/login`, `/help`, `/quit`, et, **en session de code** (ailleurs : « disponible dans une session de
   code (nokker dans un dossier) ») :
 
@@ -82,6 +89,52 @@ terminal (stdin ou stdout non-TTY) la TUI ne démarre jamais : « mode interacti
 Dans une session locale, personne ne peut décider une carte : tout effet que le noyau n'a pas déjà couvert par une
 règle est **refusé par défaut** (mode sans surveillance) et listé dans `refused` (`tool`, `effect`, `target`).
 Les cartes d'un fil ordinaire restent `pending` (`pending_approvals`).
+
+## Éditeurs : `nokker acp`
+
+`nokker acp` parle l'**Agent Client Protocol** (v1, la version stable du SDK officiel `@agentclientprotocol/sdk` 2.0.2 :
+JSON-RPC 2.0, un message JSON par ligne sur stdin/stdout ; rien d'autre sur stdout, le journal va dans `cli.log`). Il fait
+le pont vers l'API locale du noyau, avec le même jeton que la CLI :
+
+| ACP | Noyau |
+|---|---|
+| `initialize` | protocole 1 ; `loadSession`, images, contexte embarqué, `session/list` ; aucune méthode d'authentification (jeton local) |
+| `session/new {cwd}` | `POST /v1/local/sessions {cwd}` (fil neuf du dossier de l'éditeur) ; hors racines : erreur `-32602` claire |
+| `session/load`, `session/list` | `GET /v1/local/sessions`, historique rejoué par `GET /v1/threads/{id}` |
+| `session/prompt` | `POST /v1/chat/completions` en flux → `agent_message_chunk` (ajouts seulement) ; images → `attachments` (§7.6) ; fichier embarqué → bloc de contexte ; lien de fichier → `@chemin` |
+| `tool_call` / `tool_call_update` | `tool.call` / `tool.result` : `kind` d'après l'outil et l'effet, `locations`, `rawInput` caviardé, contenu `diff` pour `patch`/`write_file` (fichier lu avant et après, sinon passage remplacé) |
+| `session/request_permission` | carte locale (`GET /v1/local/approvals`), options = mêmes choix que la CLI (`allow_once` = une fois, `allow_always` = pour la session / toujours + règle, `reject_once` = refuser), décision `POST /v1/local/approvals/{id}/decide` ; une seule décision par carte, 25 au plus par tour ; demande retirée par `$/cancel_request` si la carte est décidée ailleurs ou expire |
+| carte forte | jamais proposée à l'éditeur : l'appel dit où elle attend — « Action forte : elle attend ton téléphone » si le noyau l'a déposée chez nokker.ai (`forwarded`, `approval.forwarded`, machine liée), sinon « Action forte : à décider dans le terminal (`nokker`) » ; le texte change si elle part au téléphone après coup |
+| `session/cancel` | `POST /v1/threads/{id}/cancel`, réponse `stopReason: "cancelled"` |
+| `/cost`, `/diff [hash]`, `/plan`, `/checkpoints` | commandes annoncées (`available_commands_update`), sans tour modèle (`GET /v1/local/cost`, `POST /v1/local/tools/call`) ; `/plan` → mise à jour `plan` |
+
+Une demande ACP dure jusqu'au bout de ses suites : sur le noyau, une carte rend la main au modèle (« en attente
+d'approbation ») ; la décision répond tout de suite (`202`, `continuation: running|queued`) et le noyau range l'outil
+puis un tour de suite dans la file du fil, derrière le tour qui a posé la carte (un refus ne lance rien :
+`200`, `continuation: none`). L'appel approuvé se ferme sur le `tool.result` de l'exécuteur (même `call_id`, avec
+`approval_id`) : sa vraie sortie. `session/prompt` ne répond qu'une fois plus aucune carte ouverte, aucune décision en
+vol, aucun outil approuvé sans résultat ni tour de suite en cours. Ligne de coût sous chaque tour (`_12,4 k jetons · 0,03 €_`, coupée par `NOKKER_ACP_COST_LINE=0`) et coût du
+tour dans `_meta.nokker.cost` de la réponse. Les serveurs MCP proposés par l'éditeur sont ignorés (les connecteurs vivent
+dans le noyau).
+
+**Zed** (`agent: open settings` → External Agents → Add Custom Agent, ou directement dans `settings.json`) :
+
+```json
+{
+  "agent_servers": {
+    "Nokker": {
+      "type": "custom",
+      "command": "nokker",
+      "args": ["acp"],
+      "env": {}
+    }
+  }
+}
+```
+
+Puis « New Thread » → Nokker dans le panneau Agent. Chemin absolu si `nokker` n'est pas dans le `PATH` de Zed
+(`~/.nokker/bin/nokker` avec l'installeur) ; autre noyau : `"args": ["acp", "--server", "http://127.0.0.1:18742"]`.
+Journal du protocole côté Zed : `dev: open acp logs` ; côté Nokker : `nokker logs --component cli`.
 
 ## Connexion
 

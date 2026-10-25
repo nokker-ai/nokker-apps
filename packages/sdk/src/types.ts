@@ -165,10 +165,18 @@ export interface Approval {
   decided_at: string | null;
   result_summary: string | null;
   error: string | null;
+  /** Appel d'outil resté « en attente » dans le tour qui a posé la carte (LOKKAL.md §7.4.9) : le `tool.result` de
+   * l'exécuteur porte ce même `call_id`. `null` (ou absent, noyau d'avant le 25.10) : carte d'appel direct, carte
+   * distante. */
+  call_id?: string | null;
   /** Calculé PAR LE NOYAU, présent dans `GET /v1/local/approvals` (pas forcément dans `approval.requested`) :
    * terminal → [`terminal(<cmd>)`, `terminal(<2 premiers mots>*)`] ; fichier → [`<outil>(<chemin>)`, `<outil>(<dossier>/**)`] ;
    * carte forte → []. Absent/vide = pas d'« always ». */
   suggested_rules?: string[];
+  /** Présent dans `GET /v1/local/approvals` (noyau du 25.10, LOKKAL.md §7.3) : carte forte déposée chez nokker.ai, le
+   * lien de décision est parti au téléphone. Faux ou absent : machine non liée, ou dépôt pas encore fait (il sera
+   * annoncé par `approval.forwarded`) — elle se décide au terminal. */
+  forwarded?: boolean;
 }
 
 export type ApprovalDecisionKind = "approve" | "reject";
@@ -209,7 +217,8 @@ export type ApprovalScope = "once" | "session" | "always";
 export type ApprovalDecisionRequest = SignedApprovalDecision | WebAuthnApprovalDecision | TotpApprovalDecision;
 
 /** Corps de `POST /v1/local/approvals/{id}/decide` (jeton local). 400 si `rule` ∉ `suggested_rules` ou si la carte est
- * `strong` avec `scope` ≠ `once` ; 409 si la carte n'est plus en attente. L'action s'exécute puis le tour reprend. */
+ * `strong` avec `scope` ≠ `once` ; 409 si la carte n'est plus en attente. La réponse part tout de suite ; l'outil et le
+ * tour de suite tournent en fond (LOKKAL.md §7.4.3, §7.4.9). */
 export interface LocalApprovalDecision {
   decision: ApprovalDecisionKind;
   scope: ApprovalScope;
@@ -217,8 +226,21 @@ export interface LocalApprovalDecision {
   rule?: string;
 }
 
-/** Réponse : la carte finale + la portée et la règle effectivement écrite. */
-export type LocalApprovalResult = Approval & { scope: ApprovalScope; rule?: string | null };
+/** Ce qui tourne après une décision locale : `running` (l'outil et le tour de suite partent tout de suite), `queued` (un
+ * tour tourne ou attend sur le fil : ils passeront après, dans l'ordre des décisions), `none` (refus : rien). */
+export type ApprovalContinuation = "running" | "queued" | "none";
+
+/** Réponse de `POST /v1/local/approvals/{id}/decide` (LOKKAL.md §7.4.3) : `202` (`running`/`queued`) ou `200` (`none`),
+ * TOUT DE SUITE. `status` vaut `approved` ou `rejected` (plus `executed`/`failed`, sauf noyau d'avant le 25.10) :
+ * l'issue de l'outil arrive par le `tool.result` de l'exécuteur (`approval_id` + `call_id` de l'appel en attente), la
+ * suite par les `turn.*` du fil. `rule` : `null` pour `scope: "once"`. */
+export type LocalApprovalResult = Approval & {
+  approval_id: string;
+  scope: ApprovalScope;
+  rule?: string | null;
+  continuation: ApprovalContinuation;
+  call_id: string | null;
+};
 
 // ---------------------------------------------------------------------------
 // Événements SSE (`/v1/events`)
@@ -272,12 +294,40 @@ export interface ToolResultEvent {
   ok?: boolean;
   ms?: number;
   effect?: LocalToolEffect;
-  /** Route locale d'appel d'outil : carte à l'origine de l'appel (le résultat d'un `checkpoint_restore` approuvé arrive ici). */
+  /** Carte à l'origine de ce résultat. Avec `call_id` : sortie publiée par l'exécuteur après une carte approuvée posée
+   * par le modèle, même `call_id` que l'appel resté « en attente », `turn_id` = le tour qui a posé la carte (aussi en
+   * échec : outil en erreur, arguments changés, annulation), AVANT le tour de suite (LOKKAL.md §7.4.9). Sans `call_id` :
+   * carte d'un appel direct (`POST /v1/local/tools/call`, le résultat d'un `checkpoint_restore` approuvé arrive ici). */
   approval_id?: string;
   /** Résultat complet (non tronqué) d'un appel par `POST /v1/local/tools/call` ; `preview` en garde le début. */
   content?: string;
   /** Caviardé, tronqué à 1200 caractères par le noyau ; la CLI n'en montre que 3 lignes. */
   preview?: string;
+}
+
+/** Écriture en direct (lot X22, BUBBLES.md §6) : pendant que le modèle écrit les arguments de `write_file`, `patch` ou
+ * `page_create`, AVANT le `tool.call` du même `call_id` (rien n'est écrit sur le disque avant l'exécution normale de
+ * l'outil). `text` est un morceau À AJOUTER, déjà caviardé. Au plus un événement par `call_id` toutes les 100 ms (ou
+ * 2 Ko). Le bloc se clôt par le `tool.result` du même `call_id`, ou à défaut par le `turn.done` du tour. Seulement
+ * pour un tour streamé (`X-Nokker-Stream-Tokens: 1`). */
+export interface ToolInputDeltaEvent {
+  type: "tool.input.delta";
+  thread_id: string;
+  turn_id: string;
+  call_id: string;
+  name: "write_file" | "patch" | "page_create" | (string & {});
+  /** 0, 1, 2… par `call_id` : un `seq` déjà vu (ou plus petit) est ignoré. */
+  seq: number;
+  /** Morceau à ajouter au texte déjà reçu ; peut être vide (annonce du chemin, événement final). */
+  text: string;
+  /** Dès qu'il est connu, répété ensuite ; patch V4A : le fichier du dernier en-tête `*** Update/Add File:` vu. */
+  path?: string;
+  /** Champ streamé : `content` (write_file), `new_string` ou `patch` (patch) ; absent pour `page_create`. */
+  field?: "content" | "new_string" | "patch" | (string & {});
+  /** Dernier événement : le direct s'arrête (appel trop gros) ; garder ce qui est affiché et marquer « … ». */
+  truncated?: boolean;
+  /** Proposition abandonnée (flux coupé, appel rejoué) : retirer le bloc ; aucun `tool.result` ne suivra. */
+  discarded?: boolean;
 }
 
 /** Sous-agents (LOKKAL.md §7.4.4). */
@@ -311,6 +361,13 @@ export interface ApprovalRequestedEvent {
   approval: Approval;
 }
 
+/** Carte forte déposée chez nokker.ai (machine liée, LOKKAL.md §7.3) : elle attend aussi le téléphone. */
+export interface ApprovalForwardedEvent {
+  type: "approval.forwarded";
+  approval_id: string;
+  thread_id: string;
+}
+
 export interface ApprovalDecidedEvent {
   type: "approval.decided";
   approval_id: string;
@@ -319,6 +376,15 @@ export interface ApprovalDecidedEvent {
   decision: ApprovalStatus;
   by: VerifiedUser;
   via: DecidedVia;
+}
+
+/** Images du tour non lues : le modèle n'a pas la vision (LOKKAL.md §7.6), une fois par tour. */
+export interface AttachmentSkippedEvent {
+  type: "attachment.skipped";
+  thread_id: string;
+  turn_id: string;
+  count: number;
+  reason: string;
 }
 
 export interface TurnUsage {
@@ -338,6 +404,68 @@ export interface TurnDoneEvent {
   cancelled?: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Coût par tour (LOKKAL.md §7.8, lot X2)
+// ---------------------------------------------------------------------------
+
+/** Montants par devise (`{"EUR": 0.0312}`) : la devise est celle du catalogue de prix du noyau, jamais convertie côté
+ * client ; vide quand aucun modèle du tour n'a de prix (jetons seulement). */
+export type CostByCurrency = Record<string, number>;
+
+/** Jetons d'un ensemble d'appels modèle. `input_tokens` compte le cache (`cached_tokens` en est la part) et
+ * `output_tokens` le raisonnement (`reasoning_tokens`) ; `null` = l'amont ne l'a déclaré pour aucun appel. */
+export interface CostTokens {
+  calls: number;
+  input_tokens: number;
+  cached_tokens: number | null;
+  output_tokens: number;
+  reasoning_tokens: number | null;
+  total_tokens: number;
+}
+
+export interface ModelCost extends CostTokens {
+  model: string;
+  tiers: string[];
+  /** `null` : modèle absent du catalogue de prix (jamais un prix inventé). */
+  cost: CostByCurrency | null;
+  price_source: string | null;
+}
+
+export interface CostSummary extends CostTokens {
+  cost: CostByCurrency;
+  unpriced_models: string[];
+  models: ModelCost[];
+}
+
+/** Publié juste AVANT `turn.done` ; appels des sous-agents du tour compris (`subagent_calls`). */
+export interface TurnCostEvent extends CostSummary {
+  type: "turn.cost";
+  thread_id: string;
+  turn_id: string;
+  subagent_calls: number;
+}
+
+/** `GET /v1/local/cost?thread_id=&day=` — `session` couvre le fil et ses sous-agents ; `day` tous les fils du jour UTC. */
+export interface LocalCostTotals {
+  session: (CostSummary & { thread_id: string; turns: number }) | null;
+  day: CostSummary & { date: string; turns: number };
+}
+
+/** `GET /v1/local/memory` (jeton local, LOKKAL.md §7.13.6) — état de la mémoire longue, gardé 15 s par le noyau.
+ * `ok: null` : pas de contrôle (`mcp` : le service distant a le sien ; `off` : aucune mémoire). `error` : la raison
+ * d'une panne (DSN caviardé, jamais de mot de passe). */
+export interface LocalMemoryStatus {
+  mode: "direct" | "mcp" | "off";
+  ok: boolean | null;
+  error?: string;
+  projects?: string[] | null;
+  profile?: string | null;
+  store?: { ok: boolean; notes?: number | null; chunks?: number | null; generation?: string | number | null; model?: string | null };
+  embed?: { ok: boolean; dim?: number; ms?: number };
+  last_error?: string;
+  last_recall_ms?: number;
+}
+
 /** `turn_id` du noyau → `{thread_id, index}` (l'index est après le DERNIER « : »). */
 export function parseTurnId(turnId: string): { thread_id: string; index: number } | null {
   const i = turnId.lastIndexOf(":");
@@ -346,29 +474,52 @@ export function parseTurnId(turnId: string): { thread_id: string; index: number 
   return Number.isInteger(index) ? { thread_id: turnId.slice(0, i), index } : null;
 }
 
+import type { HookRanEvent, HookUntrustedEvent, MemoryForgottenEvent, MemoryNotedEvent } from "./local-machine.js";
+import type { IncidentUpdatedEvent, PlanCardDeletedEvent, PlanCardUpdatedEvent, PlanProposalUpdatedEvent } from "./ops.js";
+
 export type NokkerEvent =
+  | IncidentUpdatedEvent
+  | PlanCardUpdatedEvent
+  | PlanCardDeletedEvent
+  | PlanProposalUpdatedEvent
+  | HookUntrustedEvent
+  | HookRanEvent
+  | MemoryNotedEvent
+  | MemoryForgottenEvent
+  | AttachmentSkippedEvent
   | TurnStartedEvent
   | TurnDeltaEvent
   | ToolCallEvent
   | ToolResultEvent
+  | ToolInputDeltaEvent
   | SubagentStartedEvent
   | SubagentProgressEvent
   | SubagentFinishedEvent
   | ApprovalRequestedEvent
+  | ApprovalForwardedEvent
   | ApprovalDecidedEvent
+  | TurnCostEvent
   | TurnDoneEvent
   | BubbleEvent;
 
 export const NOKKER_EVENT_TYPES = [
+  "hook.untrusted",
+  "hook.ran",
+  "memory.noted",
+  "memory.forgotten",
+  "attachment.skipped",
   "turn.started",
   "turn.delta",
   "tool.call",
   "tool.result",
+  "tool.input.delta",
   "subagent.started",
   "subagent.progress",
   "subagent.finished",
   "approval.requested",
+  "approval.forwarded",
   "approval.decided",
+  "turn.cost",
   "turn.done",
   "thread.updated",
   "thread.deleted",
@@ -378,16 +529,38 @@ export const NOKKER_EVENT_TYPES = [
   "bubble.transferred",
   "session.message",
   "agent.created",
+  "agent.updated",
+  "agent.deleted",
+  "agent.run",
+  "incident.updated",
+  "plan.card.updated",
+  "plan.card.deleted",
+  "plan.proposal.updated",
 ] as const satisfies readonly NokkerEvent["type"][];
 
 // ---------------------------------------------------------------------------
 // Chat completions — compatible OpenAI, SEULE route déjà implémentée côté noyau.
 // ---------------------------------------------------------------------------
 
+/** Partie d'un message multimodal (format OpenAI) : texte, ou image en `data:` (X7, dépôt d'images dans la demande). */
+export type ChatContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string;
+  content: string | ChatContentPart[];
 }
+
+/** Texte d'un message, quelle que soit sa forme (les images ne comptent pas). */
+export function messageText(content: ChatMessage["content"]): string {
+  return typeof content === "string" ? content : content.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
+}
+
+/** Image jointe au DERNIER message user (LOKKAL.md §7.6) : octets en base64, data URL, ou chemin relatif au dossier de la
+ * session locale (lu par le noyau). png, jpeg, webp, gif ; 5 Mo et 4 images par message ; le type est lu dans les octets. */
+export type ChatAttachment =
+  | { data: string; media_type?: string; name?: string }
+  | { url: string }
+  | { path: string };
 
 export interface ChatCompletionRequest {
   model: string;

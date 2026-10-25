@@ -224,6 +224,11 @@ describe("mode non interactif", () => {
       expect(res.reply).toContain("refusée");
       expect(res.pending_approvals).toEqual([]);
       expect(res.cancelled).toBe(false);
+      // X2 : le coût du tour recopié de `turn.cost` (LOKKAL.md §7.6).
+      expect(res.cost).toMatchObject({ thread_id: res.thread_id, calls: 1, subagent_calls: 0, unpriced_models: [] });
+      expect(Object.keys(res.cost!.cost)).toEqual(["EUR"]);
+      expect(res.cost!.total_tokens).toBe(res.cost!.input_tokens + res.cost!.output_tokens);
+      expect(JSON.parse(JSON.stringify(res)).cost.type).toBeUndefined();
     } finally {
       await m2.close();
       process.env.NOKKER_CONFIG_DIR_OVERRIDE = keep;

@@ -16,6 +16,7 @@ export type SlashCommand =
   | { kind: "skills"; name: string | null }
   | { kind: "plan" }
   | { kind: "agents" }
+  | { kind: "cost" }
   | { kind: "cancel" }
   | { kind: "out" }
   | { kind: "confirm"; totp: string }
@@ -53,6 +54,7 @@ export const HELP_TEXT = `Commandes :
   /skills [nom]                       skills par famille ; avec un nom, son contenu
   /plan                               plan de la session (todo) avec l'état de chaque étape
   /agents                             sous-agents du fil : but, état, dernier outil, durée
+  /cost                               coût de la session et du jour : jetons, et montant quand le modèle a un prix
   (diff, checkpoints, rollback, skills, plan, agents : session de code seulement)
   /cancel                             annule le tour en cours (Échap aussi)
   /out                                déplie/replie l'aperçu du dernier appel d'outil (touche o aussi)
@@ -99,6 +101,8 @@ export function parseSlashCommand(line: string): SlashCommand {
       return { kind: "plan" };
     case "agents":
       return { kind: "agents" };
+    case "cost":
+      return { kind: "cost" };
     case "cancel":
       return { kind: "cancel" };
     case "out":

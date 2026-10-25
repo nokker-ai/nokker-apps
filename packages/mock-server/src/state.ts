@@ -7,7 +7,7 @@ import type { MockPage } from "./pages.js";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PermissionSettings } from "@nokker-apps/sdk";
+import type { LocalMemoryStatus, PermissionSettings } from "@nokker-apps/sdk";
 import type {
   Agent,
   Approval,
@@ -20,6 +20,7 @@ import type {
   ThreadMessage,
 } from "@nokker-apps/sdk";
 import { MockHttpError } from "./errors.js";
+import { publishTurnCost } from "./cost.js";
 
 /** Simplification dev : un seul utilisateur connecté, pas de multi-tenant ni de filtrage des
  * événements par appartenance (BUBBLES.md §6) — tous les fils appartiennent à `alice`. */
@@ -62,6 +63,8 @@ export interface MockTurn {
   sender: string | null;
   channel: string;
   created_at: string;
+  /** X7 : images jointes au message user (octets dans `MockState.images`). */
+  images?: { sha256: string; media_type: string; size: number; name?: string | null }[];
 }
 
 export interface MockThreadRecord {
@@ -82,6 +85,21 @@ export interface MockStateOptions {
   minClientVersion?: string | null;
   /** Les appareils enrôlés restent `pending` jusqu'à `POST /v1/devices/{id}/confirm` (flux réel, APPROVALS.md §3.1). */
   devicePending?: boolean;
+  /** Cartes des sessions locales : `inline` (le tour attend la décision, historique du mock) ou `kernel` (comme le noyau :
+   * l'outil répond « en attente d'approbation [approval:<id>] », le tour finit ; la décision répond tout de suite, puis
+   * l'outil s'exécute et un tour de suite tourne, dans la file du fil — LOKKAL.md §7.4.9). Défaut :
+   * `$MOCK_APPROVAL_STYLE`, sinon `inline`. */
+  approvalStyle?: "inline" | "kernel";
+  /** Machine liée à un compte nokker.ai : ses cartes fortes partent au téléphone (`forwarded`, `approval.forwarded`,
+   * LOKKAL.md §7.3). Défaut : non liée (elles se décident au terminal). */
+  strongRelay?: boolean;
+}
+
+/** Suite d'un tour arrêté sur une carte (style `kernel`) : jouée après une approbation, verrou du fil tenu — l'outil
+ * de la carte (son `tool.result` d'exécuteur) puis le tour de suite. Un refus ne la joue pas. */
+export interface PendingContinuation {
+  threadId: string;
+  run: () => Promise<void>;
 }
 
 export interface LocalSessionMeta {
@@ -118,6 +136,8 @@ export class MockState {
   threads = new Map<string, MockThreadRecord>();
   bubbles = new Map<string, Bubble>();
   agents = new Map<string, Agent>();
+  /** X7 : octets des images par sha256 (le mock ne cloisonne pas par locataire). */
+  images = new Map<string, { bytes: Buffer; media_type: string }>();
   pages = new Map<string, MockPage>();
   approvals = new Map<string, Approval>();
   /** clé = nonce */
@@ -130,6 +150,28 @@ export class MockState {
   localSessions = new Map<string, LocalSessionMeta>();
   activeTurns = new Map<string, ActiveTurn>();
   approvalWaiters = new Map<string, (o: ApprovalOutcome) => void>();
+  /** Style `kernel` : suites de tour en attente d'une décision, par carte. */
+  continuations = new Map<string, PendingContinuation>();
+  /** Modifiable en cours de route (tests). */
+  approvalStyle: "inline" | "kernel";
+  /** Machine liée : cartes fortes déposées chez nokker.ai (modifiable, tests). */
+  strongRelay: boolean;
+  /** Délai du dépôt après la pose de la carte (ms, mis à l'échelle de `speed`). */
+  strongRelayMs = 300;
+  /** `GET /v1/local/memory` (LOKKAL.md §7.13.6) : mémoire longue directe saine par défaut ; modifiable (tests). */
+  memory: LocalMemoryStatus = {
+    mode: "direct",
+    ok: true,
+    projects: ["u-local"],
+    profile: "leger",
+    store: { ok: true, notes: 12, chunks: 48, generation: 1, model: "embeddinggemma-300m" },
+    embed: { ok: true, dim: 768, ms: 14 },
+    last_recall_ms: 230,
+  };
+  /** File par fil (LOKKAL.md §7.4.9) : queue de la chaîne des verrous, par fil racine. */
+  private threadLocks = new Map<string, Promise<void>>();
+  /** Fil racine → nombre d'annulations : une suite de décision en file d'avant l'annulation est abandonnée. */
+  cancelEpochs = new Map<string, number>();
   /** Règles `allow` posées par `scope: session`, par fil (mémoire seulement). */
   sessionRules = new Map<string, string[]>();
   /** Jeton local (`local-token`), absent si le mock n'en a pas écrit. */
@@ -150,6 +192,8 @@ export class MockState {
     this.localRoots = opts.localRoots ?? null;
     this.minClientVersion = opts.minClientVersion ?? null;
     this.devicePending = opts.devicePending ?? false;
+    this.approvalStyle = opts.approvalStyle ?? (process.env.MOCK_APPROVAL_STYLE === "kernel" ? "kernel" : "inline");
+    this.strongRelay = opts.strongRelay ?? false;
   }
 
   // -- Réglages de permission (~/.config/nokker/settings.json, relus à chaque appel) ------------
@@ -207,8 +251,30 @@ export class MockState {
     this.sessionRules.set(threadId, list);
   }
 
+  /** Prend une place dans la file du fil (premier arrivé, premier servi) ; résout avec la fonction qui la rend. La place
+   * est réservée dès l'appel : deux décisions A puis B passent dans cet ordre. */
+  lockThread(threadId: string): Promise<() => void> {
+    const root = threadId.split("/sa-")[0]!;
+    const prev = this.threadLocks.get(root) ?? Promise.resolve();
+    let release!: () => void;
+    const mine = new Promise<void>((r) => (release = r));
+    const tail = prev.then(() => mine);
+    this.threadLocks.set(root, tail);
+    return prev.then(() => () => {
+      release();
+      if (this.threadLocks.get(root) === tail) this.threadLocks.delete(root);
+    });
+  }
+
+  /** Un tour tourne ou attend dans la file du fil. */
+  threadBusy(threadId: string): boolean {
+    return this.threadLocks.has(threadId.split("/sa-")[0]!);
+  }
+
   /** Annule le tour en cours du fil (et de ses sous-fils `<fil>/sa-…`) ; les cartes en attente sont retirées. */
   cancelTurn(threadId: string): { cancelled: boolean; approvals_cancelled: number } {
+    const root = threadId.split("/sa-")[0]!;
+    this.cancelEpochs.set(root, (this.cancelEpochs.get(root) ?? 0) + 1);
     const ids = [threadId, ...[...this.activeTurns.keys()].filter((k) => k.startsWith(`${threadId}/sa-`))];
     let cancelled = false;
     let approvals = 0;
@@ -220,7 +286,15 @@ export class MockState {
       }
       for (const a of this.approvals.values()) {
         if ((a.thread_id === id || a.thread_id.startsWith(`${id}/sa-`)) && a.status === "pending") {
-          this.approvalWaiters.get(a.id)?.("cancelled");
+          const waiter = this.approvalWaiters.get(a.id);
+          if (waiter) waiter("cancelled");
+          else {
+            // Style `kernel` : aucune boucle n'attend la carte ; elle est retirée (comme `mark_failed` du noyau).
+            a.status = "failed";
+            a.error = "annulé par l'utilisateur";
+            this.continuations.delete(a.id);
+            this.publish({ type: "approval.decided", approval_id: a.id, decision: "failed", by: LOCAL_OWNER, via: "local" });
+          }
           approvals++;
         }
       }
@@ -286,8 +360,8 @@ export class MockState {
     return this.createThread(firstText.slice(0, 48) || "Nouveau fil", { id: threadId });
   }
 
-  /** Ajoute un tour (user + reply) et publie turn.started / turn.delta (UNIQUE) / turn.done (§8). */
-  appendTurn(threadId: string, user: string, reply: string, opts: { sender?: string | null; channel?: string; silent?: boolean } = {}): MockTurn {
+  /** Ajoute un tour (user + reply) et publie turn.started / turn.delta (UNIQUE) / turn.cost / turn.done (§8). */
+  appendTurn(threadId: string, user: string, reply: string, opts: { sender?: string | null; channel?: string; silent?: boolean; images?: MockTurn["images"] } = {}): MockTurn {
     const rec = this.ensureThread(threadId, user);
     const turn: MockTurn = {
       index: rec.turns.length,
@@ -296,6 +370,7 @@ export class MockState {
       sender: opts.sender === undefined ? MOCK_USER : opts.sender,
       channel: opts.channel ?? "web",
       created_at: new Date().toISOString(),
+      ...(opts.images?.length ? { images: opts.images } : {}),
     };
     rec.turns.push(turn);
     rec.thread.updated_at = turn.created_at;
@@ -304,6 +379,7 @@ export class MockState {
       const turn_id = `${threadId}:${turn.index}`;
       this.publish({ type: "turn.started", thread_id: threadId, turn_id });
       if (reply) this.publish({ type: "turn.delta", thread_id: threadId, turn_id, text: reply });
+      publishTurnCost(this, threadId, turn_id, user, reply);
       this.publish({
         type: "turn.done",
         thread_id: threadId,
@@ -322,7 +398,7 @@ export class MockState {
     const turns = rec.turns.filter((t) => before === undefined || t.index < before).slice(-Math.max(1, Math.min(200, limit)));
     const out: ThreadMessage[] = [];
     for (const t of turns) {
-      out.push({ index: t.index, role: "user", content: t.user, sender: t.sender, channel: t.channel, created_at: t.created_at });
+      out.push({ index: t.index, role: "user", content: t.user, sender: t.sender, channel: t.channel, created_at: t.created_at, ...(t.images ? { images: t.images } : {}) });
       out.push({ index: t.index, role: "assistant", content: t.reply, created_at: t.created_at });
     }
     return out;

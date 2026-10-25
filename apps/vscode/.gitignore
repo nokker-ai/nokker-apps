@@ -1,0 +1,5 @@
+# copiés depuis la racine et packages/brand au moment de l'empaquetage
+LICENSE
+media/icon.png
+*.vsix
+.vscode-test/

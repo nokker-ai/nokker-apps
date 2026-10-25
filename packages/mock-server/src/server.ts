@@ -26,17 +26,17 @@
  * `aud: "nokker-login"`) et la signature sur `challenge + ".login"` sont reproduites ici tel quel.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { webcrypto } from "node:crypto";
-import { LOCAL_TOOL_CALL_PATH, argsSha256, canonicalJson, type Approval, type ApprovalStrength, type ChatMessage } from "@nokker-apps/sdk";
+import { createHash, webcrypto } from "node:crypto";
+import { LOCAL_TOOL_CALL_PATH, argsSha256, canonicalJson, type Approval, type ApprovalStrength, type ChatMessage, messageText } from "@nokker-apps/sdk";
 import { deviceToJson, finalizeDecision, knownUsersJson, KNOWN_USERS, LOCAL_OWNER, MockState, MOCK_USER, randomId, type MockDeviceRecord } from "./state.js";
-import { localTitle, rootFor, runLocalTurn } from "./local.js";
+import { localTitle, rootFor, runLocalTurn, scheduleLocalDecision } from "./local.js";
 import { handleLocalToolCall } from "./localtools.js";
+import { localCostTotals, publishTurnCost } from "./cost.js";
 import {
   MockHttpError,
   bubblesForThread,
   clone,
   closeBubble,
-  createAgent,
   createBubble,
   getBubble,
   runAction,
@@ -49,8 +49,13 @@ import { approvalBubble, verifyImageSignature, fakePreview, interpretDemo, previ
 import { BUBBLE_KINDS, BUBBLE_STATUSES, type BubbleKind } from "@nokker-apps/sdk";
 import { verifyWebAuthnAssertion } from "./webauthn.js";
 import { handleAccount } from "./account.js";
+import { handleAgents } from "./agents.js";
+import { handleTeam } from "./team.js";
+import { handleAlertReceive, handleOps, handleOpsDev } from "./ops.js";
+import { handleLocalMachine, handleLocalMachineDev, handlePreview } from "./local-machine.js";
 import { handleLink, handleLinkDev } from "./link.js";
 import { handleGatewayAuthorize, handleGatewayRelay } from "./gateway.js";
+import { handleLocal, LOCAL_TOKEN } from "./local-setup.js";
 import { handleAuthedOnboarding, handlePublicOnboarding } from "./onboarding.js";
 
 export const MOCK_TOTP_CODE = "000000";
@@ -102,6 +107,8 @@ function authUser(state: MockState, req: IncomingMessage): string | null {
   if (!header || !header.startsWith("Bearer ")) return null;
   const token = header.slice("Bearer ".length).trim();
   if (state.localToken && token === state.localToken) return isLoopbackRequest(req) ? LOCAL_OWNER : null;
+  // Jeton local fixe de l'écran /setup (`LOCAL_TOKEN`) : même règle, en boucle locale seulement.
+  if (token === LOCAL_TOKEN) return isLoopbackRequest(req) ? LOCAL_OWNER : null;
   return state.userForToken(token);
 }
 
@@ -342,7 +349,21 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     return;
   }
 
+  // Lokkal (`/v1/local/*` sous jeton local, `/v1/dev/local-mock` libre).
+  if (await handleLocal(state, { host: req.headers.host, authorization: req.headers.authorization, localPort: req.socket.localPort }, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleLinkDev(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleLocalMachineDev(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleOpsDev(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  // X18 : réception d'alertes SANS session (signée HMAC ou Bearer selon la source) ; le corps brut sert à la signature.
+  if (
+    await handleAlertReceive(state, method, path, req.headers, async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      return Buffer.concat(chunks).toString("utf-8");
+    }, (st, obj) => sendJson(res, st, obj))
+  )
+    return;
+  if (handlePreview(state, req, res, path)) return;
 
   // Tout ce qui suit exige une session valide.
   const user = authUser(state, req);
@@ -353,6 +374,9 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   if (await handleAccount(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (user && (await handleLink(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj)))) return;
   if (await handleGatewayAuthorize(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleLocalMachine(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleTeam(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleOps(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleAuthedOnboarding(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
 
   // ---- Session de code locale (LOKKAL.md §7.4.1) ------------------------------------------------
@@ -381,6 +405,18 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     });
     out.sort((a, b) => a._u.localeCompare(b._u)); // ordre du noyau : les plus anciennes d'abord
     return void sendJson(res, 200, { sessions: out.map(({ _u, ...r }) => (void _u, r)) });
+  }
+  // ---- Coût par tour (LOKKAL.md §7.6) : totaux de la session et du jour, lecture seule ------------
+  if (method === "GET" && path === "/v1/local/cost") {
+    if (user !== LOCAL_OWNER) return void sendJson(res, 401, { error: { message: "jeton local requis" } });
+    const totals = localCostTotals(state, url.searchParams.get("thread_id"), url.searchParams.get("day"));
+    if (!totals) return void sendJson(res, 400, { error: { message: "day : AAAA-MM-JJ attendu" } });
+    return void sendJson(res, 200, totals);
+  }
+  // ---- Mémoire longue (LOKKAL.md §7.13.6) : contrôle « mémoire » de `nokker doctor` -----------------
+  if (method === "GET" && path === "/v1/local/memory") {
+    if (user !== LOCAL_OWNER) return void sendJson(res, 401, { error: { message: "jeton local requis" } });
+    return void sendJson(res, 200, state.memory);
   }
   if (method === "GET" && path === "/v1/local/approvals") {
     if (user !== LOCAL_OWNER) return void sendJson(res, 403, { error: { message: "jeton local requis" } });
@@ -421,10 +457,11 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     approval.decided_via = "local";
     approval.decided_at = new Date().toISOString();
     state.publish({ type: "approval.decided", approval_id: approval.id, decision: approval.status, by: LOCAL_OWNER, via: "local" });
-    const waiter = state.approvalWaiters.get(approval.id);
-    sendJson(res, 200, { ...approval, scope: decision === "approve" ? scope : "once", rule });
-    waiter?.(decision === "approve" ? "approved" : "rejected"); // l'action s'exécute, puis le tour reprend
-    return;
+    // Réponse TOUT DE SUITE (LOKKAL.md §7.4.3) : l'outil et le tour de suite tournent en fond ; l'issue arrive par le
+    // `tool.result` de l'appel en attente (`approval_id`), la suite par les `turn.*` du fil.
+    const body202 = { ...approval, call_id: approval.call_id ?? null, approval_id: approval.id, scope: decision === "approve" ? scope : "once", rule };
+    const continuation = scheduleLocalDecision(state, approval);
+    return void sendJson(res, continuation === "none" ? 200 : 202, { ...body202, continuation });
   }
   if (method === "POST" && path === LOCAL_TOOL_CALL_PATH) {
     if (user !== LOCAL_OWNER) return void sendJson(res, 403, { error: { message: "jeton local requis" } });
@@ -585,18 +622,29 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   if (method === "GET" && path === "/v1/users") {
     return void sendJson(res, 200, knownUsersJson());
   }
-  if (method === "POST" && path === "/v1/agents") {
-    const body = await readJsonBody(req);
-    const name = typeof body.name === "string" ? body.name.trim() : "";
-    const role = typeof body.role === "string" ? body.role.trim() : "";
-    if (!name || !role) return void sendJson(res, 400, { error: { message: "name et role requis" } });
-    const tools = Array.isArray(body.tools) ? body.tools.map(String) : [];
-    const model = typeof body.model === "string" ? body.model : "";
-    return void sendJson(res, 201, createAgent(state, { name, role, model, tools }, user ?? MOCK_USER));
+  // LOKKAL §7.6 : octets d'une image d'un fil (membres ; seulement si CE fil la référence).
+  const threadImg = path.match(/^\/v1\/threads\/([^/]+)\/images\/([0-9a-f]{64})$/);
+  if (method === "GET" && threadImg) {
+    const rec = state.threads.get(decodeURIComponent(threadImg[1]!));
+    const refs = rec?.turns.some((t) => t.images?.some((im) => im.sha256 === threadImg[2]));
+    const img = state.images.get(threadImg[2]!);
+    if (!rec || !refs || !img || !rec.thread.members.includes(user ?? MOCK_USER)) return void sendJson(res, 404, { error: { message: "image inconnue" } });
+    res.writeHead(200, { "Content-Type": img.media_type, "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox", "Cache-Control": "private, max-age=3600", ...corsHeaders() });
+    res.end(img.bytes);
+    return;
   }
-  if (method === "GET" && path === "/v1/agents") {
-    return void sendJson(res, 200, [...state.agents.values()].sort((a, b) => a.created_at.localeCompare(b.created_at)));
-  }
+
+  // §9.4/§9.5 (X14) : agents et moteur du Crew. Un 204 part sans corps.
+  if (
+    await handleAgents(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => {
+      if (st === 204) {
+        res.writeHead(204, corsHeaders());
+        res.end();
+      } else sendJson(res, st, obj);
+    })
+  )
+    return;
+
 
   // ---- Événements (SSE) ------------------------------------------------------------------------
 
@@ -767,7 +815,20 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     const body = await readJsonBody(req);
     const messages = (body.messages as ChatMessage[] | undefined) ?? [];
     const threadId = String(req.headers["x-session-id"] ?? randomId("thread"));
-    const userText = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    const userText = lastUser ? messageText(lastUser.content) : "";
+    // X7 : images jointes (format OpenAI). Le mock ne les lit pas, il les compte pour la réponse de démo.
+    const imageParts = Array.isArray(lastUser?.content) ? lastUser.content.flatMap((p) => (p.type === "image_url" ? [p.image_url.url] : [])) : [];
+    const imageCount = imageParts.length;
+    // LOKKAL §7.6 : octets rangés par sha256, le tour ne garde que {sha256, media_type, size}.
+    const turnImages = imageParts.flatMap((url) => {
+      const m = /^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/.exec(url);
+      if (!m) return [];
+      const bytes = Buffer.from(m[2]!, "base64");
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
+      state.images.set(sha256, { bytes, media_type: m[1]! });
+      return [{ sha256, media_type: m[1]!, size: bytes.length }];
+    });
     const stream = Boolean(body.stream);
     const model = String(body.model ?? "nokker-mock");
     // Jetons en direct (opt-in, CLIENT-API.md §Streaming du noyau) : deltas puis chunk final `nokker.final`.
@@ -793,142 +854,152 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
       if (ping) clearInterval(ping);
     }
 
-    const turnIndex = rec.turns.length;
-    const turnId = `${threadId}:${turnIndex}`;
-    // Boîte de contexte vidée au début du tour (§8) : bulles reçues, messages d'autres sessions.
-    const context = state.drainContext(threadId);
-    state.setWorking(threadId, true);
-    state.publish({ type: "turn.started", thread_id: threadId, turn_id: turnId });
-    const isLocal = state.localSessions.has(threadId);
-    let cancelled = false;
-    let localReply = "";
-    if (isLocal) {
-      // Session locale : le tour se déroule en temps réel (outils, cartes) ; la connexion SSE reste ouverte
-      // avec des `: ping` comme le noyau.
-      const ctl = new AbortController();
-      state.activeTurns.set(threadId, { turnId, abort: ctl });
-      const ping = stream ? setInterval(() => !res.writableEnded && res.write(": ping\n\n"), 10_000) : undefined;
-      try {
-        const r = await runLocalTurn(state, threadId, turnId, userText, ctl.signal);
-        localReply = r.reply;
-        cancelled = r.cancelled;
-      } finally {
-        if (ping) clearInterval(ping);
-        state.activeTurns.delete(threadId);
+    // File par fil (LOKKAL.md §7.4.9) : un tour de session locale attend la fin du tour en cours et des suites de
+    // décisions déjà en file, puis prend l'index suivant.
+    const releaseThread = state.localSessions.has(threadId) ? await state.lockThread(threadId) : null;
+    try {
+      const turnIndex = rec.turns.length;
+      const turnId = `${threadId}:${turnIndex}`;
+      // Boîte de contexte vidée au début du tour (§8) : bulles reçues, messages d'autres sessions.
+      const context = state.drainContext(threadId);
+      state.setWorking(threadId, true);
+      state.publish({ type: "turn.started", thread_id: threadId, turn_id: turnId });
+      const isLocal = state.localSessions.has(threadId);
+      let cancelled = false;
+      let localReply = "";
+      if (isLocal) {
+        // Session locale : le tour se déroule en temps réel (outils, cartes) ; la connexion SSE reste ouverte
+        // avec des `: ping` comme le noyau.
+        const ctl = new AbortController();
+        state.activeTurns.set(threadId, { turnId, abort: ctl });
+        const ping = stream ? setInterval(() => !res.writableEnded && res.write(": ping\n\n"), 10_000) : undefined;
+        try {
+          const r = await runLocalTurn(state, threadId, turnId, userText, ctl.signal);
+          localReply = r.reply;
+          cancelled = r.cancelled;
+        } finally {
+          if (ping) clearInterval(ping);
+          state.activeTurns.delete(threadId);
+        }
       }
-    }
-    const { reply, triggersApproval, after } = isLocal
-      ? { reply: cancelled ? "" : localReply, triggersApproval: false, after: undefined }
-      : interpretDemo(state, threadId, userText, { turnId, context });
+      const demo = isLocal
+        ? { reply: cancelled ? "" : localReply, triggersApproval: false, after: undefined }
+        : interpretDemo(state, threadId, userText, { turnId, context });
+      const { triggersApproval, after } = demo;
+      const reply = imageCount > 0 && !isLocal ? `(démo) ${imageCount === 1 ? "Image reçue" : `${imageCount} images reçues`}, non analysée${imageCount === 1 ? "" : "s"} par le mock. ${demo.reply}` : demo.reply;
 
-    let approval: Approval | undefined;
-    if (triggersApproval && !state.pendingApprovalForThread(threadId)) {
-      const args = { to: "destinataire@example.com", subject: "Démo d'approbation", body: userText };
-      approval = {
-        id: randomId("appr"),
-        thread_id: threadId,
-        turn_index: turnIndex,
-        channel: "web",
-        tool_name: "send_email_bulk",
-        arguments: args,
-        args_sha256: argsSha256(args),
-        effect: "send_external",
-        rule: "effect:send_external",
-        reason: "Le message demande un envoi externe — approbation requise avant toute exécution réelle.",
-        advice: "Avis simulé : aucune donnée sensible détectée ; retour arrière trivial (rien n'est envoyé avant approbation).",
-        strength: "standard",
-        status: "pending",
-        created_at: new Date().toISOString(),
-        expires_at: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
-        decided_by: null,
-        decided_via: null,
-        decided_at: null,
-        result_summary: null,
-        error: null,
+      let approval: Approval | undefined;
+      if (triggersApproval && !state.pendingApprovalForThread(threadId)) {
+        const args = { to: "destinataire@example.com", subject: "Démo d'approbation", body: userText };
+        approval = {
+          id: randomId("appr"),
+          thread_id: threadId,
+          turn_index: turnIndex,
+          channel: "web",
+          tool_name: "send_email_bulk",
+          arguments: args,
+          args_sha256: argsSha256(args),
+          effect: "send_external",
+          rule: "effect:send_external",
+          reason: "Le message demande un envoi externe — approbation requise avant toute exécution réelle.",
+          advice: "Avis simulé : aucune donnée sensible détectée ; retour arrière trivial (rien n'est envoyé avant approbation).",
+          strength: "standard",
+          status: "pending",
+          created_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+          decided_by: null,
+          decided_via: null,
+          decided_at: null,
+          result_summary: null,
+          error: null,
+        };
+        state.approvals.set(approval.id, approval);
+        state.publish({
+          type: "tool.call",
+          thread_id: threadId,
+          turn_id: turnId,
+          call_id: randomId("call"),
+          name: approval.tool_name,
+          args_preview: JSON.stringify(args).slice(0, 200),
+        });
+        state.publish({ type: "approval.requested", approval });
+        approvalBubble(state, approval);
+      }
+
+      state.appendTurn(threadId, userText, cancelled ? "(tour annulé)" : reply, { sender: user, channel: isLocal ? "cli" : "web", silent: true, images: turnImages });
+      // Les bulles naissent pendant le tour (comme un producteur du noyau à partir d'un résultat d'outil).
+      after?.();
+      const endTurn = (): void => {
+        // `turn.delta` UNIQUE par tour (réponse complète) juste avant `turn.done` — comme le noyau P1.
+        state.publish({ type: "turn.delta", thread_id: threadId, turn_id: turnId, text: reply });
+        publishTurnCost(state, threadId, turnId, userText, reply); // X2 : le coût part avant `turn.done`
+        state.publish({
+          type: "turn.done",
+          thread_id: threadId,
+          turn_id: turnId,
+          usage: { prompt_tokens: userText.length, completion_tokens: reply.length, total_tokens: userText.length + reply.length },
+          tier: "mock",
+          ...(cancelled ? { cancelled: true } : {}),
+        });
+        state.setWorking(threadId, false);
+        state.publishThread(threadId);
       };
-      state.approvals.set(approval.id, approval);
-      state.publish({
-        type: "tool.call",
-        thread_id: threadId,
-        turn_id: turnId,
-        call_id: randomId("call"),
-        name: approval.tool_name,
-        args_preview: JSON.stringify(args).slice(0, 200),
-      });
-      state.publish({ type: "approval.requested", approval });
-      approvalBubble(state, approval);
-    }
+      const completionId = `chatcmpl-mock-${randomId("")}`;
+      const created = Math.floor(Date.now() / 1000);
+      const usage = { prompt_tokens: userText.length, completion_tokens: reply.length, total_tokens: userText.length + reply.length };
 
-    state.appendTurn(threadId, userText, cancelled ? "(tour annulé)" : reply, { sender: user, channel: isLocal ? "cli" : "web", silent: true });
-    // Les bulles naissent pendant le tour (comme un producteur du noyau à partir d'un résultat d'outil).
-    after?.();
-    const endTurn = (): void => {
-      // `turn.delta` UNIQUE par tour (réponse complète) juste avant `turn.done` — comme le noyau P1.
-      state.publish({ type: "turn.delta", thread_id: threadId, turn_id: turnId, text: reply });
-      state.publish({
-        type: "turn.done",
-        thread_id: threadId,
-        turn_id: turnId,
-        usage: { prompt_tokens: userText.length, completion_tokens: reply.length, total_tokens: userText.length + reply.length },
-        tier: "mock",
-        ...(cancelled ? { cancelled: true } : {}),
-      });
-      state.setWorking(threadId, false);
-      state.publishThread(threadId);
-    };
-    const completionId = `chatcmpl-mock-${randomId("")}`;
-    const created = Math.floor(Date.now() / 1000);
-    const usage = { prompt_tokens: userText.length, completion_tokens: reply.length, total_tokens: userText.length + reply.length };
-
-    if (!stream) {
-      endTurn();
-      sendJson(res, 200, {
-        id: completionId,
-        object: "chat.completion",
-        created,
-        model,
-        choices: [{ index: 0, message: { role: "assistant", content: reply }, finish_reason: "stop" }],
-        usage,
-      });
-      return;
-    }
-
-    const sseChunk = (
-      choiceDelta: Record<string, unknown>,
-      finish: string | null,
-      withUsage = false,
-      nokker?: { reset?: boolean; final?: boolean },
-    ): void => {
-      res.write(
-        `data: ${JSON.stringify({
+      if (!stream) {
+        endTurn();
+        sendJson(res, 200, {
           id: completionId,
-          object: "chat.completion.chunk",
+          object: "chat.completion",
           created,
           model,
-          choices: [{ index: 0, delta: choiceDelta, finish_reason: finish }],
-          ...(withUsage ? { usage } : {}),
-          ...(nokker ? { nokker } : {}),
-        })}\n\n`,
-      );
-    };
-    sseChunk({ role: "assistant" }, null);
-    // Découpe la réponse en mots pour exercer un vrai rendu incrémental côté clients.
-    const words = reply.split(" ");
-    for (const w of cancelled ? [] : words) {
-      if (res.destroyed) break;
-      sseChunk({ content: `${w} ` }, null);
-      await new Promise((r) => setTimeout(r, Math.round(18 * state.speed)));
+          choices: [{ index: 0, message: { role: "assistant", content: reply }, finish_reason: "stop" }],
+          usage,
+        });
+        return;
+      }
+
+      const sseChunk = (
+        choiceDelta: Record<string, unknown>,
+        finish: string | null,
+        withUsage = false,
+        nokker?: { reset?: boolean; final?: boolean },
+      ): void => {
+        res.write(
+          `data: ${JSON.stringify({
+            id: completionId,
+            object: "chat.completion.chunk",
+            created,
+            model,
+            choices: [{ index: 0, delta: choiceDelta, finish_reason: finish }],
+            ...(withUsage ? { usage } : {}),
+            ...(nokker ? { nokker } : {}),
+          })}\n\n`,
+        );
+      };
+      sseChunk({ role: "assistant" }, null);
+      // Découpe la réponse en mots pour exercer un vrai rendu incrémental côté clients.
+      const words = reply.split(" ");
+      for (const w of cancelled ? [] : words) {
+        if (res.destroyed) break;
+        sseChunk({ content: `${w} ` }, null);
+        await new Promise((r) => setTimeout(r, Math.round(18 * state.speed)));
+      }
+      if (liveTokens) {
+        sseChunk({ content: reply }, null, true, { reset: true, final: true });
+        sseChunk({}, "stop");
+      } else {
+        sseChunk({}, "stop", true);
+      }
+      if (!res.destroyed) res.write("data: [DONE]\n\n");
+      endTurn();
+      res.end();
+      return;
+    } finally {
+      releaseThread?.();
     }
-    if (liveTokens) {
-      sseChunk({ content: reply }, null, true, { reset: true, final: true });
-      sseChunk({}, "stop");
-    } else {
-      sseChunk({}, "stop", true);
-    }
-    if (!res.destroyed) res.write("data: [DONE]\n\n");
-    endTurn();
-    res.end();
-    return;
   }
 
   sendJson(res, 404, { error: { message: "not found" } });

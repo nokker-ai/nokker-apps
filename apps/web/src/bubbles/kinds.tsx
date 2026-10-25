@@ -2,6 +2,8 @@
  * Rendu du corps des bulles, par `kind` (BUBBLES.md §2). Un champ inconnu de `state` est ignoré ; un
  * champ attendu absent ne casse rien (le noyau peut remplir l'état en plusieurs `bubble.updated`).
  */
+import { Markdown } from "../Markdown.js";
+import { liveTail, strongCardText } from "@nokker-apps/sdk";
 import { gatewayContext, remoteApprovalUrl } from "../auth.js";
 import React, { useEffect, useRef, useState } from "react";
 import { NokkerApiError, type Approval, type Bubble, type BubbleBase } from "@nokker-apps/sdk";
@@ -33,6 +35,12 @@ export function statusLabel(b: Bubble, now: number): string {
       return b.status === "working" ? "Nina remplit" : "prête";
     case "approval":
       return b.status === "working" ? "en attente" : b.status === "done" ? "approuvée" : b.status === "failed" ? "refusée" : b.status;
+    case "handoff":
+      return HANDOFF_LABEL[b.state.state] ?? b.state.state;
+    case "plan_split":
+      return SPLIT_LABEL[b.state.state] ?? b.state.state;
+    case "brief":
+      return b.state.date ? new Date(b.state.date).toLocaleDateString("fr-CH", { weekday: "short", day: "numeric", month: "short" }) : "brief";
     default:
       return (b as { status: string }).status;
   }
@@ -268,6 +276,8 @@ function Artifact({ b }: { b: B<"artifact"> }) {
   const [copied, setCopied] = useState<"ok" | "fail" | null>(null);
   const [publicUrl, setPublicUrl] = useState<string | null>(null);
   const [dl, setDl] = useState<string | null>(null);
+  const writing = (s as { writing?: { call_id: string } }).writing;
+  const live = writing ? store.liveInputs.get(writing.call_id) : undefined;
   // Capacité d'URL expirée (relais, 1 h) : la page d'erreur du relais poste `nokker:pages-expired` ; on redemande un
   // lien, au plus une fois par minute (la page elle-même pourrait envoyer ce message en boucle).
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -295,7 +305,9 @@ function Artifact({ b }: { b: B<"artifact"> }) {
     return () => {
       live = false;
     };
-  }, [store.client, pageId, b.version, relink]);
+    // Version de la PAGE (pas de la bulle) : une bulle qui passe en `writing`, se publie ou se renomme ne recharge pas
+    // l'aperçu ; seule une nouvelle version écrite le recharge (X22, BUBBLES §10.2).
+  }, [store.client, pageId, s.version, relink]);
 
   const open = async () => {
     if (!pageId || opening) return;
@@ -369,6 +381,13 @@ function Artifact({ b }: { b: B<"artifact"> }) {
         ) : (
           <div className="skel artifact-iframe" />
         )}
+        {live ? (
+          // X22 : le texte qui s'écrit, en vue code — jamais exécuté (pas de srcdoc), l'iframe reste montée dessous.
+          <pre className="artifact-code" aria-label={`Écriture en cours de ${s.path}`}>
+            {liveTail(live.text, 40, 200).join("\n")}
+            {live.truncated ? "\n…" : ""}
+          </pre>
+        ) : null}
         {b.status === "working" ? <span className="artifact-writing">écriture…</span> : null}
       </div>
       <div className="artifact-meta fine">
@@ -464,13 +483,33 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
   const [reload, setReload] = useState(0);
   useEffect(() => {
     let live = true;
-    store.getApproval(approvalId).then((x) => live && setA(x), (e) => live && setErr(e instanceof NokkerApiError && e.status === 404 ? "Carte introuvable ou réservée à un autre compte." : String(e)));
+    // En local, `forwarded` est calculé par le noyau dans la liste des cartes locales (pas forcément sur la carte seule).
+    const read = async (): Promise<Approval> => {
+      const x = await store.getApproval(approvalId);
+      if (store.authMode !== "local" || x.forwarded !== undefined) return x;
+      const l = await store.client.listLocalApprovals().catch(() => []);
+      const f = l.find((y) => y.id === approvalId)?.forwarded;
+      return f === undefined ? x : { ...x, forwarded: f };
+    };
+    read().then((x) => live && setA(x), (e) => live && setErr(e instanceof NokkerApiError && e.status === 404 ? "Carte introuvable ou réservée à un autre compte." : String(e)));
     return () => {
       live = false;
     };
   }, [approvalId, rev, reload, store]);
   if (!a) return <div className="bubble-body">{err ? <span className="error">{err}</span> : <Skel />}</div>;
   const pending = a.status === "pending";
+  const guardLocal = async (decision: "approve" | "reject", scope: "once" | "session"): Promise<void> => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await store.decideLocal(a, decision, scope);
+      setReload((n) => n + 1);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
   const go = async (decision: "approve" | "reject", withTotp: boolean): Promise<void> => {
     setBusy(true);
     setErr(null);
@@ -487,7 +526,8 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
   // (app.nokker.ai ou le téléphone, LOKKAL.md §7.3).
   const viaGateway = store.authMode === "gateway";
   const gwHost = viaGateway ? gatewayContext() : null;
-  const canSign = store.authMode !== "demo" && store.authMode !== null && !viaGateway;
+  const local = store.authMode === "local";
+  const canSign = store.authMode !== "demo" && store.authMode !== null && !viaGateway && !local;
   return (
     <div className="bubble-body">
       <p className="notify-text">{a.reason}</p>
@@ -510,6 +550,21 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
               </button>
             </div>
           ) : null}
+          {local && a.strength !== "strong" ? (
+            <div className="bubble-actions">
+              <button type="button" className="btn btn-brass" disabled={busy} onClick={() => void guardLocal("approve", "once")}>
+                Approuver une fois
+              </button>
+              <button type="button" className="btn" disabled={busy} onClick={() => void guardLocal("approve", "session")}>
+                Pour la session
+              </button>
+              <button type="button" className="btn" disabled={busy} onClick={() => void guardLocal("reject", "once")}>
+                Refuser
+              </button>
+            </div>
+          ) : local ? (
+            <p className="fine">{strongCardText({ forwarded: a.forwarded === true || store.forwardedApprovals.has(a.id) }).replace(/`/g, "")}</p>
+          ) : null}
           {viaGateway && gwHost ? (
             <p className="fine">
               Approbation forte : confirme-la depuis un appareil enrôlé.{" "}
@@ -518,7 +573,7 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
               </a>
             </p>
           ) : null}
-          {a.strength === "standard" && !viaGateway ? (
+          {a.strength === "standard" && !viaGateway && store.authMode !== "local" ? (
             <form
               className="totp"
               onSubmit={(e) => {
@@ -545,6 +600,101 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
   );
 }
 
+const HANDOFF_LABEL: Record<string, string> = {
+  proposed: "proposé",
+  waiting: "attend la machine",
+  accepted: "accepté",
+  running: "en cours",
+  awaiting_approval: "attend ta décision",
+  done: "terminé",
+  refused: "refusé",
+  expired: "expiré",
+  failed: "échec",
+};
+const NEED_LABEL: Record<string, string> = { repo: "dépôt", host: "hôte", connector: "connecteur", mcp: "serveur MCP" };
+
+/** X21 (LOKKAL §7.16) : la session web propose de passer le relais à la machine qui a la ressource. L'utilisateur seul
+ * décide ; la machine travaille avec SES permissions ; seule sa réponse finale revient ici. Actions selon l'état. */
+const SPLIT_LABEL: Record<string, string> = { proposed: "à décider", accepted: "cartes créées", refused: "refusé", stale: "carte disparue" };
+
+/** X18 : découpage proposé par le modèle. Seul l'humain crée les cartes (actions accept/refuse, en direct). */
+function PlanSplit({ b, readOnly }: { b: B<"plan_split">; readOnly: boolean }) {
+  const s = b.state;
+  return (
+    <div className="bubble-body plan-split">
+      <p className="fine">
+        Carte « <strong>{s.card_title}</strong> » en {s.children.length} :
+      </p>
+      <ol className="plan-split-list">
+        {s.children.map((c, i) => (
+          <li key={i}>
+            <strong>{c.title}</strong>
+            {c.intent ? <span className="fine"> — {c.intent}</span> : null}
+            {c.constraints.length ? <span className="fine"> · {c.constraints.join(" · ")}</span> : null}
+          </li>
+        ))}
+      </ol>
+      {s.reason ? <p className="fine">Pourquoi : {s.reason}</p> : null}
+      {s.state === "proposed" ? <Actions b={b} readOnly={readOnly} /> : <p className="fine">{SPLIT_LABEL[s.state] ?? s.state}.</p>}
+    </div>
+  );
+}
+
+function Handoff({ b }: { b: B<"handoff"> }) {
+  const store = useStore();
+  const s = b.state;
+  const actions =
+    s.state === "proposed"
+      ? b.actions
+      : s.state === "waiting"
+        ? b.actions.filter((a) => a.id === "refuse").map((a) => ({ ...a, label: "Annuler", primary: false }))
+        : [];
+  return (
+    <div className="bubble-body handoff">
+      <p className="handoff-task">{s.task}</p>
+      <dl className="kv">
+        <dt>Besoin</dt>
+        <dd>
+          {NEED_LABEL[s.need.kind] ?? s.need.kind} <code>{s.need.name}</code>
+        </dd>
+        <dt>Machine</dt>
+        <dd>
+          {s.machine_name} <span className={`chip ${s.online ? "ok" : ""}`}>{s.online ? "en ligne" : "hors ligne"}</span>
+        </dd>
+      </dl>
+      {!s.online && (s.state === "proposed" || s.state === "waiting") ? (
+        <p className="fine">La machine est éteinte : la demande attendra qu'elle revienne (24 h au plus).</p>
+      ) : null}
+      {s.state === "proposed" ? <p className="fine">Elle travaillera avec ses propres permissions ; seule sa réponse finale reviendra ici.</p> : null}
+      {s.pending_approvals > 0 ? (
+        <p className="fine">
+          {s.pending_approvals} carte{s.pending_approvals > 1 ? "s" : ""} en attente sur la machine : elles arrivent sur ton téléphone.
+        </p>
+      ) : null}
+      {s.reply ? (
+        <div className="handoff-reply">
+          <span className="eyebrow">Réponse de « {s.machine_name} »</span>
+          <Markdown text={s.reply} />
+        </div>
+      ) : null}
+      {s.error ? (
+        <p className="error" role="alert">
+          {s.error}
+        </p>
+      ) : null}
+      {actions.length ? (
+        <div className="bubble-actions">
+          {actions.map((a) => (
+            <button key={a.id} type="button" className={`btn ${a.primary ? "btn-brass" : ""}`} onClick={() => void store.runAction(b, a.id)}>
+              {a.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function BubbleBody({ b, readOnly }: { b: Bubble; readOnly: boolean }): React.ReactElement {
   switch (b.kind) {
     case "monitor":
@@ -565,6 +715,16 @@ export function BubbleBody({ b, readOnly }: { b: Bubble; readOnly: boolean }): R
       return <AgentDraft b={b} readOnly={readOnly} />;
     case "approval":
       return <ApprovalBody b={b} />;
+    case "handoff":
+      return <Handoff b={b} />;
+    case "plan_split":
+      return <PlanSplit b={b} readOnly={readOnly} />;
+    case "brief":
+      return (
+        <div className="bubble-body brief">
+          <Markdown text={b.state.text || "(brief vide)"} />
+        </div>
+      );
     default:
       return (
         <div className="bubble-body">

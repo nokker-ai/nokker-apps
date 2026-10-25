@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { NokkerClient, generateDeviceKeyPair, signChallenge, type Bubble } from "@nokker-apps/sdk";
+import { NokkerClient, generateDeviceKeyPair, signChallenge, type Bubble, type NokkerEvent } from "@nokker-apps/sdk";
 import { startMockServer, type MockServerHandle } from "../src/index.js";
 
 let mock: MockServerHandle;
@@ -64,6 +64,28 @@ describe("pages (BUBBLES.md §10)", () => {
     expect(after.status).toBe("done");
     expect((after.state as { version: number }).version).toBe(2);
     expect(after.version).toBeGreaterThan(bubble.version);
+  });
+
+  it("réécriture en direct (X22) : state.writing pendant le write_file, deltas du HTML, puis recalage sans writing", async () => {
+    const { thread, bubble } = await newPage();
+    const seen: NokkerEvent[] = [];
+    const sub = client.subscribeEvents({ onEvent: (e) => seen.push(e) });
+    await new Promise((r) => setTimeout(r, 100));
+    await client.chatCompletion(thread, [{ role: "user", content: "modifie la page" }]);
+    await new Promise((r) => setTimeout(r, 300));
+    sub.close();
+    const updates = seen.filter((e) => e.type === "bubble.updated" && e.bubble.id === bubble.id) as Array<Extract<NokkerEvent, { type: "bubble.updated" }>>;
+    const writing = (updates[0]!.bubble.state as { writing?: { call_id: string; name: string } }).writing;
+    expect(updates[0]!.bubble.status).toBe("working");
+    expect(writing?.name).toBe("write_file");
+    const deltas = seen.filter((e) => e.type === "tool.input.delta" && e.call_id === writing!.call_id) as Array<Extract<NokkerEvent, { type: "tool.input.delta" }>>;
+    expect(deltas.map((d) => d.text).join("")).toContain("Version <b>2</b>");
+    expect(deltas.every((d) => d.path === "tarifs-d-automne.html" && d.field === "content")).toBe(true);
+    const last = updates.at(-1)!.bubble;
+    expect(last.status).toBe("done");
+    expect((last.state as { writing?: unknown; version: number }).writing).toBeUndefined();
+    expect((last.state as { version: number }).version).toBe(2);
+    expect(seen.some((e) => e.type === "tool.result" && e.call_id === writing!.call_id)).toBe(true);
   });
 
   it("publier rend la page lisible sans preuve, dépublier la referme", async () => {

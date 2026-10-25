@@ -8,6 +8,7 @@
 import { createHash } from "node:crypto";
 import type { ConnectorCard, ConnectorKind } from "@nokker-apps/sdk";
 import { MOCK_USER, randomId, type MockDeviceRecord, type MockState } from "./state.js";
+import { localMock } from "./local-setup.js";
 
 type Send = (status: number, payload: unknown) => void;
 
@@ -133,7 +134,7 @@ async function handleEmailLogin(
   return false;
 }
 
-const KINDS: ConnectorKind[] = ["mail", "calendar"];
+export const KINDS: ConnectorKind[] = ["mail", "calendar"];
 const MAIL_PRESETS = ["fastmail", "gmail", "icloud", "infomaniak"];
 const PRESET_HOST: Record<string, string> = {
   gmail: "imap.gmail.com",
@@ -149,7 +150,7 @@ function publicSettings(kind: ConnectorKind, s: Record<string, unknown>): Record
   return out;
 }
 
-function cardOf(state: MockState, kind: ConnectorKind): ConnectorCard {
+export function cardOf(state: MockState, kind: ConnectorKind): ConnectorCard {
   const c = state.connectors.get(kind);
   if (!c) return { kind, state: "absent" };
   return {
@@ -183,6 +184,7 @@ export async function handleAuthedOnboarding(
 ): Promise<boolean> {
   if (method === "POST" && path === "/v1/telegram/pairing") {
     const code = Math.random().toString(36).slice(2, 10).toUpperCase();
+    localMock(state).telegram = "pending";
     send(200, { code, link: `https://t.me/nokker_demo_bot?start=${code}`, expires_at: new Date(Date.now() + 10 * 60_000).toISOString() });
     return true;
   }

@@ -11,6 +11,7 @@ import type {
   ApprovalDecisionRequest,
   Challenge,
   ChatCompletion,
+  ChatAttachment,
   ChatCompletionChunk,
   ChatMessage,
   ConfirmDeviceRequest,
@@ -20,6 +21,8 @@ import type {
   Healthz,
   LocalApprovalDecision,
   LocalToolName,
+  LocalCostTotals,
+  LocalMemoryStatus,
   LocalToolOutcome,
   LocalApprovalResult,
   LocalSession,
@@ -53,10 +56,25 @@ import type {
   AccountUsage,
   BillingStatus,
 } from "./account.js";
-import type { LinkApproveResult, LinkDecision, LinkedMachines, LinkPending, RemoteApproval, RemoteDecision, RemoteDecisionProof } from "./link.js";
+import type { LocalProcess, LocalSecrets } from "./local-machine.js";
+import type { AlertSource, AlertSourceSecret, Incident, IncidentState, PlanCard, PlanCardDetail, PlanCardInput, PlanContext, PlanProposal } from "./ops.js";
+import type { MyInvitation, Project, ProjectInvitation, ProjectMember, ProjectNote, ProjectRole, ProjectRules, ProjectSkill } from "./team.js";
+import type { DeckView, LinkApproveResult, LinkDecision, LinkedMachines, LinkPending, RemoteApproval, RemoteDecision, RemoteDecisionProof } from "./link.js";
+import type {
+  LocalLinkStart,
+  LocalLinkRemoved,
+  LocalLinkStatus,
+  LocalModelTestRequest,
+  LocalModelTestResult,
+  LocalSetup,
+  PutLocalModelsRequest,
+} from "./local-setup.js";
 import type { PatchThreadRequest } from "./bubbles.js";
 import type {
   Agent,
+  AgentRun,
+  AgentRunPage,
+  PatchAgentRequest,
   Bubble,
   CreateAgentRequest,
   KnownUser,
@@ -250,6 +268,22 @@ export class NokkerClient {
     });
   }
 
+  /** `GET /v1/local/cost` (jeton local, lecture seule, LOKKAL.md §7.8) : totaux de la session (fil + sous-agents) et du
+   * jour UTC. Sans `threadId`, `session` vaut `null`. 404 : noyau sans journal des coûts. */
+  async getLocalCost(threadId?: string, day?: string): Promise<LocalCostTotals> {
+    const q = new URLSearchParams();
+    if (threadId) q.set("thread_id", threadId);
+    if (day) q.set("day", day);
+    const qs = q.toString();
+    return this.request<LocalCostTotals>(`/v1/local/cost${qs ? `?${qs}` : ""}`);
+  }
+
+  /** `GET /v1/local/memory` (jeton local, LOKKAL.md §7.13.6) : état de la mémoire longue (contrôle de `nokker doctor`).
+   * 401 hors jeton local ; 404 : noyau d'avant la mémoire directe. */
+  async getLocalMemory(signal?: AbortSignal): Promise<LocalMemoryStatus> {
+    return this.request<LocalMemoryStatus>("/v1/local/memory", signal ? { signal } : {});
+  }
+
   /** `POST /v1/threads/{id}/cancel` (202) — arrête le tour en cours ; le flux se termine par `turn.done {cancelled: true}`. */
   async cancelTurn(threadId: string): Promise<CancelResult> {
     return this.request<CancelResult>(`/v1/threads/${encodeURIComponent(threadId)}/cancel`, { method: "POST" });
@@ -335,6 +369,14 @@ export class NokkerClient {
       method: "POST",
       body: JSON.stringify({ to_thread: toThread, mode }),
     });
+  }
+
+  /** LOKKAL §7.6 : octets d'une image d'un message (membres du fil). Avec l'en-tête d'auth : une balise `<img>` seule
+   * ne l'enverrait pas — le web en fait une URL `blob:`. */
+  async getThreadImage(threadId: string, sha256: string): Promise<Blob> {
+    const res = await this.fetchImpl(`${this.baseUrl}/v1/threads/${encodeURIComponent(threadId)}/images/${encodeURIComponent(sha256)}`, { headers: this.headers() });
+    if (!res.ok) throw new NokkerApiError(`image ${sha256.slice(0, 8)} → ${res.status}`, res.status, undefined);
+    return await (res as unknown as Response).blob();
   }
 
   /** Remplace la liste de partage (membres = personnes, threads = fils). */
@@ -456,6 +498,209 @@ export class NokkerClient {
     );
   }
 
+  /** X15 : deck de toutes les machines (404 tant que `cloud_link.crew` est éteint : le web n'affiche pas la vue). */
+  async getDeck(): Promise<DeckView> {
+    return this.request<DeckView>("/v1/link/deck");
+  }
+
+  /** X15 : déménager un agent (`web`, `auto` ou `mc_…`). 409 `{error: {message, missing: [...]}}` : ce qui manque. */
+  async moveAgent(id: string, to: string): Promise<Agent> {
+    return this.request<Agent>(`/v1/agents/${encodeURIComponent(id)}/move`, { method: "POST", body: JSON.stringify({ to }) });
+  }
+
+  // -- Lokkal local (jeton local) : processus X6, coffre X4, hooks X3 ------------------------
+
+  async listLocalProcesses(): Promise<{ processes: LocalProcess[] }> {
+    return this.request<{ processes: LocalProcess[] }>("/v1/local/processes");
+  }
+
+  /** Lien signé (1 h) vers l'aperçu du port d'un processus ; 404 sans port ou arrêté. À ouvrir en iframe sandbox. */
+  async getProcessLink(id: string): Promise<{ url: string; expires_at: string | number; port: number }> {
+    return this.request<{ url: string; expires_at: string | number; port: number }>(`/v1/local/processes/${encodeURIComponent(id)}/link`, { method: "POST" });
+  }
+
+  async listLocalSecrets(): Promise<LocalSecrets> {
+    return this.request<LocalSecrets>("/v1/local/secrets");
+  }
+
+  /** La valeur part une fois et n'est jamais renvoyée. Par la passerelle : 403 (elle traverserait le relais). */
+  async putLocalSecret(name: string, value: string): Promise<{ name: string; updated_at: string | number }> {
+    return this.request<{ name: string; updated_at: string | number }>(`/v1/local/secrets/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify({ value }) });
+  }
+
+  async deleteLocalSecret(name: string): Promise<{ name: string; deleted: true }> {
+    return this.request<{ name: string; deleted: true }>(`/v1/local/secrets/${encodeURIComponent(name)}`, { method: "DELETE" });
+  }
+
+  /** Confiance aux hooks du dépôt de ce fil, pour CETTE empreinte (409 si le bloc a changé depuis l'ouverture). */
+  async trustProjectHooks(threadId: string, sha256: string): Promise<{ thread_id: string; root: string; sha256: string; trusted: true }> {
+    return this.request<{ thread_id: string; root: string; sha256: string; trusted: true }>("/v1/local/hooks/trust", {
+      method: "POST",
+      body: JSON.stringify({ thread_id: threadId, sha256 }),
+    });
+  }
+
+  // -- X17 : projets d'équipe (session du compte ; 404 tant que le drapeau `team` est éteint) --------------
+
+  private pj(id: string, tail = ""): string {
+    return `/v1/projects/${encodeURIComponent(id)}${tail}`;
+  }
+  async listProjects(): Promise<{ projects: Project[]; invitations: number }> {
+    return this.request<{ projects: Project[]; invitations: number }>("/v1/projects");
+  }
+  async createProject(req: { name: string; description?: string }): Promise<Project> {
+    return this.request<Project>("/v1/projects", { method: "POST", body: JSON.stringify(req) });
+  }
+  async getProject(id: string): Promise<Project> {
+    return this.request<Project>(this.pj(id));
+  }
+  async patchProject(id: string, req: Partial<Pick<Project, "name" | "description" | "budget" | "mirror">> & { repos?: string[] }): Promise<Project> {
+    return this.request<Project>(this.pj(id), { method: "PATCH", body: JSON.stringify(req) });
+  }
+  async deleteProject(id: string): Promise<{ deleted: true }> {
+    return this.request<{ deleted: true }>(this.pj(id), { method: "DELETE" });
+  }
+  async listProjectMembers(id: string): Promise<{ members: ProjectMember[] }> {
+    return this.request<{ members: ProjectMember[] }>(this.pj(id, "/members"));
+  }
+  async setProjectMemberRole(id: string, account: string, role: ProjectRole): Promise<ProjectMember> {
+    return this.request<ProjectMember>(this.pj(id, `/members/${encodeURIComponent(account)}`), { method: "PATCH", body: JSON.stringify({ role }) });
+  }
+  async removeProjectMember(id: string, account: string): Promise<{ removed: true }> {
+    return this.request<{ removed: true }>(this.pj(id, `/members/${encodeURIComponent(account)}`), { method: "DELETE" });
+  }
+  async listProjectInvitations(id: string): Promise<{ invitations: ProjectInvitation[] }> {
+    return this.request<{ invitations: ProjectInvitation[] }>(this.pj(id, "/invitations"));
+  }
+  async inviteToProject(id: string, email: string, role: ProjectRole = "member"): Promise<ProjectInvitation> {
+    return this.request<ProjectInvitation>(this.pj(id, "/invitations"), { method: "POST", body: JSON.stringify({ email, role }) });
+  }
+  async revokeProjectInvitation(id: string, iv: string): Promise<{ revoked: true }> {
+    return this.request<{ revoked: true }>(this.pj(id, `/invitations/${encodeURIComponent(iv)}`), { method: "DELETE" });
+  }
+  async listMyInvitations(): Promise<{ invitations: MyInvitation[] }> {
+    return this.request<{ invitations: MyInvitation[] }>("/v1/projects/invitations");
+  }
+  async answerInvitation(iv: string, accept: boolean): Promise<Project | { declined: true }> {
+    return this.request<Project | { declined: true }>(`/v1/projects/invitations/${encodeURIComponent(iv)}/${accept ? "accept" : "decline"}`, { method: "POST" });
+  }
+  async listProjectSkills(id: string): Promise<{ skills: ProjectSkill[] }> {
+    return this.request<{ skills: ProjectSkill[] }>(this.pj(id, "/skills"));
+  }
+  async putProjectSkill(id: string, name: string, req: { source: string; description?: string; requires_local?: boolean }): Promise<ProjectSkill> {
+    return this.request<ProjectSkill>(this.pj(id, `/skills/${encodeURIComponent(name)}`), { method: "PUT", body: JSON.stringify(req) });
+  }
+  async removeProjectSkill(id: string, name: string): Promise<{ removed: true }> {
+    return this.request<{ removed: true }>(this.pj(id, `/skills/${encodeURIComponent(name)}`), { method: "DELETE" });
+  }
+  async getProjectRules(id: string): Promise<{ rules: ProjectRules }> {
+    return this.request<{ rules: ProjectRules }>(this.pj(id, "/rules"));
+  }
+  /** Restreindre seulement : `allow` ou `mode: auto` → 400 `rules_widen`. */
+  async putProjectRules(id: string, rules: ProjectRules): Promise<{ rules: ProjectRules }> {
+    return this.request<{ rules: ProjectRules }>(this.pj(id, "/rules"), { method: "PUT", body: JSON.stringify(rules) });
+  }
+  async listProjectSecrets(id: string): Promise<{ secrets: { name: string; description?: string | null }[] }> {
+    return this.request<{ secrets: { name: string; description?: string | null }[] }>(this.pj(id, "/secrets"));
+  }
+  /** Un NOM et sa description, jamais une valeur (un corps avec `value` → 400 `secret_value_refused`). */
+  async putProjectSecret(id: string, name: string, description?: string): Promise<{ name: string; description?: string | null }> {
+    return this.request<{ name: string; description?: string | null }>(this.pj(id, `/secrets/${encodeURIComponent(name)}`), { method: "PUT", body: JSON.stringify({ description }) });
+  }
+  async removeProjectSecret(id: string, name: string): Promise<{ removed: true }> {
+    return this.request<{ removed: true }>(this.pj(id, `/secrets/${encodeURIComponent(name)}`), { method: "DELETE" });
+  }
+  /** Projet en miroir seulement (409 `mirror_off` sinon). */
+  async listProjectNotes(id: string, since?: string): Promise<{ notes: ProjectNote[]; cursor: string | number | null }> {
+    return this.request<{ notes: ProjectNote[]; cursor: string | number | null }>(this.pj(id, `/notes${since ? `?since=${encodeURIComponent(since)}` : ""}`));
+  }
+  async listProjectAgents(id: string): Promise<{ agents: Agent[] }> {
+    return this.request<{ agents: Agent[] }>(this.pj(id, "/agents"));
+  }
+
+  // ── X18 (LOKKAL §7.18) : incidents (drapeau `operate`) et plan (drapeau `plan`) ; drapeau éteint = 404.
+  async listAlertSources(): Promise<{ sources: AlertSource[] }> {
+    return this.request<{ sources: AlertSource[] }>("/v1/alerts/sources");
+  }
+  /** La clé (ou le jeton Bearer) n'est rendue qu'ICI et à la rotation. */
+  async createAlertSource(req: { name: string; format: AlertSource["format"]; auth?: AlertSource["auth"] }): Promise<AlertSourceSecret> {
+    return this.request<AlertSourceSecret>("/v1/alerts/sources", { method: "POST", body: JSON.stringify(req) });
+  }
+  async rotateAlertSource(id: string): Promise<AlertSourceSecret> {
+    return this.request<AlertSourceSecret>(`/v1/alerts/sources/${encodeURIComponent(id)}/secret`, { method: "POST" });
+  }
+  async deleteAlertSource(id: string): Promise<{ deleted: true }> {
+    return this.request<{ deleted: true }>(`/v1/alerts/sources/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+  async listIncidents(q: { state?: IncidentState | "live"; limit?: number; before?: string } = {}): Promise<{ incidents: Incident[]; next_before: string | null }> {
+    const p = new URLSearchParams();
+    if (q.state) p.set("state", q.state);
+    if (q.limit) p.set("limit", String(q.limit));
+    if (q.before) p.set("before", q.before);
+    const qs = p.toString();
+    return this.request<{ incidents: Incident[]; next_before: string | null }>(`/v1/incidents${qs ? `?${qs}` : ""}`);
+  }
+  async getIncident(id: string): Promise<Incident> {
+    return this.request<Incident>(`/v1/incidents/${encodeURIComponent(id)}`);
+  }
+  async ackIncident(id: string): Promise<Incident> {
+    return this.request<Incident>(`/v1/incidents/${encodeURIComponent(id)}/ack`, { method: "POST" });
+  }
+  async resolveIncident(id: string, note?: string): Promise<Incident> {
+    return this.request<Incident>(`/v1/incidents/${encodeURIComponent(id)}/resolve`, { method: "POST", body: JSON.stringify(note ? { note } : {}) });
+  }
+  async listPlanCards(q: { project?: string; roots?: boolean } = {}): Promise<{ cards: PlanCard[] }> {
+    const p = new URLSearchParams();
+    if (q.project) p.set("project", q.project);
+    if (q.roots) p.set("roots", "1");
+    const qs = p.toString();
+    return this.request<{ cards: PlanCard[] }>(`/v1/plan/cards${qs ? `?${qs}` : ""}`);
+  }
+  async createPlanCard(req: PlanCardInput & { title: string }): Promise<PlanCard> {
+    return this.request<PlanCard>("/v1/plan/cards", { method: "POST", body: JSON.stringify(req) });
+  }
+  async getPlanCard(id: string): Promise<PlanCardDetail> {
+    return this.request<PlanCardDetail>(`/v1/plan/cards/${encodeURIComponent(id)}`);
+  }
+  /** `status` sur une carte mère → 400 `computed`. */
+  async patchPlanCard(id: string, req: PlanCardInput): Promise<PlanCard> {
+    return this.request<PlanCard>(`/v1/plan/cards/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(req) });
+  }
+  /** Les filles remontent d'un cran (`lifted`). */
+  async deletePlanCard(id: string): Promise<{ deleted: true; lifted: string[] }> {
+    return this.request<{ deleted: true; lifted: string[] }>(`/v1/plan/cards/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+  /** Ce que reçoit un fil (ou un agent) qui travaille sur la carte. */
+  async getPlanContext(id: string): Promise<PlanContext> {
+    return this.request<PlanContext>(`/v1/plan/cards/${encodeURIComponent(id)}/context`);
+  }
+  async attachPlanThread(id: string, threadId: string): Promise<PlanCard> {
+    return this.request<PlanCard>(`/v1/plan/cards/${encodeURIComponent(id)}/threads`, { method: "POST", body: JSON.stringify({ thread_id: threadId }) });
+  }
+  async detachPlanThread(id: string, threadId: string): Promise<PlanCard> {
+    return this.request<PlanCard>(`/v1/plan/cards/${encodeURIComponent(id)}/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" });
+  }
+  async listPlanProposals(q: { card_id?: string; state?: PlanProposal["state"] } = {}): Promise<{ proposals: PlanProposal[] }> {
+    const p = new URLSearchParams();
+    if (q.card_id) p.set("card_id", q.card_id);
+    if (q.state) p.set("state", q.state);
+    const qs = p.toString();
+    return this.request<{ proposals: PlanProposal[] }>(`/v1/plan/proposals${qs ? `?${qs}` : ""}`);
+  }
+  async decidePlanProposal(id: string, decision: "accept" | "refuse"): Promise<{ proposal: PlanProposal; cards: PlanCard[] }> {
+    return this.request<{ proposal: PlanProposal; cards: PlanCard[] }>(`/v1/plan/proposals/${encodeURIComponent(id)}/${decision}`, { method: "POST" });
+  }
+  async getBrief(): Promise<{ agent: Agent | null }> {
+    return this.request<{ agent: Agent | null }>("/v1/plan/brief");
+  }
+  /** Crée (201) ou rend (200) l'agent « Brief du matin », armé. */
+  async setBrief(req: { cron?: string; tz?: string; model?: string } = {}): Promise<{ agent: Agent }> {
+    return this.request<{ agent: Agent }>("/v1/plan/brief", { method: "POST", body: JSON.stringify(req) });
+  }
+  async deleteBrief(): Promise<{ deleted: boolean }> {
+    return this.request<{ deleted: boolean }>("/v1/plan/brief", { method: "DELETE" });
+  }
+
   /** Délie une machine : son jeton est révoqué, la passerelle se ferme (404 : machine inconnue de ce compte). */
   async revokeMachine(machineId: string): Promise<{ revoked: true }> {
     return this.request<{ revoked: true }>(`/v1/link/machines/${encodeURIComponent(machineId)}/revoke`, { method: "POST" });
@@ -506,6 +751,42 @@ export class NokkerClient {
     return this.request<{ revoked: boolean }>(`/v1/connectors/${kind}`, { method: "DELETE" });
   }
 
+  // -- Lokkal : réglage du premier lancement (docs/LOKKAL.md §7) ------------------------------
+
+  async getLocalSetup(): Promise<LocalSetup> {
+    return this.request<LocalSetup>("/v1/local/setup");
+  }
+
+  /** Essai d'un point d'accès « ma propre clé » ; la clé n'est jamais renvoyée. 200 même si `ok` est faux. */
+  async testLocalModel(req: LocalModelTestRequest): Promise<LocalModelTestResult> {
+    return this.request<LocalModelTestResult>("/v1/local/setup/models/test", { method: "POST", body: JSON.stringify(req) });
+  }
+
+  /** Modèle par défaut et clés de l'utilisateur ; rend le réglage à jour (forme de `getLocalSetup`). */
+  async putLocalModels(req: PutLocalModelsRequest): Promise<LocalSetup> {
+    return this.request<LocalSetup>("/v1/local/setup/models", { method: "PUT", body: JSON.stringify(req) });
+  }
+
+  /** Marque le réglage comme terminé (rend `{done:true}`, sans condition côté noyau). */
+  async finishLocalSetup(): Promise<{ done: true }> {
+    return this.request<{ done: true }>("/v1/local/setup/done", { method: "POST" });
+  }
+
+  /** Démarre le flux d'appareil pour lier Lokkal à un compte nokker.ai (docs/LOKKAL.md §7.2). */
+  async startLocalLink(): Promise<LocalLinkStart> {
+    return this.request<LocalLinkStart>("/v1/local/link/start", { method: "POST" });
+  }
+
+  /** Sondage du flux d'appareil (404 `no_link_in_progress` sans flux). */
+  async getLocalLinkStatus(): Promise<LocalLinkStatus> {
+    return this.request<LocalLinkStatus>("/v1/local/link/status");
+  }
+
+  /** Délie Lokkal du compte : la clé du Router est effacée du coffre local et révoquée côté nokker.ai. */
+  async unlinkLocal(): Promise<LocalLinkRemoved> {
+    return this.request<LocalLinkRemoved>("/v1/local/link", { method: "DELETE" });
+  }
+
   // -- Telegram (contrat C4) ---------------------------------------------------------------
 
   async createTelegramPairing(): Promise<TelegramPairing> {
@@ -547,6 +828,59 @@ export class NokkerClient {
   /** §9.4 — `status` vaut toujours `armed` à la création ; `name`/`role` requis (400 sinon). */
   async createAgent(req: CreateAgentRequest): Promise<Agent> {
     return this.request<Agent>("/v1/agents", { method: "POST", body: JSON.stringify(req) });
+  }
+
+  // §9.5 (X14) — moteur du Crew. Le clic de l'humain EST la décision ; seul `arm` avec une écriture levée
+  // (`auto_approve`) demande une carte forte (202 `{approval_id}`).
+  private agentPath(id: string, tail = ""): string {
+    return `/v1/agents/${encodeURIComponent(id)}${tail}`;
+  }
+
+  /** Changer trigger, tools, auto_approve ou secrets d'un agent armé le remet en `paused`. */
+  async patchAgent(id: string, req: PatchAgentRequest): Promise<Agent> {
+    return this.request<Agent>(this.agentPath(id), { method: "PATCH", body: JSON.stringify(req) });
+  }
+
+  /** 200 : l'agent armé ; 202 `{approval_id, agent}` : une carte forte d'abord (règle d'écriture pas encore approuvée
+   * sous cette forme) ; un second `arm` pendant l'attente rend la même carte. */
+  async armAgent(id: string): Promise<Agent | { approval_id: string; agent: Agent }> {
+    return this.request<Agent | { approval_id: string; agent: Agent }>(this.agentPath(id, "/arm"), { method: "POST" });
+  }
+
+  async getAgent(id: string): Promise<Agent> {
+    return this.request<Agent>(this.agentPath(id));
+  }
+
+  /** Agent déclenché par `webhook:<id>` : nouvelle clé, rendue UNE seule fois (503 sans moteur). */
+  async rotateAgentWebhookSecret(id: string): Promise<{ secret: string; url?: string }> {
+    return this.request<{ secret: string; url?: string }>(this.agentPath(id, "/webhook-secret"), { method: "POST" });
+  }
+
+  /** L'agent passe `paused` ; un passage en cours continue (l'annuler à part). */
+  async disarmAgent(id: string): Promise<Agent> {
+    return this.request<Agent>(this.agentPath(id, "/disarm"), { method: "POST" });
+  }
+
+  /** Lancer maintenant (tout statut sauf `running`) : 202 `{run_id}`. */
+  async runAgent(id: string): Promise<{ run_id: string }> {
+    return this.request<{ run_id: string }>(this.agentPath(id, "/run"), { method: "POST" });
+  }
+
+  /** 204 ; un passage en cours est annulé d'abord, les fils des passages restent. */
+  async deleteAgent(id: string): Promise<void> {
+    await this.request<unknown>(this.agentPath(id), { method: "DELETE" });
+  }
+
+  async listAgentRuns(id: string, opts: { limit?: number; before?: string } = {}): Promise<AgentRunPage> {
+    const q = new URLSearchParams();
+    if (opts.limit) q.set("limit", String(opts.limit));
+    if (opts.before) q.set("before", opts.before);
+    const qs = q.toString();
+    return this.request<AgentRunPage>(this.agentPath(id, `/runs${qs ? `?${qs}` : ""}`));
+  }
+
+  async cancelAgentRun(id: string, runId: string): Promise<AgentRun> {
+    return this.request<AgentRun>(this.agentPath(id, `/runs/${encodeURIComponent(runId)}/cancel`), { method: "POST" });
   }
 
   /** @deprecated `GET /v1/agents` est au contrat (§9.4) : utiliser `listAgents`. */
@@ -621,14 +955,15 @@ export class NokkerClient {
     messages: ChatMessage[],
     onChunk: (chunk: ChatCompletionChunk) => void,
     model = "nokker",
-    opts: { liveTokens?: boolean; signal?: AbortSignal } = {},
+    opts: { liveTokens?: boolean; signal?: AbortSignal; attachments?: ChatAttachment[] } = {},
   ): Promise<void> {
     const extra: Record<string, string> = { "X-Session-Id": threadId };
     if (opts.liveTokens !== false) extra["X-Nokker-Stream-Tokens"] = "1";
     const res = await this.fetchImpl(`${this.baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { ...this.headers(extra), "Content-Type": "application/json" },
-      body: JSON.stringify({ model, messages, stream: true }),
+      // Images du dernier message user (LOKKAL.md §7.6) : `attachments` à côté de `content`, jamais d'adresse http(s).
+      body: JSON.stringify({ model, messages, stream: true, ...(opts.attachments?.length ? { attachments: opts.attachments } : {}) }),
       timeout: false, // un tour peut attendre une approbation plus de 5 min (délai d'inactivité par défaut de bun)
       ...(opts.signal ? { signal: opts.signal } : {}),
     });

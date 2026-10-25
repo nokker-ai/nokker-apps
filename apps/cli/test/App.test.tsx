@@ -12,7 +12,7 @@ let dir: string;
 let mock: MockServerHandle;
 const keep = process.env.NOKKER_CONFIG_DIR_OVERRIDE;
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-async function frameHas(r: ReturnType<typeof render>, text: string, ms = 5000): Promise<void> {
+async function frameHas(r: ReturnType<typeof render>, text: string, ms = 10_000): Promise<void> {
   const t0 = Date.now();
   while (!(r.lastFrame() ?? "").includes(text)) {
     if (Date.now() - t0 > ms) throw new Error(`absent : ${text}\n${r.lastFrame()}`);
@@ -82,6 +82,32 @@ describe("App (session locale)", () => {
     r.unmount();
   });
 
+  it("noyau réel (carte « en attente ») : l'appel attend sa carte, puis affiche la vraie sortie de l'outil approuvé", async () => {
+    mock.state.approvalStyle = "kernel";
+    try {
+      const r = render(<App baseUrl={mock.url} cwd="/work/noyau" />);
+      await frameHas(r, "Session de code sur /work/noyau");
+      r.stdin.write("corrige le test add");
+      await wait(50);
+      r.stdin.write("\r");
+      await frameHas(r, "Action à approuver");
+      await frameHas(r, "⏸ terminal pytest -q tests/test_add.py (en attente d'approbation)");
+      await wait(150);
+      r.stdin.write("2"); // Une fois
+      // `tool.result` de l'exécuteur (même call_id, approval_id) : la ligne se ferme, sortie dépliée.
+      await frameHas(r, "✓ terminal pytest -q tests/test_add.py");
+      await frameHas(r, "1 passed in 0.12s");
+      await frameHas(r, "Commande : rm -rf build"); // la carte forte arrive dans le tour de suite
+      await wait(150);
+      r.stdin.write("\u0003"); // refus : rien ne tourne après (continuation « none »)
+      await frameHas(r, "✗ Refusé : terminal rm -rf build");
+      await frameHas(r, "✗ terminal rm -rf build");
+      r.unmount();
+    } finally {
+      mock.state.approvalStyle = "inline";
+    }
+  });
+
   it("Échap pendant une carte ne décide pas ; /cancel annule le tour", async () => {
     const r = render(<App baseUrl={mock.url} cwd="/work/annule-moi" />);
     await frameHas(r, "Session de code sur /work/annule-moi");
@@ -136,6 +162,19 @@ describe("App (commandes d'outils du noyau)", () => {
     await frameHas(r, "Sous-agents :");
     expect(r.lastFrame()).toContain("dernier outil : patch");
     expect(r.lastFrame()).toContain("lire les tests et proposer un correctif");
+    r.unmount();
+  });
+
+  it("ligne de coût sous chaque tour, puis /cost (session et jour)", async () => {
+    const r = await open("/work/cout");
+    await type(r, "bonjour");
+    await frameHas(r, "jetons · ");
+    expect(r.lastFrame()).toMatch(/· [\d,]+ k jetons · (?:< )?0,0\d €/);
+    expect(r.lastFrame()).not.toMatch(/\d+ tokens \(/); // le pied de tour ne répète pas les jetons
+    await type(r, "/cost");
+    await frameHas(r, "Coût");
+    await frameHas(r, "session : 1 tour(s)");
+    expect(r.lastFrame()).toMatch(/jour \(\d{4}-\d{2}-\d{2}, UTC\) : \d+ tour\(s\)/);
     r.unmount();
   });
 

@@ -137,6 +137,20 @@ describe("suite d'outils et cartes locales (mode accept_edits)", () => {
     expect(done.cancelled).toBeUndefined();
   });
 
+  it("écriture en direct (X22) : tool.input.delta du patch, chemin d'abord, seq croissant, avant son tool.call", async () => {
+    const th = await newSession();
+    await drive(th, "corrige le test add", once);
+    const i = events.findIndex((e) => e.type === "tool.call" && e.thread_id === th && e.name === "patch");
+    const call = events[i] as Extract<NokkerEvent, { type: "tool.call" }>;
+    const deltas = events.filter((e) => e.type === "tool.input.delta" && e.thread_id === th) as Array<Extract<NokkerEvent, { type: "tool.input.delta" }>>;
+    expect(deltas.length).toBeGreaterThan(2);
+    expect(deltas.every((d) => d.call_id === call.call_id && d.name === "patch" && d.path === "src/app.py" && d.field === "new_string")).toBe(true);
+    expect(deltas.map((d) => d.seq)).toEqual(deltas.map((_, k) => k));
+    expect(deltas[0]!.text).toBe("");
+    expect(deltas.map((d) => d.text).join("")).toContain("return a + b\n");
+    expect(events.indexOf(deltas.at(-1)!)).toBeLessThan(i);
+  });
+
   it("scope session : plus de carte pour la même commande dans ce fil, mais une carte dans un autre fil", async () => {
     const th = await newSession();
     await drive(th, "corrige le test add", (c) => client.decideLocalApproval(c.id, { decision: "approve", scope: c.suggested_rules?.length ? "session" : "once" }));
@@ -370,5 +384,94 @@ describe("POST /v1/local/tools/call", () => {
     await wait(100);
     const types = events.slice(before).filter((e) => "thread_id" in e && (e as { thread_id?: string }).thread_id === th || e.type.startsWith("approval")).map((e) => e.type);
     expect(types.filter((t) => t.startsWith("turn.") || t === "tool.call")).toEqual([]);
+  });
+});
+
+describe("décision locale : réponse tout de suite (LOKKAL.md §7.4.3, §7.4.9)", () => {
+  const cardAfter = (th: string, first: string): Approval | undefined =>
+    (events.filter((e) => e.type === "approval.requested") as Array<{ approval: Approval }>).map((e) => e.approval).find((a) => a.thread_id === th && a.id !== first);
+  const raw = async (id: string, body: Record<string, unknown>): Promise<{ status: number; json: Record<string, unknown> }> => {
+    const r = await fetch(`${mock.url}/v1/local/approvals/${id}/decide`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${mock.localToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return { status: r.status, json: (await r.json()) as Record<string, unknown> };
+  };
+
+  it("inline : 202 running (approuvée) / 200 none (refus) ; status approved|rejected ; le tool.result porte approval_id", async () => {
+    const th = await newSession("/work/inline-202");
+    const turn = startTurn(th, "corrige le test add");
+    const c1 = await until(() => pendingCard(th));
+    const r1 = await raw(c1.id, { decision: "approve", scope: "once" });
+    expect(r1.status).toBe(202);
+    expect(r1.json).toMatchObject({ id: c1.id, approval_id: c1.id, status: "approved", continuation: "running", scope: "once", rule: null });
+    expect(typeof r1.json.call_id).toBe("string");
+    const done1 = await until(() => resultsOf(th).find((e) => e.approval_id === c1.id));
+    expect(done1).toMatchObject({ call_id: r1.json.call_id, is_error: false });
+    const c2 = await until(() => cardAfter(th, c1.id));
+    const r2 = await raw(c2.id, { decision: "reject", scope: "once" });
+    expect(r2.status).toBe(200);
+    expect(r2.json).toMatchObject({ approval_id: c2.id, status: "rejected", continuation: "none" });
+    await turn;
+  });
+
+  it("kernel : la carte rend la main ; approuvée → queued derrière le tour, tool.result de l'exécuteur AVANT le tour de suite ; refus → rien ne tourne", async () => {
+    mock.state.approvalStyle = "kernel";
+    try {
+      const th = await newSession("/work/kernel-202");
+      const from = events.length;
+      const turn = startTurn(th, "corrige le test add");
+      const c1 = await until(() => pendingCard(th));
+      const call = await until(() => resultsOf(th).find((e) => e.preview?.includes(`[approval:${c1.id}]`)));
+      // Décidée pendant que le tour qui l'a posée se termine : la suite passe après lui.
+      const r1 = await raw(c1.id, { decision: "approve", scope: "once" });
+      expect(r1.status).toBe(202);
+      expect(r1.json).toMatchObject({ approval_id: c1.id, status: "approved", call_id: call.call_id });
+      expect(["queued", "running"]).toContain(r1.json.continuation);
+      await turn;
+      const exec = await until(() => resultsOf(th).find((e) => e.approval_id === c1.id));
+      expect(exec).toMatchObject({ call_id: call.call_id, turn_id: call.turn_id, name: "terminal", ok: true, is_error: false });
+      expect(exec.preview).toContain("1 passed");
+      const after = events.slice(from);
+      const execAt = after.indexOf(exec);
+      const followStart = after.findIndex((e, i) => i > execAt && e.type === "turn.started" && e.thread_id === th);
+      expect(followStart).toBeGreaterThan(execAt);
+      // Le tour de suite prend l'index suivant (il voit le tour qui a posé la carte).
+      expect((after[followStart] as { turn_id: string }).turn_id).toBe(`${th}:1`);
+      const c2 = await until(() => cardAfter(th, c1.id));
+      await until(() => !mock.state.threadBusy(th));
+      const started = events.filter((e) => e.type === "turn.started" && e.thread_id === th).length;
+      const r2 = await raw(c2.id, { decision: "reject", scope: "once" });
+      expect(r2.status).toBe(200);
+      expect(r2.json).toMatchObject({ status: "rejected", continuation: "none" });
+      await wait(100);
+      expect(events.filter((e) => e.type === "turn.started" && e.thread_id === th).length).toBe(started);
+      expect(resultsOf(th).some((e) => e.approval_id === c2.id)).toBe(false);
+    } finally {
+      mock.state.approvalStyle = "inline";
+    }
+  });
+
+  it("kernel : annulation pendant qu'une suite attend dans la file → carte failed, tool.result en erreur, pas de tour de suite", async () => {
+    mock.state.approvalStyle = "kernel";
+    try {
+      const th = await newSession("/work/kernel-cancel");
+      const turn = startTurn(th, "corrige le test add");
+      const c1 = await until(() => pendingCard(th));
+      // Le tour qui a posé la carte tient encore la file : on la retient pour que la suite soit en file.
+      const hold = mock.state.lockThread(th);
+      await turn;
+      const r1 = await raw(c1.id, { decision: "approve", scope: "once" });
+      expect(r1.json.continuation).toBe("queued");
+      await client.cancelTurn(th);
+      (await hold)();
+      const exec = await until(() => resultsOf(th).find((e) => e.approval_id === c1.id));
+      expect(exec).toMatchObject({ is_error: true, preview: "annulé par l'utilisateur" });
+      await wait(50);
+      expect(events.filter((e) => e.type === "turn.started" && e.thread_id === th)).toHaveLength(1);
+    } finally {
+      mock.state.approvalStyle = "inline";
+    }
   });
 });

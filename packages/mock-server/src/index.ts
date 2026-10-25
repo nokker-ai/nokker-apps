@@ -11,6 +11,8 @@ export { accountMock } from "./account.js";
 export { linkMock } from "./link.js";
 export { MockState, MOCK_USER, KNOWN_USERS, LOCAL_OWNER } from "./state.js";
 export { isHardline } from "./local.js";
+export { costBook, MOCK_COST_MODEL, MOCK_PREFIX_TOKENS, MOCK_PRICES } from "./cost.js";
+export { localMock, LOCAL_TOKEN } from "./local-setup.js";
 export { seedDemo, sessionMessage, type DemoIds } from "./demo.js";
 import { seedDemo, type DemoIds } from "./demo.js";
 
@@ -48,6 +50,8 @@ export async function startMockServer(
     localRoots?: string[] | null;
     minClientVersion?: string | null;
     devicePending?: boolean;
+    /** Cartes locales : `inline` (défaut) ou `kernel` (comme le noyau, voir `MockStateOptions.approvalStyle`). */
+    approvalStyle?: "inline" | "kernel";
   } = {},
 ): Promise<MockServerHandle> {
   const configDir = opts.configDir !== undefined ? opts.configDir : process.env.NOKKER_CONFIG_DIR_OVERRIDE || null;
@@ -58,6 +62,7 @@ export async function startMockServer(
     localRoots: opts.localRoots !== undefined ? opts.localRoots : envRoots,
     minClientVersion: opts.minClientVersion ?? process.env.MOCK_MIN_CLIENT_VERSION ?? null,
     devicePending: opts.devicePending ?? process.env.MOCK_DEVICE_PENDING === "1",
+    ...(opts.approvalStyle ? { approvalStyle: opts.approvalStyle } : {}),
   });
   if (configDir) {
     mkdirSync(configDir, { recursive: true, mode: 0o700 });

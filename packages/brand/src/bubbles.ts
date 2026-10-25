@@ -1,7 +1,7 @@
 // Couleurs, icônes et libellés des bulles — côté client UNIQUEMENT (BUBBLES.md §2 : « couleurs côté client
 // (packages/brand), jamais dans l'API »). Couleur + icône + libellé ensemble : la couleur n'est jamais le seul signal.
 
-export type BubbleKindName = "monitor" | "search" | "notify" | "timer" | "script" | "media" | "artifact" | "agent_draft" | "approval";
+export type BubbleKindName = "monitor" | "search" | "notify" | "timer" | "script" | "media" | "artifact" | "agent_draft" | "approval" | "handoff" | "plan_split" | "brief";
 
 export interface BubbleKindTheme {
   label: string;
@@ -27,6 +27,9 @@ export const BUBBLE_THEME: Record<BubbleKindName, BubbleKindTheme> = {
   artifact: { label: "Page", color: "#C3E26B", rgb: "195,226,107", light: "#4F6B0E", lightRgb: "79,107,14", icon: "page" },
   agent_draft: { label: "Nouvel agent", color: "#5FD4C8", rgb: "95,212,200", light: "#0B6E67", lightRgb: "11,110,103", icon: "bot" },
   approval: { label: "Approbation", color: "#FF6F61", rgb: "255,111,97", light: "#C8313A", lightRgb: "200,49,58", icon: "shield" },
+  handoff: { label: "Relais", color: "#B39DFF", rgb: "179,157,255", light: "#5B3FC4", lightRgb: "91,63,196", icon: "terminal" },
+  plan_split: { label: "Découpage", color: "#7FD1FF", rgb: "127,209,255", light: "#0B5F8A", lightRgb: "11,95,138", icon: "page" },
+  brief: { label: "Brief", color: "#F2C94C", rgb: "242,201,76", light: "#7A5A00", lightRgb: "122,90,0", icon: "bell" },
 };
 
 /** Thème neutre d'un `kind` que ce client ne connaît pas (le noyau peut en ajouter avant nous). */
@@ -45,10 +48,10 @@ export function bubbleTheme(kind: string): BubbleKindTheme {
 
 /** Deck Crew : bleu = au repos, vert = armé, orange = en marche, rouge = en erreur. `light*` : sur fond clair. */
 export const AGENT_STATUS_THEME = {
-  idle: { label: "Au repos", color: "#6FA8FF", rgb: "111,168,255", light: "#1F5FD1", lightRgb: "31,95,209" },
+  paused: { label: "Au repos", color: "#6FA8FF", rgb: "111,168,255", light: "#1F5FD1", lightRgb: "31,95,209" },
   armed: { label: "Armé", color: "#5BD39A", rgb: "91,211,154", light: "#0F7340", lightRgb: "15,115,64" },
   running: { label: "En marche", color: "#F2A34A", rgb: "242,163,74", light: "#A85400", lightRgb: "168,84,0" },
-  error: { label: "En erreur", color: "#FF6B6B", rgb: "255,107,107", light: "#C62828", lightRgb: "198,40,40" },
+  failed: { label: "En échec", color: "#FF6B6B", rgb: "255,107,107", light: "#C62828", lightRgb: "198,40,40" },
 } as const;
 
 /**

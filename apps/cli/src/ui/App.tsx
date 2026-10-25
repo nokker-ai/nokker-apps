@@ -45,6 +45,7 @@ import { applyToolEvent, type ToolLine } from "../toolview.js";
 import { decisionSummary, resolveEffect } from "../approval-model.js";
 import { ringBell } from "../bell.js";
 import { HELP_TEXT, parseSlashCommand } from "../commands.js";
+import { formatCostTotals, turnCostLine } from "../cost.js";
 import { Markdown } from "./Markdown.js";
 import { ToolCallView } from "./ToolCallView.js";
 import { ApprovalCard } from "./ApprovalCard.js";
@@ -109,6 +110,8 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
   const inputRef = useRef("");
   const swallowRef = useRef(false);
   const lastToolRef = useRef<string | null>(null);
+  /** `turn_id` du dernier `turn.cost` reçu pour ce fil (le `turn.done` qui suit ne réaffiche pas les jetons au pied). */
+  const costTurnRef = useRef<string | null>(null);
   /** Résolu à la première connexion `/v1/events` : un tour ne part pas avant (sinon ses premiers événements sont perdus). */
   const connectedRef = useRef<() => void>(() => {});
   const connectedPromise = useRef<Promise<void>>(new Promise<void>((r) => (connectedRef.current = r)));
@@ -257,6 +260,31 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** Lignes d'outil (X22 compris) : applique l'événement au modèle pur, puis recopie dans le fil — ligne mise à jour en
+   * place, ajoutée si nouvelle, retirée si le modèle l'a retirée (proposition abandonnée, jamais appelée). */
+  function applyToolFeed(event: NokkerEvent): void {
+    const before = toolLinesRef.current;
+    const after = applyToolEvent(before, event);
+    if (after === before) return;
+    toolLinesRef.current = after;
+    const fidOf = (l: ToolLine): string => `tool:${l.callId}`;
+    const was = new Set(before.map(fidOf));
+    const now = new Map(after.map((l) => [fidOf(l), l]));
+    for (const l of after) if (!was.has(fidOf(l))) lastToolRef.current = fidOf(l);
+    setFeed((f) => {
+      const shown = new Set<string>();
+      const next = f.flatMap<FeedItem>((it) => {
+        if (it.kind !== "tool") return [it];
+        shown.add(it.id);
+        const l = now.get(it.id);
+        if (l) return [{ ...it, call: l }];
+        return was.has(it.id) ? [] : [it];
+      });
+      for (const [fid, l] of now) if (!shown.has(fid) && !was.has(fid)) next.push({ kind: "tool", id: fid, call: l });
+      return next;
+    });
+  }
+
   function handleEvent(event: NokkerEvent, session: CliSession): void {
     switch (event.type) {
       case "approval.requested":
@@ -271,28 +299,29 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         if (!summarizedRef.current.has(event.approval_id)) {
           pushSystem(`Approbation ${event.approval_id} : ${event.decision} par ${event.by} (${event.via}).`);
         }
+        applyToolFeed(event); // l'appel qui attendait la carte : « exécution… », ou fermé s'il est refusé
         return;
+      case "tool.input.delta":
       case "tool.call":
       case "tool.result": {
         if (event.thread_id !== session.threadId) return;
-        if (event.type === "tool.call") {
-          const fid = `tool:${event.call_id}`;
-          const line = applyToolEvent([], event)[0]!;
-          lastToolRef.current = fid;
-          toolLinesRef.current = [...toolLinesRef.current, line];
-          setFeed((f) => [...f, { kind: "tool", id: fid, call: line }]);
-        } else {
-          if (event.approval_id) {
-            restoreDoneRef.current.set(event.approval_id, { content: event.content ?? event.preview ?? "", is_error: event.is_error === true });
-            showRestoreResult(event.approval_id);
+        if (event.type === "tool.result") {
+          if (!event.call_id) {
+            // Appel direct : apparié par approval_id, pas de ligne d'outil.
+            if (event.approval_id) {
+              restoreDoneRef.current.set(event.approval_id, { content: event.content ?? event.preview ?? "", is_error: event.is_error === true });
+              showRestoreResult(event.approval_id);
+            }
+            return;
           }
-          if (!event.call_id) return; // appel direct : apparié par approval_id ci-dessus, pas de ligne d'outil
-          const fid = `tool:${event.call_id}`;
-          toolLinesRef.current = toolLinesRef.current.map((l) => (l.callId === event.call_id ? applyToolEvent([l], event)[0]! : l));
-          setFeed((f) =>
-            f.map((it) => (it.id === fid && it.kind === "tool" ? { ...it, call: applyToolEvent([it.call], event)[0]! } : it)),
-          );
+          if (event.approval_id) {
+            // Sortie de l'exécuteur après la carte (LOKKAL.md §7.4.9) : la vraie sortie de l'outil approuvé, dépliée.
+            const fid = `tool:${event.call_id}`;
+            lastToolRef.current = fid;
+            setExpanded((cur) => (cur.has(fid) ? cur : new Set(cur).add(fid)));
+          }
         }
+        applyToolFeed(event);
         return;
       }
       case "subagent.started":
@@ -320,10 +349,21 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         // turn.delta est UNIQUE par tour côté noyau (réponse complète) : on l'affiche d'un bloc.
         if (event.thread_id !== session.threadId) pushSystem(`[autre fil ${event.thread_id}] ${event.text}`);
         return;
+      case "turn.cost":
+        // Publié juste avant `turn.done` (LOKKAL.md §7.6) : une ligne discrète sous le tour, au lieu du pied.
+        if (event.thread_id === session.threadId) {
+          costTurnRef.current = event.turn_id;
+          const line = turnCostLine(event);
+          if (line) pushSystem(line);
+        }
+        return;
       case "turn.done":
         if (event.thread_id === session.threadId) {
-          setLastUsage(event.usage);
-          setLastCost(event.cost_chf ?? null);
+          applyToolFeed(event); // replie les blocs d'écriture encore ouverts de ce tour
+          // Noyau sans `turn.cost` : le pied de tour reste le seul affichage des jetons.
+          const hasCostLine = costTurnRef.current === event.turn_id;
+          setLastUsage(hasCostLine ? null : event.usage);
+          setLastCost(hasCostLine ? null : (event.cost_chf ?? null));
           if (event.cancelled) pushSystem("⏹ tour annulé.");
         }
         return;
@@ -586,6 +626,17 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
       case "agents": {
         if (!session || !localOnly(session)) return;
         pushSystem(formatSubagents(subagentsRef.current));
+        return;
+      }
+
+      case "cost": {
+        if (!session) return;
+        try {
+          pushSystem(formatCostTotals(await session.getCost()));
+        } catch (err) {
+          if (err instanceof NokkerApiError && [404, 405].includes(err.status)) pushSystem("/cost : non disponible sur ce serveur (noyau local seulement)");
+          else pushSystem(toolCallError("/cost", err));
+        }
         return;
       }
 
@@ -991,8 +1042,9 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
     setApprovalBusy(true);
     setApprovalMessage(null);
     try {
-      await session.decideLocal(a.id, decision, scope, rule);
-      pushSystem(decisionSummary(a, decision === "approve" ? "approved" : "rejected", scope, rule));
+      const r = await session.decideLocal(a.id, decision, scope, rule);
+      const queued = r.continuation === "queued" ? " — en file, après le tour en cours" : "";
+      pushSystem(`${decisionSummary(a, decision === "approve" ? "approved" : "rejected", scope, rule)}${queued}`);
       pendingRef.current = null;
       pendingLocalRef.current = false;
       setPendingApproval(null);

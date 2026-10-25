@@ -70,8 +70,28 @@ describe("doctor", () => {
     expect(byName["authentification"]!.status).toBe("ok"); // jeton local écrit par le mock dans `dir`
     expect(byName["version client"]!.status).toBe("ko"); // minimale 9.0.0 annoncée
     expect(byName["git"]!.status).toBe("ok");
+    expect(byName["mémoire"]).toMatchObject({ status: "ok" });
+    expect(byName["mémoire"]!.detail).toBe("directe, 12 note(s), plongements 768 dim en 14 ms, dernier rappel 230 ms");
     expect(code).toBe(1);
     expect(formatChecks(checks)).toContain("✗ docker");
+  });
+
+  it("mémoire : avertissement en mcp/off, échec avec la raison du noyau si ok est faux", async () => {
+    const keepMem = mock.state.memory;
+    const memLine = async () =>
+      (await runDoctor({ serverUrl: mock.url, fix: false, run: noDocker, candidates: [] })).checks.find((c) => c.name === "mémoire")!;
+    try {
+      mock.state.memory = { mode: "off", ok: null };
+      expect((await memLine()).status).toBe("warn");
+      mock.state.memory = { mode: "mcp", ok: null };
+      expect(await memLine()).toMatchObject({ status: "warn", detail: expect.stringContaining("MCP") });
+      mock.state.memory = { mode: "direct", ok: false, error: "base de la mémoire injoignable : connection refused", store: { ok: false } };
+      const ko = await memLine();
+      expect(ko.status).toBe("ko");
+      expect(ko.detail).toContain("base de la mémoire injoignable : connection refused");
+    } finally {
+      mock.state.memory = keepMem;
+    }
   });
 
   it("serveur injoignable : le dit, et --fix relance docker compose up -d quand le compose est connu", async () => {

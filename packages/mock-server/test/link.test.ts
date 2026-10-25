@@ -99,10 +99,23 @@ describe("approbation forte à distance", () => {
     expect(a).toMatchObject({ approval_id, status: "pending", strength: "strong", challenge: expect.any(String) });
     expect(await status(c.decideMachineApproval(machine_id, approval_id, "approve", { ...proof, webauthn_signature: "" }))).toBe(400);
     expect(await status(c.decideMachineApproval(machine_id, approval_id, "deny" as "reject", proof))).toBe(400);
-    expect(await c.decideMachineApproval(machine_id, approval_id, "reject", { device_id: "dev_1", signature: "sig" })).toEqual({ status: "forwarded" });
+    // Carte forte : la clé simple seule est refusée (X10), la passkey passe.
+    expect(await status(c.decideMachineApproval(machine_id, approval_id, "reject", { device_id: "dev_1", signature: "sig" }))).toBe(403);
+    expect(await c.decideMachineApproval(machine_id, approval_id, "reject", proof)).toEqual({ status: "forwarded" });
     expect(await status(c.decideMachineApproval(machine_id, approval_id, "approve", proof))).toBe(409);
     await new Promise((res) => setTimeout(res, 1700));
-    expect((await c.getMachineApproval(machine_id, approval_id)).status).toBe("rejected");
+    const final = await c.getMachineApproval(machine_id, approval_id);
+    expect(final.status).toBe("rejected");
+    expect(final.summary).toMatchObject({ erased: true, lines: [] });
     expect(await status(c.getMachineApproval("mc_autre", approval_id))).toBe(404);
+  });
+
+  it("X20c : carte d'un connecteur relayé, résumé de nokker.ai (ligne par ligne)", async () => {
+    await c.demoSessionMockExtension();
+    const r = await fetch(`${mock.url}/v1/dev/link-mock`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ linked: true, approval: true, approval_kind: "mail" }) });
+    const { machine_id, approval_id } = (await r.json()) as { machine_id: string; approval_id: string };
+    const a = await c.getMachineApproval(machine_id, approval_id);
+    expect(a).toMatchObject({ summary_source: "nokker.ai", summary: { class: "external_send", headline: expect.any(String), erased: false }, args_sha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    expect(a.summary!.lines.map((l) => l.key)).toEqual(["to", "subject", "body"]);
   });
 });

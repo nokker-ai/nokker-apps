@@ -1,10 +1,10 @@
 /**
  * Analyse des arguments de ligne de commande — pur (pas de `process.exit`, pas d'I/O), testable
  * directement. `bin.ts` n'en fait qu'un appel puis bascule entre mode interactif (Ink), mode
- * non-interactif (`-p`/`--print`) et sous-commandes (`doctor`, `logs`, `update`).
+ * non-interactif (`-p`/`--print`) et sous-commandes (`doctor`, `logs`, `update`, `acp`).
  */
 
-export type Subcommand = "doctor" | "logs" | "update" | null;
+export type Subcommand = "doctor" | "logs" | "update" | "acp" | null;
 
 export interface ParsedArgs {
   serverUrl: string;
@@ -14,8 +14,8 @@ export interface ParsedArgs {
   print: string | null;
   /** Sortie machine (`{reply, thread_id, pending_approvals, refused}` / `{error}`) au lieu de texte brut. */
   json: boolean;
-  /** Sonnette terminal (BEL) sur chaque bulle — coupée par défaut (mémoire `feedback-nokker-ui-bulles` :
-   * « le son DOIT être désactivable, sinon ça va saouler les gens au travail »). */
+  /** Sonnette terminal (BEL) sur chaque bulle — coupée par défaut (choix produit : le son doit
+   * rester désactivable). */
   sound: boolean;
   help: boolean;
   /** `--version` : affiche la version du client et sort. */
@@ -60,7 +60,7 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if ((arg === "doctor" || arg === "logs" || arg === "update") && command === null) {
+    if ((arg === "doctor" || arg === "logs" || arg === "update" || arg === "acp") && command === null) {
       command = arg; // sous-commande, avant ou après --server
     } else if (arg === "--server") {
       serverUrl = argv[++i] ?? serverUrl;

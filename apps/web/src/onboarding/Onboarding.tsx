@@ -138,11 +138,16 @@ export function Onboarding(): React.ReactElement {
 }
 
 function Progress({ step, lang }: { step: Step; lang: Lang }): React.ReactElement {
-  const idx = STEPS.findIndex((x) => x.step === step);
+  return <StepsNav steps={STEPS} current={step} lang={lang} />;
+}
+
+/** Fil d'étapes du parcours, partagé avec la page `/setup` de Lokkal. */
+export function StepsNav<S extends string>({ steps, current, lang }: { steps: { step: S; label: Key }[]; current: S; lang: Lang }): React.ReactElement {
+  const idx = steps.findIndex((x) => x.step === current);
   return (
     <nav className="ob-steps" aria-label={t(lang, "steps")}>
       <ol>
-        {STEPS.map((x, i) => (
+        {steps.map((x, i) => (
           <li key={x.step} className={i < idx ? "done" : i === idx ? "now" : ""} aria-current={i === idx ? "step" : undefined}>
             <span className="ob-dot" aria-hidden="true">{i < idx ? "✓" : i + 1}</span>
             <span className="ob-steplabel">{t(lang, x.label)}</span>

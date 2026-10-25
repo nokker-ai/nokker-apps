@@ -12,11 +12,15 @@ import {
   type BubbleKind,
   type BubbleStateByKind,
   type BubbleStatus,
+  type CreateAgentRequest,
   type ShareRequest,
   type TransferMode,
   type TransferResult,
 } from "@nokker-apps/sdk";
 import { MockHttpError } from "./errors.js";
+import { createAgentFull } from "./agents.js";
+import { decideHandoff } from "./handoff.js";
+import { decidePlanSplit } from "./ops.js";
 import { KNOWN_USERS, MOCK_USER, hexId, type MockState } from "./state.js";
 
 export { MockHttpError };
@@ -215,11 +219,17 @@ export function runAction(state: MockState, id: string, actionId: string): { sta
     // §9.4 : seule `activate` est acceptée, exécutée EN DIRECT (200) — créer un agent armé n'a pas d'effet à
     // soumettre aux portes. La bulle est fermée, `agent.created` publié.
     if (actionId !== "activate") throw new MockHttpError(404, `action inconnue : ${actionId}`);
-    const agent = createAgent(state, { name: b.state.name, role: b.state.role, model: b.state.model, tools: b.state.tools }, MOCK_USER);
+    // §9.5 : la carte porte aussi instructions, trigger, secrets, budget, auto_approve (facultatifs).
+    const st = b.state as typeof b.state & Partial<CreateAgentRequest>;
+    const agent = createAgent(state, { name: st.name, role: st.role, model: st.model, tools: st.tools, instructions: st.instructions, trigger: st.trigger, secrets: st.secrets, budget: st.budget, auto_approve: st.auto_approve }, MOCK_USER);
     closeBubble(state, b.id);
     if (b.thread_id) state.appendTurn(b.thread_id, "", `Agent « ${agent.name} » créé et armé — il est dans l'onglet Crew.`, { sender: null, channel: "web" });
     return { status: 200, body: { activated: true, agent: clone(agent) } };
   }
+  // X21 : décision de l'utilisateur sur un relais, en direct (200 `{handoff}`), jamais un tour.
+  if (b.kind === "handoff") return decideHandoff(state, b, actionId) as unknown as { status: number; body: BubbleActionResult };
+  // X18 : découpage proposé par le modèle ; seul l'humain crée les cartes, en direct (200 `{proposal, cards}`).
+  if (b.kind === "plan_split") return decidePlanSplit(state, b, actionId) as unknown as { status: number; body: BubbleActionResult };
   const action = b.actions.find((a) => a.id === actionId);
   if (!action) throw new MockHttpError(404, `action inconnue : ${actionId}`);
   if (!b.thread_id) throw new MockHttpError(400, "bulle sans fil");
@@ -233,22 +243,9 @@ export function runAction(state: MockState, id: string, actionId: string): { sta
 }
 
 /** Crée un agent du Crew (BUBBLES.md §9.4) : `status` toujours `armed`, `agent.created` diffusé à tous. */
-export function createAgent(state: MockState, req: { name: string; role: string; model?: string; tools?: string[] }, user: string): Agent {
-  const now = new Date().toISOString();
-  const agent: Agent = {
-    id: hexId("ag"),
-    name: req.name,
-    role: req.role,
-    model: req.model ?? "",
-    tools: req.tools ?? [],
-    status: "armed",
-    created_by: user,
-    created_at: now,
-    updated_at: now,
-  };
-  state.agents.set(agent.id, agent);
-  state.publish({ type: "agent.created", agent: { ...agent } });
-  return agent;
+/** §9.4/§9.5 : création d'agent (POST /v1/agents ou activation d'une carte `agent_draft`). */
+export function createAgent(state: MockState, req: CreateAgentRequest, user: string): Agent {
+  return createAgentFull(state, req, user);
 }
 
 export function clone<T>(v: T): T {
