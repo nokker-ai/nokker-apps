@@ -17,6 +17,7 @@ export const FR_COMPONENTS: Record<string, string> = {
   "Shared with {0}": "Partagée avec {0}",
   "Session bubbles": "Bulles de la session",
   "Collapsed bubbles": "Bulles réduites",
+  "Show the {0} bubble(s), latest: {1}": "Afficher les {0} bulle(s), la dernière : {1}",
   "Expand the bubble {0} {1}, {2}": "Déployer la bulle {0} {1}, {2}",
   "Knock knock knock…": "Toc toc toc…",
   "Knocking at the door…": "Frappe à la porte…",

@@ -84,4 +84,48 @@ describe("streamChatCompletion — jetons en direct", () => {
     await expect(client(raw).streamChatCompletion("th_1", [], () => {})).rejects.toBeInstanceOf(NokkerApiError);
     await expect(client(raw).streamChatCompletion("th_1", [], () => {})).rejects.toThrow("panne interne");
   });
+
+  it("finit à [DONE] même si la connexion reste ouverte (relais, tunnel, HTTP/2), et referme le lecteur", async () => {
+    let cancelled = false;
+    const bytes = new TextEncoder().encode(NOYAU_STREAM);
+    const reader = {
+      sent: false,
+      async read(): Promise<{ done: boolean; value?: Uint8Array }> {
+        if (!this.sent) {
+          this.sent = true;
+          return { done: false, value: bytes };
+        }
+        return new Promise(() => undefined); // la connexion ne se ferme jamais
+      },
+      async cancel(): Promise<void> {
+        cancelled = true;
+      },
+    };
+    const fetchImpl = vi.fn(async () => ({ ok: true, status: 200, body: { getReader: () => reader } })) as unknown as FetchLike;
+    let text = "";
+    await new NokkerClient({ baseUrl: "http://mock", token: "tok", fetchImpl }).streamChatCompletion("th_1", [], (ch) => {
+      text = applyChatChunk(text, ch);
+    });
+    expect(text).toBe("Rien aujourd'hui, journée libre.");
+    expect(cancelled).toBe(true);
+  });
+
+  it("sans [DONE], le chunk qui porte finish_reason clôt aussi le tour", async () => {
+    const raw = chunk({ content: "Bonjour." }) + `data: ${JSON.stringify({ id: "c", object: "chat.completion.chunk", created: 0, model: "nokker", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`;
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: {
+        async *[Symbol.asyncIterator]() {
+          yield new TextEncoder().encode(raw);
+          await new Promise(() => undefined);
+        },
+      },
+    })) as unknown as FetchLike;
+    let text = "";
+    await new NokkerClient({ baseUrl: "http://mock", token: "tok", fetchImpl }).streamChatCompletion("th_1", [], (ch) => {
+      text = applyChatChunk(text, ch);
+    });
+    expect(text).toBe("Bonjour.");
+  });
 });

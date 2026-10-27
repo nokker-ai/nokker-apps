@@ -48,3 +48,15 @@ export function deleteOutcome(status: Approval["status"]): "granted" | "waiting"
   if (status === "failed") return "failed";
   return "dead";
 }
+
+/** Déconnexion de cet appareil : retiré du compte côté serveur (sa clé ne vaut plus rien), puis oublié ici. Hors ligne ou
+ * refusé, la clé locale est oubliée quand même : se déconnecter ne doit jamais échouer. */
+export async function signOutDevice(
+  client: { deleteDevice(id: string): Promise<void> },
+  readStored: () => Promise<{ deviceId: string } | undefined>,
+  forget: () => Promise<void>,
+): Promise<void> {
+  const stored = await readStored().catch(() => undefined);
+  if (stored?.deviceId) await client.deleteDevice(stored.deviceId).catch(() => undefined);
+  await forget().catch(() => undefined);
+}

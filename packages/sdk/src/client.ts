@@ -1329,7 +1329,7 @@ export class NokkerClient {
   }
 
   /**
-   * Tour streamé : appelle `onChunk` pour chaque frame SSE OpenAI-compatible, jusqu'à `[DONE]`.
+   * Tour streamé : appelle `onChunk` pour chaque frame SSE OpenAI-compatible, jusqu'à `[DONE]` (sans attendre la fin de la connexion).
    *
    * Pose `X-Nokker-Stream-Tokens: 1` (jetons en direct, CLIENT-API.md §Streaming) sauf `liveTokens: false` :
    * le flux peut alors contenir des chunks `nokker.reset` et un chunk final `nokker.final` qui REMPLACE le texte
@@ -1359,13 +1359,18 @@ export class NokkerClient {
       throw new NokkerApiError(`/v1/chat/completions → ${res.status}`, res.status, bodyText);
     }
     const text = decodeUtf8Stream(asAsyncIterable(res.body));
+    // Le tour finit à `[DONE]` (ou au chunk qui porte `finish_reason`), pas à la fermeture de la connexion : un relais,
+    // un tunnel ou une connexion HTTP/2 réutilisée peut la garder ouverte, et l'envoi resterait bloqué. Sortir de la
+    // boucle referme le lecteur (et annule le corps de la réponse).
     for await (const frame of parseSSEFrames(text)) {
+      if (frame.data === "[DONE]") return;
       const chunk = parseJsonData<ChatCompletionChunk>(frame);
       if (!chunk) continue;
       if (chunk.error) {
         throw new NokkerApiError(chunk.error.message ?? "erreur du tour", 500, { error: chunk.error });
       }
       onChunk(chunk);
+      if (chunk.choices?.[0]?.finish_reason) return;
     }
   }
 }
@@ -1393,14 +1398,23 @@ async function readAllText(res: ResponseLike): Promise<string> {
 
 function asAsyncIterable(body: NonNullable<ResponseLike["body"]>): AsyncIterable<Uint8Array> {
   if (Symbol.asyncIterator in body) return body as AsyncIterable<Uint8Array>;
-  const streamLike = body as { getReader(): { read(): Promise<{ done: boolean; value?: Uint8Array }> } };
+  const streamLike = body as { getReader(): { read(): Promise<{ done: boolean; value?: Uint8Array }>; cancel?(): Promise<void> } };
   return {
     async *[Symbol.asyncIterator]() {
       const reader = streamLike.getReader();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) return;
-        if (value) yield value;
+      let done = false;
+      try {
+        for (;;) {
+          const r = await reader.read();
+          if (r.done) {
+            done = true;
+            return;
+          }
+          if (r.value) yield r.value;
+        }
+      } finally {
+        // Lecteur abandonné avant la fin (tour clos à `[DONE]`, erreur) : on annule le flux, la connexion se libère.
+        if (!done) void reader.cancel?.().catch(() => undefined);
       }
     },
   };

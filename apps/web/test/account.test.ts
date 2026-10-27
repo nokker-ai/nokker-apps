@@ -5,7 +5,7 @@ import { NokkerApiError } from "@nokker-apps/sdk";
 import { errorCode, keyForCode } from "../src/onboarding/errors.js";
 import { deletionGranted, suspendedError } from "../src/account/lifecycle.js";
 import { t } from "../src/onboarding/i18n.js";
-import { deleteOutcome, exportIssue, fmtSize } from "../src/account/lifecycle.js";
+import { deleteOutcome, exportIssue, fmtSize, signOutDevice } from "../src/account/lifecycle.js";
 
 const usage = (over: Partial<AccountUsage> = {}): AccountUsage => ({
   mode: "soft",
@@ -139,5 +139,30 @@ describe("export et suppression", () => {
   it("taille lisible", () => {
     expect(fmtSize("fr", 48_213)).toMatch(/^48,2\s?Ko$/);
     expect(fmtSize("en", 512)).toBe("512 B");
+  });
+});
+
+describe("se déconnecter", () => {
+  const spy = () => {
+    const calls: string[] = [];
+    return { calls, client: { deleteDevice: async (id: string) => void calls.push(`delete:${id}`) }, forget: async () => void calls.push("forget") };
+  };
+  it("retire l'appareil du compte puis oublie sa clé", async () => {
+    const s = spy();
+    await signOutDevice(s.client, async () => ({ deviceId: "dev_1" }), s.forget);
+    expect(s.calls).toEqual(["delete:dev_1", "forget"]);
+  });
+  it("oublie la clé même si le serveur ne répond pas", async () => {
+    const calls: string[] = [];
+    await signOutDevice({ deleteDevice: () => Promise.reject(new Error("offline")) }, async () => ({ deviceId: "dev_1" }), async () => void calls.push("forget"));
+    expect(calls).toEqual(["forget"]);
+  });
+  it("sans appareil rangé : rien à retirer, on oublie quand même", async () => {
+    const s = spy();
+    await signOutDevice(s.client, async () => undefined, s.forget);
+    expect(s.calls).toEqual(["forget"]);
+  });
+  it("textes FR/EN présents", () => {
+    for (const l of ["fr", "en"] as const) for (const k of ["accSignOut", "accSignOutBody", "accSignOutBtn"] as const) expect(t(l, k)).not.toBe(k);
   });
 });

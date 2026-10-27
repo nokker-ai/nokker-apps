@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { isSessionThread } from "@nokker-apps/sdk";
 import { BRAND } from "@nokker-apps/brand";
 import { useNokker } from "./store.js";
 import { StoreContext } from "./context.js";
@@ -57,6 +58,32 @@ export function App(): React.ReactElement {
   const [crewPulse, setCrewPulse] = useState(false);
   const [freshAgent, setFreshAgent] = useState<string | null>(null);
   const [arrangeTick, setArrangeTick] = useState(0);
+  // Téléphone : les sessions sont dans un tiroir fermé par défaut ; le chat garde toute la largeur.
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const fabRef = useRef<HTMLButtonElement>(null);
+  const closeDrawer = useCallback((refocus = false) => {
+    setDrawerOpen(false);
+    if (refocus) fabRef.current?.focus();
+  }, []);
+  useEffect(() => {
+    if (!narrow) setDrawerOpen(false);
+  }, [narrow]);
+  useEffect(() => {
+    if (!drawerOpen) return;
+    // Focus sur la session courante (une liste de sélecteurs rendrait le premier du document : le « + »).
+    for (const q of ["#nk-drawer .session-row.current", "#nk-drawer .session-row", "#nk-drawer button"]) {
+      const el = document.querySelector<HTMLElement>(q);
+      if (el) {
+        el.focus();
+        break;
+      }
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") closeDrawer(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [drawerOpen, closeDrawer]);
   // Thème : CLAIR par défaut (choix produit), sombre seulement sur réglage explicite (mémorisé).
   const [theme, setTheme] = useState<"light" | "dark">(() => readJson<"light" | "dark">("theme", "light"));
   useEffect(() => {
@@ -163,6 +190,7 @@ export function App(): React.ReactElement {
   }, [store.crewPulse]);
 
   const onDropTarget = useCallback((id: string | null) => setDropTarget(id), []);
+  const unreadElsewhere = store.threads.filter((x) => isSessionThread(x) && x.id !== store.current?.id).reduce((n, x) => n + (x.unread || (store.unseen[x.id] ?? 0)), 0);
 
   if (store.accountGone) return <DeletingScreen lang={uiLang()} />;
   if (store.access !== "ready") {
@@ -171,11 +199,13 @@ export function App(): React.ReactElement {
 
   return (
     <StoreContext.Provider value={store}>
-      <div className={`app ${narrow ? "narrow" : ""}`}>
+      <div className={`app ${narrow ? "narrow" : ""} ${narrow && drawerOpen ? "drawer-open" : ""}`}>
         <a href="#nk-composer" className="skip">
           {tr("Skip to message")}
         </a>
         <Drawer
+          id="nk-drawer"
+          closed={narrow && !drawerOpen}
           threads={store.threads}
           unseen={store.unseen}
           currentId={store.current?.id ?? null}
@@ -183,16 +213,40 @@ export function App(): React.ReactElement {
           onSelect={(id) => {
             store.selectThread(id);
             setTab("chat");
+            closeDrawer();
           }}
-          onCreate={(t) => void store.createThread(t)}
+          onCreate={(t) => {
+            void store.createThread(t);
+            closeDrawer();
+          }}
           onDelete={(id) => void store.deleteThread(id)}
           codeSessions={store.codeSessions}
           roots={store.localRoots}
           onCreateCode={store.localRoots !== null ? async (cwd) => {
             await store.createCodeSession(cwd);
             setTab("chat");
+            closeDrawer();
           } : undefined}
         />
+        {narrow && drawerOpen ? <button type="button" className="drawer-scrim" aria-label={tr("Close the session list")} onClick={() => closeDrawer(true)} /> : null}
+        {narrow && tab === "chat" ? (
+          <button
+            ref={fabRef}
+            type="button"
+            className="drawer-fab"
+            aria-controls="nk-drawer"
+            aria-expanded={drawerOpen}
+            aria-label={unreadElsewhere ? tr("Sessions, {0} unread", unreadElsewhere) : tr("Sessions")}
+            onClick={() => setDrawerOpen((o) => !o)}
+          >
+            <Icon name="menu" size={20} />
+            {unreadElsewhere ? (
+              <span className="drawer-fab-count" aria-hidden="true">
+                {unreadElsewhere > 99 ? "99+" : unreadElsewhere}
+              </span>
+            ) : null}
+          </button>
+        ) : null}
         <main className="main">
           <header className="topbar">
             <nav className="tabs-main" aria-label={tr("Tabs")}>
@@ -381,7 +435,12 @@ export function App(): React.ReactElement {
           ) : store.ready && tab === "machine" && store.authMode === "local" ? (
             <MachineTab client={store.client} toast={store.toast} />
           ) : store.ready && tab === "account" ? (
-            <AccountTab client={store.client} lang={uiLang()} onGone={store.markAccountGone} />
+            <AccountTab
+              client={store.client}
+              lang={uiLang()}
+              onGone={store.markAccountGone}
+              onSignOut={store.authMode === "device-key" || store.authMode === "passkey" ? store.forgetDeviceAndRetry : undefined}
+            />
           ) : store.ready ? (
             <ConnectorsTab client={store.client} lang={uiLang()} />
           ) : null}

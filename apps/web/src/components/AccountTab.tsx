@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { AccountExport, AccountInfo, AccountUsage, BillingStatus, Device, NokkerClient } from "@nokker-apps/sdk";
-import { deleteOutcome, exportIssue, fmtSize, fmtWhen, suspendedError, type ExportIssue } from "../account/lifecycle.js";
-import { forgetDevice } from "../auth.js";
+import { deleteOutcome, exportIssue, fmtSize, fmtWhen, signOutDevice, suspendedError, type ExportIssue } from "../account/lifecycle.js";
+import { forgetDevice, readStoredDeviceKey } from "../auth.js";
 import { billingView, fmtReset, monthTurns, planCaps, planLabel, softOver, STATUS_KEYS, todayRows, usageLevel, usagePct, weekRows, type UsageRow } from "../account/usage.js";
 import { ConnectorsStep, TelegramStep } from "../onboarding/Connectors.js";
 import { errorCode, errorKey } from "../onboarding/errors.js";
@@ -213,6 +213,25 @@ function DevicesCard({ client, lang }: { client: NokkerClient; lang: Lang }): Re
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+/** Déconnexion de CET appareil : il est retiré du compte (sa clé ne vaut plus rien) puis oublié ici ; retour à l'accueil. */
+function SignOutCard({ client, lang, onSignOut }: { client: NokkerClient; lang: Lang; onSignOut: () => void }): React.ReactElement {
+  const [busy, setBusy] = useState(false);
+  const go = async (): Promise<void> => {
+    setBusy(true);
+    await signOutDevice(client, readStoredDeviceKey, forgetDevice);
+    onSignOut();
+  };
+  return (
+    <section className="ob-conn" aria-labelledby="acc-signout">
+      <h3 id="acc-signout">{t(lang, "accSignOut")}</h3>
+      <p className="ob-muted">{t(lang, "accSignOutBody")}</p>
+      <button type="button" className="ob-btn" disabled={busy} onClick={() => void go()}>
+        {t(lang, "accSignOutBtn")}
+      </button>
     </section>
   );
 }
@@ -510,7 +529,20 @@ export function DeletingScreen({ lang }: { lang: Lang }): React.ReactElement {
   );
 }
 
-export function AccountTab({ client, lang, pollMs = 2000, onGone }: { client: NokkerClient; lang: Lang; pollMs?: number; onGone?: () => void }): React.ReactElement {
+export function AccountTab({
+  client,
+  lang,
+  pollMs = 2000,
+  onGone,
+  onSignOut,
+}: {
+  client: NokkerClient;
+  lang: Lang;
+  pollMs?: number;
+  onGone?: () => void;
+  /** Absent (démo, passerelle, Lokkal local) : pas de déconnexion ici. */
+  onSignOut?: () => void;
+}): React.ReactElement {
   const [info, setInfo] = useState<AccountInfo | null>(null);
   const [usage, setUsage] = useState<AccountUsage | null>(null);
   const [billing, setBilling] = useState<BillingStatus | null>(null);
@@ -545,6 +577,7 @@ export function AccountTab({ client, lang, pollMs = 2000, onGone }: { client: No
         {billing ? <SubscriptionCard client={client} lang={lang} billing={billing} /> : null}
         {usage ? <UsageCard lang={lang} usage={usage} /> : null}
         <DevicesCard client={client} lang={lang} />
+        {onSignOut ? <SignOutCard client={client} lang={lang} onSignOut={onSignOut} /> : null}
         <h3 className="ob-sub">{t(lang, "tabConnectors")}</h3>
         <ConnectorsStep client={client} lang={lang} embedded />
         <TelegramStep client={client} lang={lang} embedded />

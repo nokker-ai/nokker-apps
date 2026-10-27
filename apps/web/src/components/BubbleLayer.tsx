@@ -224,6 +224,34 @@ export function BubbleLayer({
   // Une notify émise DEPUIS le fil où l'on est (on vient d'écrire à une autre session) n'apprend rien : masquée.
   const fromHere = (b: BubbleT): boolean => b.kind === "notify" && b.state.from_thread === current?.id;
   const visible = rendered.filter((r) => !views[r.b.id]?.hidden && !fromHere(r.b)).sort((a, b) => rank(b).localeCompare(rank(a)));
+
+  // Téléphone : le bandeau se replie en une ligne dès qu'on lit (défilement du chat) ou qu'on écrit, se déplie d'un tap
+  // et quand une nouvelle bulle arrive. Le chat garde la place (retour de test, 27.10).
+  const [folded, setFolded] = useState(false);
+  const liveCount = visible.filter((r) => !r.leaving).length;
+  const seenCount = useRef(liveCount);
+  useEffect(() => {
+    if (liveCount > seenCount.current) setFolded(false);
+    seenCount.current = liveCount;
+  }, [liveCount]);
+  useEffect(() => {
+    if (!inline) return;
+    const fold = (e: Event): void => {
+      const t = e.target instanceof Element ? e.target : null;
+      if (t?.closest(".chat-scroll") || t?.id === "nk-composer") setFolded(true);
+    };
+    const opts = { capture: true, passive: true };
+    document.addEventListener("wheel", fold, opts);
+    document.addEventListener("touchmove", fold, opts);
+    document.addEventListener("focusin", fold);
+    document.addEventListener("input", fold, true);
+    return () => {
+      document.removeEventListener("wheel", fold, opts);
+      document.removeEventListener("touchmove", fold, opts);
+      document.removeEventListener("focusin", fold);
+      document.removeEventListener("input", fold, true);
+    };
+  }, [inline]);
   // Par défaut, seules les bulles les plus récentes sont déployées (1 sur mobile, 3 sur grand écran) ; les autres
   // se réduisent à leur en-tête — on ne garde sous les yeux que ce dont on a besoin.
   const recent = new Set(
@@ -352,6 +380,20 @@ export function BubbleLayer({
       />
     );
   };
+
+  if (inline && folded && liveCount) {
+    const top = visible.find((r) => !r.leaving)!.b;
+    return (
+      <section className="bubble-inline folded" aria-label={tr("Session bubbles")}>
+        <button type="button" className="bubble-fold" aria-expanded={false} aria-label={tr("Show the {0} bubble(s), latest: {1}", liveCount, top.title)} onClick={() => setFolded(false)}>
+          <Icon name={bubbleTheme(top.kind).icon} size={14} />
+          <span className="bubble-fold-title">{top.title}</span>
+          <span className="tab-count">{liveCount}</span>
+          <Icon name="chevronDown" size={16} />
+        </button>
+      </section>
+    );
+  }
 
   if (inline) {
     const chips = visible.filter((r) => isCollapsed(r.b.id) && !r.leaving);

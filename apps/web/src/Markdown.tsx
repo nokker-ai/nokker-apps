@@ -38,6 +38,17 @@ function renderSegments(segs: Segment[]): React.ReactNode {
   });
 }
 
+/** Cellules d'une ligne de tableau GFM (`| a | b |`, barres de bord facultatives). */
+function tableCells(line: string): string[] {
+  let l = line.trim();
+  if (l.startsWith("|")) l = l.slice(1);
+  if (l.endsWith("|")) l = l.slice(0, -1);
+  return l.split("|").map((c) => c.trim());
+}
+
+const TABLE_RULE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+const isTableRow = (line: string): boolean => line.includes("|") && line.trim() !== "";
+
 export function Markdown({ text }: { text: string }): React.ReactElement {
   const lines = text.split("\n");
   const blocks: React.ReactNode[] = [];
@@ -59,6 +70,45 @@ export function Markdown({ text }: { text: string }): React.ReactElement {
         <pre key={key++}>
           <code>{codeLines.join("\n")}</code>
         </pre>,
+      );
+      continue;
+    }
+    // Tableau GFM : en-tête, ligne de tirets, puis les lignes qui contiennent une barre. Il défile dans sa boîte au
+    // lieu d'élargir le message (téléphone).
+    if (isTableRow(line) && TABLE_RULE.test(lines[i + 1] ?? "")) {
+      const head = tableCells(line);
+      const align = tableCells(lines[i + 1] ?? "").map((c) => (c.endsWith(":") ? (c.startsWith(":") ? "center" : "right") : undefined));
+      const rows: string[][] = [];
+      i += 2;
+      while (i < lines.length && isTableRow(lines[i] ?? "")) {
+        rows.push(tableCells(lines[i] ?? ""));
+        i += 1;
+      }
+      blocks.push(
+        <div key={key++} className="md-table">
+          <table>
+            <thead>
+              <tr>
+                {head.map((c, j) => (
+                  <th key={j} style={align[j] ? { textAlign: align[j] } : undefined}>
+                    {renderSegments(parseInline(c))}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, n) => (
+                <tr key={n}>
+                  {head.map((_, j) => (
+                    <td key={j} style={align[j] ? { textAlign: align[j] } : undefined}>
+                      {renderSegments(parseInline(r[j] ?? ""))}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
       );
       continue;
     }

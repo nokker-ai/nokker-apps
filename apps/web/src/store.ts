@@ -75,6 +75,7 @@ export interface NokkerStore {
   /** Fils qui ont répondu pendant qu'on était ailleurs (compteur client : `unread` vaut 0 côté noyau P1). */
   unseen: Record<string, number>;
   members: Member[];
+  /** Un tour part de ce client dans le fil courant. */
   sending: boolean;
   bubbles: Bubble[];
   agents: Agent[];
@@ -167,7 +168,8 @@ export function useNokker(): NokkerStore {
   const lokkalRef = useRef<{ user: string } | null>(null);
   const [messages, setMessages] = useState<ThreadMessage[]>([]);
   const [streaming, setStreaming] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
+  /** Fils dont un tour part de ce client : l'envoi n'est bloqué que dans CE fil, jamais dans les autres. */
+  const [sendingIds, setSendingIds] = useState<ReadonlySet<string>>(() => new Set());
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentRuns, setAgentRuns] = useState<Record<string, AgentRun>>({});
@@ -204,12 +206,11 @@ export function useNokker(): NokkerStore {
   const [flying, setFlying] = useState<Set<string>>(() => new Set());
 
   const currentRef = useRef<string | null>(null);
-  const sendingRef = useRef(false);
+  const sendingRef = useRef(new Set<string>());
   const signatureRef = useRef(signature);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastSeq = useRef(0);
   currentRef.current = currentId;
-  sendingRef.current = sending;
   signatureRef.current = signature;
 
   const toast = useCallback((text: string, tone?: Toast["tone"]) => {
@@ -264,7 +265,7 @@ export function useNokker(): NokkerStore {
     if (refreshTimer.current) clearTimeout(refreshTimer.current);
     refreshTimer.current = setTimeout(() => {
       const id = currentRef.current;
-      if (id && !sendingRef.current) void loadThread(id, false).catch(() => undefined);
+      if (id && !sendingRef.current.has(id)) void loadThread(id, false).catch(() => undefined);
     }, 160);
   }, [loadThread]);
 
@@ -366,7 +367,7 @@ export function useNokker(): NokkerStore {
           deltas.current.set(e.thread_id, { turn_id: e.turn_id, text: e.text });
           if (e.thread_id === currentRef.current) {
             // Notre propre tour arrive déjà par le flux de /v1/chat/completions.
-            if (!sendingRef.current) setLive({ turn_id: e.turn_id, text: e.text });
+            if (!sendingRef.current.has(e.thread_id)) setLive({ turn_id: e.turn_id, text: e.text });
           } else {
             setUnseen((u) => ({ ...u, [e.thread_id]: (u[e.thread_id] ?? 0) + 1 }));
           }
@@ -575,8 +576,8 @@ export function useNokker(): NokkerStore {
     async (text: string, images: string[] = []) => {
       const id = currentRef.current;
       if (!id || (!text.trim() && images.length === 0)) return;
-      setSending(true);
-      sendingRef.current = true;
+      sendingRef.current.add(id);
+      setSendingIds(new Set(sendingRef.current));
       const shown = images.length ? `${text}${text ? "\n\n" : ""}_${images.length === 1 ? tr("1 image attached") : tr("{0} images attached", images.length)}_` : text;
       setMessages((m) => [...m, { index: (m.at(-1)?.index ?? -1) + 1, role: "user", content: shown }]);
       setStreaming("");
@@ -589,18 +590,18 @@ export function useNokker(): NokkerStore {
           const next = applyChatChunk(current, chunk);
           if (next !== current) {
             current = next;
-            setStreaming(next);
+            if (currentRef.current === id) setStreaming(next);
           }
         });
       } catch (err) {
         toast(errText(err), "error");
       } finally {
-        sendingRef.current = false;
-        setSending(false);
+        sendingRef.current.delete(id);
+        setSendingIds(new Set(sendingRef.current));
         if (currentRef.current === id) {
           await loadThread(id, false).catch(() => undefined);
+          setStreaming(null);
         }
-        setStreaming(null);
       }
     },
     [client, loadThread, toast],
@@ -760,7 +761,7 @@ export function useNokker(): NokkerStore {
     live,
     unseen,
     members,
-    sending,
+    sending: currentId !== null && sendingIds.has(currentId),
     bubbles,
     agents,
     agentRuns,

@@ -441,6 +441,8 @@ button:disabled {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  /* Un identifiant sans espace (empreinte, version des conditions) se coupe au lieu d'élargir l'onglet. */
+  overflow-wrap: break-word;
 }
 .topbar {
   display: flex;
@@ -633,6 +635,43 @@ button:disabled {
 }
 .msg-body p:last-child {
   margin: 0;
+}
+/* Texte du modèle : rien ne doit élargir le message (téléphone, 27.10) — les longs mots se coupent, le code et les
+   tableaux défilent dans leur propre boîte. */
+.msg-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.msg-body pre {
+  margin: 6px 0;
+  padding: 8px 10px;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-wrap: normal;
+  border-radius: 10px;
+  background: rgba(var(--ov), 0.06);
+}
+.md-table {
+  max-width: 100%;
+  margin: 6px 0;
+  overflow-x: auto;
+}
+.md-table table {
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+.md-table th,
+.md-table td {
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  min-width: 8ch;
+  overflow-wrap: break-word;
+}
+.md-table th {
+  font-weight: 700;
+  background: rgba(var(--ov), 0.05);
 }
 .msg.system {
   align-self: center;
@@ -1473,7 +1512,7 @@ button:disabled {
   border-color: rgba(var(--ko-rgb), 0.6);
 }
 
-/* ── Petit écran (390 px) : tiroir en rail, bulles en bandeau au-dessus du chat ── */
+/* ── Petit écran (390 px) : tiroir hors écran, bulles en bandeau au-dessus du chat ── */
 .bubble-inline {
   flex: 0 0 auto;
   max-height: 42vh;
@@ -1521,71 +1560,77 @@ button:disabled {
   width: 100%;
   max-width: none;
 }
+/* Téléphone (27.10) : plus de rail de pastilles, le chat prend toute la largeur ; les sessions vivent dans un
+   tiroir qui glisse depuis la gauche, ouvert par le bouton en bas à gauche (.drawer-fab), fermé par le voile. */
 .app.narrow {
-  --drawer-w: 64px;
+  --drawer-w: 0px;
+  grid-template-columns: minmax(0, 1fr);
 }
 .app.narrow .drawer {
-  padding: 12px 6px;
-  align-items: center;
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: min(86vw, 320px);
+  padding-top: max(18px, env(safe-area-inset-top));
+  padding-bottom: max(18px, env(safe-area-inset-bottom));
+  z-index: 90;
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.35);
+  transform: translateX(-102%);
+  visibility: hidden;
+  transition:
+    transform 0.22s ease,
+    visibility 0s linear 0.22s;
 }
-.app.narrow .drawer-brand {
-  padding: 2px 0 8px;
+.app.narrow.drawer-open .drawer {
+  transform: none;
+  visibility: visible;
+  transition: transform 0.22s ease;
 }
-.app.narrow .drawer-brand-text,
-.app.narrow .drawer-head .eyebrow,
-.app.narrow .drawer-foot,
-.app.narrow .session-text,
-.app.narrow .session-meta {
-  display: none;
-}
-.app.narrow .drawer-head {
+.drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 85;
+  border: 0;
   padding: 0;
+  background: rgba(0, 0, 0, 0.45);
 }
-.app.narrow .drawer-new {
-  position: absolute;
-  left: 70px;
-  top: 64px;
-  z-index: 70;
-  width: 280px;
-  padding: 8px;
-  border-radius: 14px;
-  background: var(--popover);
-  border: 1px solid var(--line-strong);
-}
-/* La croix déborde du coin de la ligne : la liste lui laisse la place, sans barre de défilement horizontale. */
-.app.narrow .drawer-list {
-  overflow-x: hidden;
-  padding: 4px 2px 0;
-}
-.app.narrow .session-row {
-  width: 48px;
-  min-height: 48px;
-  padding: 0;
-  justify-content: center;
-  border-radius: 14px;
-  background: rgba(var(--ov), 0.04);
-}
-.app.narrow .session-row.current {
-  background: rgba(var(--accent-rgb), 0.16);
-  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.6);
-}
-.app.narrow .session-initial {
-  flex: none;
-  width: auto;
-  height: auto;
-  font: 700 16px var(--display);
+.drawer-fab {
+  position: fixed;
+  left: max(12px, env(safe-area-inset-left));
+  bottom: calc(max(12px, env(safe-area-inset-bottom)) + 6px);
+  z-index: 60;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--surface);
   color: var(--strong);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
 }
-.app.narrow .session-dot {
-  inset: auto;
-  right: -10px;
-  top: -8px;
-  width: 9px;
-  height: 9px;
-  opacity: 0;
+.drawer-fab-count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
 }
-.app.narrow .session-row.working .session-dot {
-  opacity: 1;
+/* Le composer laisse la place au bouton du tiroir, à sa gauche. */
+.app.narrow .chat .composer {
+  margin-left: 54px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .app.narrow .drawer,
+  .app.narrow.drawer-open .drawer {
+    transition: none;
+  }
 }
 .app.narrow .topbar {
   padding: 8px 10px;
@@ -1607,8 +1652,14 @@ button:disabled {
   padding: 4px 8px;
 }
 .app.narrow .chat {
-  padding: 10px 12px 12px;
+  padding: 8px 10px max(10px, env(safe-area-inset-bottom));
   max-width: none;
+}
+.app.narrow .msg {
+  max-width: 100%;
+}
+.app.narrow .msg.user {
+  max-width: 88%;
 }
 .app.narrow .bubble-title {
   font-size: 13px;
@@ -1741,6 +1792,32 @@ button:disabled {
    l'aria-label de l'article), statut masqué, outils serrés. */
 .app.narrow .bubble-inline {
   overflow-x: hidden;
+  max-height: 28vh;
+}
+/* Bandeau replié : une ligne (icône, titre de la dernière bulle, nombre), un tap le déplie. */
+.bubble-inline.folded {
+  padding: 4px 10px;
+}
+.bubble-fold {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--strong);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+.bubble-fold-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .app.narrow .kind-chip {
   font-size: 0;
@@ -1812,23 +1889,9 @@ button:disabled {
   color: var(--strong);
   background: rgba(var(--ov), 0.06);
 }
-/* `!important` : en sombre, `.only-dark { display:block !important }` réaffichait le logo horizontal dans le rail de
-   64 px, et l'emblème débordait sur l'onglet Chat (capture iPhone, 19.10). */
-/* Large : seul le lockup se montre ; sans cette règle, `.only-dark` (!important) réaffiche l'emblème du rail en sombre. */
-:root[data-theme="dark"] .app:not(.narrow) .drawer-mark.only-dark {
+/* Seul le lockup se montre ; sans cette règle, `.only-dark` (!important) réaffiche l'emblème en sombre. */
+:root[data-theme="dark"] .drawer-mark.only-dark {
   display: none !important;
-}
-.app.narrow .drawer-lockup {
-  display: none !important;
-}
-.app.narrow .drawer-mark.only-light {
-  display: block;
-}
-:root[data-theme="dark"] .app.narrow .drawer-mark.only-light {
-  display: none !important;
-}
-:root[data-theme="dark"] .app.narrow .drawer-mark.only-dark {
-  display: block !important;
 }
 .drop-menu {
   width: max-content;
@@ -1858,33 +1921,7 @@ button:disabled {
     opacity: 0.6;
   }
 }
-/* Rail étroit : la croix ne doit jamais couvrir la lettre — coin haut-droit, hors du glyphe,
-   visible seulement sur la session courante (tactile) ou au survol / focus (souris, clavier). */
-.app.narrow .session-wrap .session-del {
-  top: -4px;
-  right: -2px;
-  width: 20px;
-  height: 20px;
-  min-width: 0;
-  padding: 0;
-  opacity: 0;
-  pointer-events: none;
-  background: var(--popover);
-  border: 1px solid var(--line-strong);
-  border-radius: 50%;
-  z-index: 2;
-}
-.app.narrow .session-wrap:hover .session-del,
-.app.narrow .session-wrap:focus-within .session-del,
-.app.narrow .session-wrap:has(.session-row.current) .session-del {
-  opacity: 1;
-  pointer-events: auto;
-}
-.app.narrow .session-wrap {
-  width: 48px;
-}
-/* Confirmation de suppression : bulle flottante à droite du rail (le rail fait 48 px, les boutons n'y tiennent pas). */
-.app.narrow .session-confirm {
+.session-confirm {
   position: fixed;
   inset: auto;
   left: 72px;
@@ -2418,7 +2455,7 @@ button:disabled {
 /* Mon compte */
 .acc-dl {
   display: grid;
-  grid-template-columns: max-content 1fr;
+  grid-template-columns: max-content minmax(0, 1fr);
   gap: 6px 16px;
   margin: 8px 0 0;
 }
@@ -2428,10 +2465,12 @@ button:disabled {
 }
 .acc-dl dd {
   margin: 0;
+  /* Version des conditions = empreinte de 64 caractères : elle se coupe (téléphone, 27.10). */
+  overflow-wrap: anywhere;
 }
 @media (max-width: 520px) {
   .acc-dl {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 0;
   }
   .acc-dl dd {

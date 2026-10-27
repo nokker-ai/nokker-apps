@@ -2,6 +2,8 @@
 export const FR_SHELL: Record<string, string> = {
   // App
   "Skip to message": "Aller au message",
+  "Close the session list": "Fermer la liste des sessions",
+  "Sessions, {0} unread": "Sessions, {0} non lue(s)",
   Tabs: "Onglets",
   "{0} live incident(s)": "{0} incident(s) vivant(s)",
   Team: "Équipe",

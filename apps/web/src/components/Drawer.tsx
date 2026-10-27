@@ -5,8 +5,11 @@ import { Icon } from "../icons.js";
 import { tr } from "../i18n/index.js";
 import { NewCodeSession } from "../lokkal/NewCodeSession.js";
 
-/** Tiroir gauche : les sessions (fils permanents). Chaque ligne est aussi une cible de dépôt de bulle. */
+/** Tiroir gauche : les sessions (fils permanents). Chaque ligne est aussi une cible de dépôt de bulle. Sur téléphone, il
+ * glisse par-dessus le chat (App : bouton en bas à gauche). */
 export function Drawer({
+  id,
+  closed = false,
   threads,
   unseen = {},
   currentId,
@@ -18,6 +21,9 @@ export function Drawer({
   roots = null,
   onCreateCode,
 }: {
+  id?: string;
+  /** Téléphone, tiroir rentré : hors de l'ordre de tabulation et de l'arbre d'accessibilité. */
+  closed?: boolean;
   threads: Thread[];
   unseen?: Record<string, number>;
   currentId: string | null;
@@ -37,7 +43,7 @@ export function Drawer({
   const [confirmId, setConfirmId] = useState<string | null>(null);
 
   return (
-    <aside className="drawer" aria-label={tr("Sessions")}>
+    <aside id={id} className="drawer" aria-label={tr("Sessions")} inert={closed || undefined}>
       <div className="drawer-brand">
         {/* Kit de marque (packages/brand/assets, servi sous /brand/) : logo horizontal, emblème seul en rail. */}
         <img className="drawer-lockup only-light" src="/brand/lockup/nokker-horizontal-light-transparent.svg" alt={BRAND.productName} />
