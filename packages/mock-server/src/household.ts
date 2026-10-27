@@ -139,11 +139,11 @@ function seed(mode: HouseholdMode): H {
         tool_name: "mail_send",
         effect: "external",
         strength: "strong",
-        reason: "envoi externe d'un profil mineur : décision du représentant",
+        reason: "external send from a minor profile: the guardian decides",
         args: {
-          to: "prof.maths@example.org",
-          subject: "Devoir de jeudi",
-          body: "Bonjour, je vous envoie mon devoir en pièce jointe. Léa",
+          to: "math.teacher@example.org",
+          subject: "Thursday homework",
+          body: "Hello, I am sending you my homework as an attachment. Léa",
         },
         status: "pending",
         created_at: iso(15 * 60_000),
@@ -177,7 +177,7 @@ function seed(mode: HouseholdMode): H {
       author_account: payer,
       seq: 1,
       title: "Allergies",
-      text: "Sam est allergique aux arachides : le dire à chaque recette proposée.",
+      text: "Sam is allergic to peanuts: mention it with every recipe suggested.",
     },
     {
       name: "rule-courses-5e6f",
@@ -187,15 +187,15 @@ function seed(mode: HouseholdMode): H {
       updated_at: iso(DAY),
       author_account: "sam",
       seq: 3,
-      title: "Courses du samedi",
-      text: "La liste des courses part le vendredi soir, magasin habituel.",
+      title: "Saturday groceries",
+      text: "The grocery list goes out on Friday evening, usual store.",
     },
   );
   h.quarantine.push({
     id: id("q"),
     name: "rule-courses-5e6f",
-    title: "Courses du dimanche",
-    text: "La liste part le samedi soir.",
+    title: "Sunday groceries",
+    text: "The list goes out on Saturday evening.",
     sha: "n0",
     updated_at: iso(2 * DAY),
     author_account: "lea",
@@ -338,7 +338,7 @@ export async function handleHousehold(state: MockState, user: string, method: st
     h.hh = {
       ...h.hh,
       id: id("hh"),
-      name: typeof b.name === "string" && b.name.trim() ? b.name.trim().slice(0, 80) : "Mon foyer",
+      name: typeof b.name === "string" && b.name.trim() ? b.name.trim().slice(0, 80) : "My household",
       created_at: new Date().toISOString(),
       payer: user,
     };

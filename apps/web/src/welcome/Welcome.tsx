@@ -12,7 +12,8 @@ export const BETA_URL = "https://nokker.ai/beta";
 const GOOGLE_ENABLED = import.meta.env?.VITE_NOKKER_GOOGLE === "1";
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
-type Props = Pick<NokkerStore, "client" | "access" | "status" | "retryAccess"> & { lang: Lang };
+type Props = Pick<NokkerStore, "client" | "access" | "status" | "retryAccess"> &
+  Partial<Pick<NokkerStore, "deviceStatus" | "forgetDeviceAndRetry">> & { lang: Lang };
 
 function failureKey(err: unknown): "loginBadCode" | "loginRateLimited" | "loginInsecure" | "loginGeneric" {
   if (err instanceof Error && err.message === "insecure_context") return "loginInsecure";
@@ -32,7 +33,7 @@ function readGoogleReturn(): { ticket?: string; error?: string } | null {
 
 /** Écran d'un visiteur sans session, connexion par code e-mail. Pas de création de compte :
  * le code ne part que pour une adresse déjà invitée, et la réponse est la même dans tous les cas. */
-export function Welcome({ client, access, status, retryAccess, lang: L }: Props): React.ReactElement {
+export function Welcome({ client, access, status, retryAccess, deviceStatus, forgetDeviceAndRetry, lang: L }: Props): React.ReactElement {
   const [step, setStep] = useState<"email" | "code">("email");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -106,6 +107,17 @@ export function Welcome({ client, access, status, retryAccess, lang: L }: Props)
             <p>{t(L, "inviteNetworkBody")}</p>
             <p className="ob-hint">{status}</p>
             <button type="button" className="ob-btn primary" onClick={retryAccess}>{t(L, "retry")}</button>
+          </section>
+        ) : null}
+        {access === "device-refused" ? (
+          <section aria-live="polite">
+            <h1 id="wl-title" className="ob-title">
+              {t(L, deviceStatus === "pending" ? "devPendingTitle" : deviceStatus === "revoked" ? "devRevokedTitle" : "devRefusedTitle")}
+            </h1>
+            <p>{t(L, "devTrustedPath")}</p>
+            <button type="button" className="ob-btn primary" onClick={forgetDeviceAndRetry ?? retryAccess}>
+              {t(L, "devRelogin")}
+            </button>
           </section>
         ) : null}
         {access === "signed-out" && step === "email" ? (

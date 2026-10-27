@@ -1,4 +1,6 @@
-export type InstallMode = "installed" | "prompt" | "ios" | "ios-inapp" | "android-menu" | "none";
+/** `desktop-prompt` : ordinateur dont le navigateur propose l'installation (beforeinstallprompt) — une ligne discrète,
+ * jamais l'étape « écran d'accueil » d'un téléphone. */
+export type InstallMode = "installed" | "prompt" | "ios" | "ios-inapp" | "android-menu" | "desktop-prompt" | "none";
 
 export interface InstallEnv {
   ua: string;
@@ -6,18 +8,27 @@ export interface InstallEnv {
   maxTouchPoints: number;
   standalone: boolean;
   hasPrompt: boolean;
+  /** `(pointer: coarse)` : écran tactile comme pointeur principal. */
+  coarse: boolean;
+  /** Écran étroit (téléphone, tablette en portrait). */
+  narrow: boolean;
 }
 
 /** Quel geste d'installation proposer. Pur : l'environnement est passé en argument pour être testable. */
 export function installMode(env: InstallEnv): InstallMode {
+  // iPadOS 13+ se présente en « Macintosh » : le tactile le trahit (maxTouchPoints > 1).
+  const ios = /iPhone|iPad|iPod/.test(env.ua) || (env.platform === "MacIntel" && env.maxTouchPoints > 1);
+  const android = /Android/.test(env.ua);
+  // Mobile : iOS/Android, ou pointeur grossier sur écran étroit. Sur ordinateur, pas d'étape « écran d'accueil ».
+  const mobile = ios || android || (env.coarse && env.narrow);
+  if (!mobile) return env.hasPrompt && !env.standalone ? "desktop-prompt" : "none";
   if (env.standalone) return "installed";
   if (env.hasPrompt) return "prompt";
-  const ios = /iPhone|iPad|iPod/.test(env.ua) || (env.platform === "MacIntel" && env.maxTouchPoints > 1);
   if (ios) {
     // Navigateur intégré (Telegram, Gmail…) : pas de « Sur l'écran d'accueil », il faut passer par Safari.
     return /Safari\//.test(env.ua) || /CriOS|FxiOS|EdgiOS/.test(env.ua) ? "ios" : "ios-inapp";
   }
-  return /Android/.test(env.ua) ? "android-menu" : "none";
+  return android ? "android-menu" : "none";
 }
 
 interface BeforeInstallPromptEvent extends Event {
@@ -50,6 +61,8 @@ export function currentInstallMode(): InstallMode {
     maxTouchPoints: navigator.maxTouchPoints,
     standalone: isStandalone(),
     hasPrompt: hasInstallPrompt(),
+    coarse: window.matchMedia("(pointer: coarse)").matches,
+    narrow: window.matchMedia("(max-width: 900px)").matches,
   });
 }
 

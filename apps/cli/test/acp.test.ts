@@ -129,14 +129,14 @@ describe("nokker acp (ACP v1) contre le mock", () => {
   });
 
   it("dossier hors des racines : erreur claire, pas de session", async () => {
-    await expect(ctx.request("session/new", { cwd: join(dir, "ailleurs"), mcpServers: [] })).rejects.toThrow(/hors des racines/);
+    await expect(ctx.request("session/new", { cwd: join(dir, "ailleurs"), mcpServers: [] })).rejects.toThrow(/folder outside the roots declared in Lokkal/);
   });
 
   it("un tour : texte, outils avec effet, diff du patch, carte → permission, carte forte → terminal (machine non liée), coût", async () => {
     let terminalSeen = false;
     answer = (req) => {
       // Commande de test : « Pour cette session » est la première option (mêmes règles que la CLI).
-      expect(req.options[0]!.name).toBe("Pour cette session");
+      expect(req.options[0]!.name).toBe("For this session");
       expect(req.options.map((o) => o.kind)).toContain("reject_once");
       return { outcome: { outcome: "selected", optionId: req.options[0]!.optionId } };
     };
@@ -146,7 +146,7 @@ describe("nokker acp (ACP v1) contre le mock", () => {
     // locale.
     const where = await until(() =>
       ofSession(sid).find(
-        (u) => u.sessionUpdate === "tool_call_update" && JSON.stringify((u as { content?: unknown }).content ?? "").includes("à décider dans le terminal (`nokker`)"),
+        (u) => u.sessionUpdate === "tool_call_update" && JSON.stringify((u as { content?: unknown }).content ?? "").includes("decide it in the terminal (`nokker`)"),
       ),
     );
     terminalSeen = Boolean(where);
@@ -157,7 +157,7 @@ describe("nokker acp (ACP v1) contre le mock", () => {
     const res = await turn;
     expect(res.stopReason).toBe("end_turn");
     expect(terminalSeen).toBe(true);
-    expect(JSON.stringify(ofSession(sid))).not.toContain("attend ton téléphone");
+    expect(JSON.stringify(ofSession(sid))).not.toContain("it waits for your phone");
 
     // Une seule demande de permission : la commande de test (la carte forte n'en fait pas).
     expect(permissions).toHaveLength(1);
@@ -184,8 +184,8 @@ describe("nokker acp (ACP v1) contre le mock", () => {
 
     const all = text(sid);
     // Le chunk final ne double pas le texte déjà reçu en direct.
-    expect(all.split("J'ai corrigé")).toHaveLength(2);
-    expect(all).toMatch(/_[\d,]+ (k )?jetons · [\d,<\s]+ €_/);
+    expect(all.split("I fixed")).toHaveLength(2);
+    expect(all).toMatch(/_[\d.]+k? tokens · [\d.<€\s]+_/);
     expect((res as { _meta?: { nokker?: { cost?: { total_tokens?: number } } } })._meta?.nokker?.cost?.total_tokens).toBeGreaterThan(0);
   }, 20_000);
 
@@ -194,7 +194,7 @@ describe("nokker acp (ACP v1) contre le mock", () => {
     answer = () => null; // l'éditeur laisse la carte ouverte
     const turn = ctx.request("session/prompt", { sessionId: sid, prompt: [{ type: "text", text: "corrige le test add" }] });
     // « Pour cette session » couvre déjà pytest : la seule carte est la forte → terminal, puis on annule.
-    await until(() => ofSession(sid).filter((x) => x.sessionUpdate === "tool_call_update" && JSON.stringify(x).includes("à décider dans le terminal")).length >= 2);
+    await until(() => ofSession(sid).filter((x) => x.sessionUpdate === "tool_call_update" && JSON.stringify(x).includes("decide it in the terminal")).length >= 2);
     await ctx.notify("session/cancel", { sessionId: sid });
     const res = await turn;
     expect(res.stopReason).toBe("cancelled");
@@ -214,15 +214,15 @@ describe("nokker acp (ACP v1) contre le mock", () => {
       let resolved = false;
       const turn = ctx.request("session/prompt", { sessionId: k, prompt: [{ type: "text", text: "corrige le test add" }] }).finally(() => (resolved = true));
       // Carte 1 (pytest) accordée « une fois » → tour de suite → carte forte déposée (téléphone) : la demande attend.
-      await until(() => ofSession(k).some((u) => u.sessionUpdate === "tool_call_update" && JSON.stringify(u).includes("attend ton téléphone")));
+      await until(() => ofSession(k).some((u) => u.sessionUpdate === "tool_call_update" && JSON.stringify(u).includes("it waits for your phone")));
       const cardsNow = (await localApi("/v1/local/approvals")) as { approvals: Array<{ thread_id: string; strength: string; forwarded?: boolean }> };
       expect(cardsNow.approvals.find((a) => a.thread_id === k && a.strength === "strong")?.forwarded).toBe(true);
       // Montrée d'abord « au terminal » (pas encore déposée), puis mise à jour par `approval.forwarded`.
       const where = ofSession(k)
         .map((u) => JSON.stringify(u))
-        .filter((j) => j.includes("tool_call_update") && j.includes("Action forte"))
-        .map((j) => (j.includes("attend ton téléphone") ? "téléphone" : "terminal"));
-      expect(where).toEqual(["terminal", "téléphone"]);
+        .filter((j) => j.includes("tool_call_update") && j.includes("Strong action"))
+        .map((j) => (j.includes("it waits for your phone") ? "phone" : "terminal"));
+      expect(where).toEqual(["terminal", "phone"]);
       await wait(300);
       expect(resolved).toBe(false);
       const cards = (await localApi("/v1/local/approvals")) as { approvals: Array<{ id: string; thread_id: string; strength: string }> };
@@ -247,13 +247,13 @@ describe("nokker acp (ACP v1) contre le mock", () => {
       expect(pytestEnds.map((e) => e.status)).toEqual(["completed"]);
       expect(pytestEnds[0]!.rawOutput?.preview).toContain("1 passed");
       const rm = calls.find((c) => c.title.includes("rm -rf build"))!;
-      // Carte forte refusée : l'appel (« attend ton téléphone ») se ferme en échec, sans `tool.result`.
+      // Carte forte refusée : l'appel (« it waits for your phone ») se ferme en échec, sans `tool.result`.
       expect(ends.filter((e) => e.toolCallId === rm.toolCallId).at(-1)?.status).toBe("failed");
       const all = text(k);
-      expect(all).toContain("attend ton approbation sur la carte");
+      expect(all).toContain("is waiting for your approval on the card");
       // Un refus ne lance pas de tour de suite (`continuation: "none"`) : la demande et la suite de l'approbation.
-      expect(all).not.toContain("refusée");
-      expect(all.match(/_[\d,]+ (k )?jetons · [^_]+_/g)).toHaveLength(2);
+      expect(all).not.toMatch(/refusée|refused|rejected/i);
+      expect(all.match(/_[\d.]+k? tokens · [^_]+_/g)).toHaveLength(2);
     } finally {
       mock.state.approvalStyle = "inline";
       mock.state.strongRelay = false;
@@ -265,7 +265,7 @@ describe("nokker acp (ACP v1) contre le mock", () => {
     const before = text(sid).length;
     const r = await ctx.request("session/prompt", { sessionId: sid, prompt: [{ type: "text", text: "/cost" }] });
     expect(r.stopReason).toBe("end_turn");
-    expect(text(sid).slice(before)).toMatch(/Session : .*jetons[\s\S]*Jour \(UTC/);
+    expect(text(sid).slice(before)).toMatch(/Session: .*tokens[\s\S]*Day \(UTC/);
     const r2 = await ctx.request("session/prompt", { sessionId: sid, prompt: [{ type: "text", text: "/checkpoints" }] });
     expect(r2.stopReason).toBe("end_turn");
     expect(text(sid)).toMatch(/1\. `[0-9a-f]{8}`/);

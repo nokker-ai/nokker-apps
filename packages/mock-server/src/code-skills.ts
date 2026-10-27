@@ -24,8 +24,8 @@ export interface SessionExtras {
 }
 
 const SKILLS = [
-  { name: "release-notes", category: "docs", description: "Rédige les notes de version depuis les commits du dépôt.", content: "# Notes de version\n\n1. Lire `git log` depuis la dernière étiquette.\n2. Regrouper par type (feat, fix).\n3. Écrire `CHANGELOG.md`.\n", linked_files: ["templates/changelog.md"] },
-  { name: "test-runner", category: "dev", description: "Lance la suite de tests du projet et résume les échecs.", content: "# Tests\n\nLancer `npm test`, puis résumer chaque échec en une ligne.\n", linked_files: [] },
+  { name: "release-notes", category: "docs", description: "Writes release notes from the repository commits.", content: "# Release notes\n\n1. Read `git log` since the last tag.\n2. Group by type (feat, fix).\n3. Write `CHANGELOG.md`.\n", linked_files: ["templates/changelog.md"] },
+  { name: "test-runner", category: "dev", description: "Runs the project test suite and summarises the failures.", content: "# Tests\n\nRun `npm test`, then summarise each failure in one line.\n", linked_files: [] },
 ];
 
 const sha = (): string => createHash("sha256").update(randomBytes(16)).digest("hex");
@@ -33,7 +33,7 @@ const sha = (): string => createHash("sha256").update(randomBytes(16)).digest("h
 export function extrasFor(withRepo: boolean): SessionExtras {
   return {
     skills: withRepo
-      ? { enabled: true, project: "untrusted", root: ROOT, sha256: sha(), count: SKILLS.length, notice: `${SKILLS.length} compétence(s) dans .nokker/skills (dépôt de la session) : invisibles tant que tu ne leur fais pas confiance` }
+      ? { enabled: true, project: "untrusted", root: ROOT, sha256: sha(), count: SKILLS.length, notice: `${SKILLS.length} skill(s) in .nokker/skills (session repository): hidden until you trust them` }
       : { enabled: true, project: "absent", root: ROOT, sha256: null, count: 0, notice: null },
     kids: new Map(),
   };
@@ -97,7 +97,7 @@ export function extraTool(state: MockState, cs: string, x: SessionExtras, name: 
 function finishKid(state: MockState, cs: string, k: Kid, status: string, exit: string): void {
   k.view.status = status;
   k.view.exit_reason = exit;
-  k.view.summary = status === "completed" ? `(démo) ${k.view.goal} : fait, 1 commit sur ${k.view.worktree?.branch}.` : undefined;
+  k.view.summary = status === "completed" ? `(demo) ${k.view.goal}: done, 1 commit on ${k.view.worktree?.branch}.` : undefined;
   if (k.view.worktree) k.view.worktree = { ...k.view.worktree, commits: status === "completed" ? 1 : 0, dirty: false, kept: status !== "completed" };
   // Sa carte en attente est refusée (§7.28.14, fermeture et arrêt).
   for (const ap of state.approvals.values()) if (ap.thread_id === k.view.thread_id && ap.status === "pending") ap.status = "rejected";
@@ -115,8 +115,8 @@ export function devExtras(state: MockState, cs: string, x: SessionExtras, b: Rec
   if (sk?.action === "rewrite" || sk?.action === "invalid") {
     const invalid = sk.action === "invalid";
     x.skills = invalid
-      ? { enabled: true, project: "invalid", root: ROOT, sha256: null, count: 0, notice: "arbre .nokker/skills refusé : il contient un lien symbolique" }
-      : { enabled: true, project: "untrusted", root: ROOT, sha256: sha(), count: SKILLS.length, notice: "l'arbre .nokker/skills a changé pendant la session : nouvelle confiance nécessaire" };
+      ? { enabled: true, project: "invalid", root: ROOT, sha256: null, count: 0, notice: "the .nokker/skills tree was refused: it contains a symbolic link" }
+      : { enabled: true, project: "untrusted", root: ROOT, sha256: sha(), count: SKILLS.length, notice: "the .nokker/skills tree changed during the session: trust it again" };
     if (!invalid) state.publish({ type: "skill.untrusted", thread_id: cs, session_id: cs, root: ROOT, sha256: x.skills.sha256!, count: x.skills.count, notice: x.skills.notice! });
   }
   const sp = b.spawn as { goal?: string; card?: boolean } | undefined;
@@ -124,7 +124,7 @@ export function devExtras(state: MockState, cs: string, x: SessionExtras, b: Rec
     if (liveCount(x) >= MAX_SUBAGENTS) return `${MAX_SUBAGENTS} sous-agents vivants au plus par session`;
     const id = `sa${x.kids.size + 1}`;
     const thread = `${cs}/sa-${id}`;
-    const goal = sp.goal || "relire les tests et corriger les échecs";
+    const goal = sp.goal || "re-read the tests and fix the failures";
     const k: Kid = { started: Date.now(), view: { child_id: id, thread_id: thread, task_index: x.kids.size, goal, elapsed_s: 0, status: "running", last_tool: "read_file", isolated: true, worktree: { path: `${ROOT}/.nokker/worktrees/${id}`, branch: `nokker/sa-${id}` } } };
     x.kids.set(id, k);
     state.publish({ type: "subagent.started", thread_id: thread, parent_thread_id: cs, parent_turn: 0, child_id: id, child_thread_id: thread, goal, background: true });
@@ -142,7 +142,7 @@ export function devExtras(state: MockState, cs: string, x: SessionExtras, b: Rec
         args_sha256: createHash("sha256").update(JSON.stringify(args)).digest("hex"),
         effect: "destructive",
         rule: "effect:destructive",
-        reason: `sous-agent ${id} : terminal « rm -rf build/ »`,
+        reason: `sub-agent ${id}: terminal “rm -rf build/”`,
         advice: null,
         strength: "strong",
         status: "pending",
@@ -160,7 +160,7 @@ export function devExtras(state: MockState, cs: string, x: SessionExtras, b: Rec
       // Exécutée avec le noyau de l'ENFANT (pas de tour de suite chez le parent) ; enfant arrêté : la carte échoue.
       state.approvalEffects.set(approval.id, () => {
         settleApprovalBubbles(state, approval);
-        return k.view.status === "running" ? `(démo) sous-agent ${id} : commande exécutée dans son worktree` : "failed";
+        return k.view.status === "running" ? `(demo) sub-agent ${id}: command run in its worktree` : "failed";
       });
       k.view.last_tool = "terminal";
     }

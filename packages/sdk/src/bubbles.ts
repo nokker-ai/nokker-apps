@@ -180,6 +180,16 @@ export interface MediaState {
 }
 
 /** BUBBLES.md §10 — page HTML autonome écrite par une session (`page_create`). Jamais de HTML dans le state. */
+/** Exposé des motifs d'une page retirée (`moderation_notices` de nokker.ai, gardé par la page). */
+export interface PageModeration {
+  /** Secondes epoch ; null si inconnue. */
+  at: number | null;
+  /** Motif nettoyé ; null si nokker.ai ne l'a pas (encore) donné. */
+  reason: string | null;
+  /** Comment contester, FR et EN (phrase fixe de nokker.ai). */
+  appeal: { fr: string; en: string };
+}
+
 export interface ArtifactState {
   /** `pg_` + 16 hex, jamais dérivé du chemin ; une page par (fil, chemin). */
   page_id: string;
@@ -200,6 +210,11 @@ export interface ArtifactState {
   locality?: "local" | null;
   /** Dernière écriture de la page, en secondes epoch (`nokker/pages/store.py`). */
   updated_at: number;
+  /** Retirée par la modération de nokker.ai (§7.26 point 6) : heure (secondes epoch) où la machine l'a appris ; la page
+   * reste à son auteur, la publier rend 403 `page_moderated`. Absent ou null hors retrait. */
+  moderated_at?: number | null;
+  /** Exposé des motifs (DSA art. 17) : date du retrait, motif nettoyé (jamais d'adresse), phrase fixe pour contester. */
+  moderation?: PageModeration | null;
   /** Écriture en direct (X22, BUBBLES.md §10.2) : le modèle écrit le fichier de la page. Pendant ce temps, le client
    * montre le texte des `tool.input.delta` de ce `call_id` (vue du code, sans l'exécuter) et ne recharge pas
    * l'aperçu ; la bulle se recale (`bubble.updated` sans `writing`, nouvelle `version` si l'outil a écrit). */

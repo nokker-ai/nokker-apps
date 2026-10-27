@@ -27,7 +27,7 @@ async function until<T>(fn: () => T | undefined | false | null, ms = 5000): Prom
   }
 }
 
-afterEach(() => setLang("fr"));
+afterEach(() => setLang("en"));
 
 describe("doctor en anglais", () => {
   it("lignes de mémoire et mise en forme de la table", () => {

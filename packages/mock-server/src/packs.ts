@@ -37,46 +37,46 @@ const PACKS: DemoPack[] = [
   {
     name: "mail",
     title: "Mail and calendar",
-    description: "Trie la boîte, prépare les réponses et le résumé du matin (démo).",
+    description: "Triages the mailbox, drafts replies and the morning summary (demo).",
     connectors: ["mail", "calendar"],
     mcp: [],
     skills: [
-      { name: "mail-triage", family: "mail", description: "Classer et résumer les messages reçus.", locality: "both" },
-      { name: "mail-reply", family: "mail", description: "Préparer une réponse en brouillon, jamais l'envoyer seul.", locality: "both" },
+      { name: "mail-triage", family: "mail", description: "Sort and summarise incoming messages.", locality: "both" },
+      { name: "mail-reply", family: "mail", description: "Draft a reply, never send it on its own.", locality: "both" },
     ],
-    agents: [{ id: "mail-digest", name: "Résumé du matin", role: "Résume la boîte chaque matin", tools: ["mail_search", "mail_read", "bubble_show"], needs: [] }],
+    agents: [{ id: "mail-digest", name: "Morning summary", role: "Summarises the mailbox every morning", tools: ["mail_search", "mail_read", "bubble_show"], needs: [] }],
   },
   {
     name: "ops",
     title: "Ops runbooks",
-    description: "Runbooks d'exploitation : notes d'incident au web, contrôles sur la machine (démo).",
+    description: "Operations runbooks: incident notes on the web, checks on the machine (demo).",
     connectors: [],
     mcp: ["monitoring"],
     skills: [
-      { name: "incident-notes", family: "ops", description: "Tenir la chronologie d'un incident.", locality: "both" },
-      { name: "runbook-ssh", family: "ops", description: "Dérouler un runbook sur un hôte (ssh).", locality: "local" },
+      { name: "incident-notes", family: "ops", description: "Keep the timeline of an incident.", locality: "both" },
+      { name: "runbook-ssh", family: "ops", description: "Run a runbook on a host (ssh).", locality: "local" },
     ],
     agents: [
-      { id: "incident-scribe", name: "Scribe d'incident", role: "Tient la chronologie des incidents", tools: ["web_search", "bubble_show"], needs: [] },
-      { id: "ops-watch", name: "Veilleur ops", role: "Surveille les alertes de la supervision", tools: ["monitoring.alerts"], needs: [{ kind: "mcp", name: "monitoring" }] },
+      { id: "incident-scribe", name: "Incident scribe", role: "Keeps the incident timeline", tools: ["web_search", "bubble_show"], needs: [] },
+      { id: "ops-watch", name: "Ops watcher", role: "Watches the monitoring alerts", tools: ["monitoring.alerts"], needs: [{ kind: "mcp", name: "monitoring" }] },
     ],
   },
   {
     name: "mcp-builder",
     title: "MCP builder",
-    description: "Construire et tester un serveur MCP sur la machine (démo).",
+    description: "Build and test an MCP server on the machine (demo).",
     connectors: [],
     mcp: [],
-    skills: [{ name: "mcp-scaffold", family: "mcp", description: "Squelette d'un serveur MCP et ses tests.", locality: "local" }],
+    skills: [{ name: "mcp-scaffold", family: "mcp", description: "Skeleton of an MCP server and its tests.", locality: "local" }],
     agents: [],
   },
   {
     name: "video",
     title: "Video",
-    description: "Montage et sous-titres (démo : refusé par le scanner).",
+    description: "Editing and subtitles (demo: refused by the scanner).",
     connectors: [],
     mcp: [],
-    skills: [{ name: "subtitles", family: "video", description: "Sous-titrer une vidéo.", locality: "both" }],
+    skills: [{ name: "subtitles", family: "video", description: "Subtitle a video.", locality: "both" }],
     agents: [],
     refused: true,
   },
@@ -137,10 +137,10 @@ function machineOf(state: MockState, p: DemoPack, threadId: string | null, hando
     proposal = { machine_name: LINKED[0]!.name, bubble_id: b.id };
   }
   const next = proposal
-    ? `relais proposé vers « ${LINKED[0]!.name} » : accepte-le pour installer le reste là-bas`
+    ? `handoff proposed to “${LINKED[0]!.name}”: accept it to install the rest there`
     : need
-      ? `relais possible vers une machine liée qui déclare le mcp « ${need} » : la route d'installation avec handoff: true`
-      : `aucune machine liée ne déclare ce que demande le reste du pack : ouvre Lokkal sur ta machine et lance pack_install ${p.name}`;
+      ? `handoff possible to a linked machine that declares the mcp “${need}”: the install route with handoff: true`
+      : `no linked machine declares what the rest of the pack needs: open Lokkal on your machine and run pack_install ${p.name}`;
   return { skills: s.machine.skills, agents: s.machine.agents, linked: LINKED, handoff: proposal, next };
 }
 
@@ -149,10 +149,10 @@ function propose(state: MockState, p: DemoPack, threadId: string, templates: str
     const t = p.agents.find((a) => a.id === id)!;
     const b = createBubble(state, threadId, {
       kind: "agent_draft",
-      title: `Nouvel agent : ${t.name}`,
+      title: `New agent: ${t.name}`,
       status: "idle",
-      state: { name: t.name, role: t.role, model: "Apertus 70B (démo)", tools: t.tools, fill: 1, pack: p.name, template: t.id, needs: t.needs } as never,
-      actions: [{ id: "activate", label: "Activer l'agent", primary: true }],
+      state: { name: t.name, role: t.role, model: "Apertus 70B (demo)", tools: t.tools, fill: 1, pack: p.name, template: t.id, needs: t.needs } as never,
+      actions: [{ id: "activate", label: "Activate agent", primary: true }],
     });
     return { template: t.id, bubble_id: b.id };
   });
@@ -171,24 +171,24 @@ function removed(state: MockState, pack: string, proposed: string[], threadId: s
   const agents = fromPack(state, pack).map((a) => ({ id: a.id, name: a.name, status: a.status, armed: a.status === "armed" }));
   let card: string | null = null;
   if (agents.length && threadId) {
-    const st = { pack, agents, note: "le pack est retiré ; ces agents en viennent et restent tels quels tant que tu ne choisis pas" };
+    const st = { pack, agents, note: "the pack is removed; these agents came from it and stay as they are until you choose" };
     const existing = [...state.bubbles.values()].find((b) => b.kind === "pack_agents" && b.thread_id === threadId && !b.closed_at && (b.state as { pack?: string }).pack === pack);
     const b = existing
       ? updateBubble(state, existing.id, { state: st as never })
       : createBubble(state, threadId, {
           kind: "pack_agents",
-          title: `Agents du pack « ${pack} »`,
+          title: `Agents from the “${pack}” pack`,
           status: "idle",
           state: st as never,
           actions: [
-            { id: "disarm", label: "Désarmer" },
-            { id: "delete", label: "Supprimer" },
-            { id: "keep", label: "Garder", primary: true },
+            { id: "disarm", label: "Disarm" },
+            { id: "delete", label: "Delete" },
+            { id: "keep", label: "Keep", primary: true },
           ],
         });
     card = b.id;
   }
-  return { drafts_closed: closed, agents, card, ...(agents.length ? { note: "les agents créés depuis ce pack sont gardés tels quels : la carte propose de les désarmer ou de les supprimer, l'utilisateur choisit" } : {}) };
+  return { drafts_closed: closed, agents, card, ...(agents.length ? { note: "the agents created from this pack are kept as they are: the card offers to disarm or delete them, the user chooses" } : {}) };
 }
 
 // Carte `pack_agents` : décision en direct (§9.6), seulement sur les agents qui existent encore ET viennent du pack.
@@ -249,7 +249,7 @@ export async function handlePacks(state: MockState, user: string | null, method:
       ...summary(p, !!rec, true),
       skills: p.skills,
       agents: p.agents.map((a) => ({ id: a.id, name: a.name, role: a.role, trigger: { kind: "manual" }, auto_approve: [], needs: a.needs.length ? { mcp: a.needs.map((n) => n.name) } : {} })),
-      mcp: p.mcp.map((r) => ({ role: r, purpose: "alertes de la supervision (démo)", examples: ["Prometheus Alertmanager"], optional: false, secrets: [], tools: { alerts: { default: "alerts_list", effect: "read" } } })),
+      mcp: p.mcp.map((r) => ({ role: r, purpose: "monitoring alerts (demo)", examples: ["Prometheus Alertmanager"], optional: false, secrets: [], tools: { alerts: { default: "alerts_list", effect: "read" } } })),
       tools: [],
       ...(rec ? { install: { ...rec, bind: {} } } : {}),
       created_agents: fromPack(state, p.name).map((a) => ({ id: a.id, name: a.name, status: a.status, armed: a.status === "armed", template: a.origin?.template ?? null })),
@@ -295,8 +295,8 @@ export async function handlePacks(state: MockState, user: string | null, method:
       armed: [],
       partial: machine !== null,
       machine,
-      note: "aucun agent n'est créé ni armé : chaque carte s'active par l'utilisateur",
-      ...(p.connectors.length ? { setup: [`connecteurs du compte à poser : ${p.connectors.join(", ")}`] } : {}),
+      note: "no agent is created or armed: the user activates each card",
+      ...(p.connectors.length ? { setup: [`account connectors to set up: ${p.connectors.join(", ")}`] } : {}),
     };
     return send(200, out), true;
   }

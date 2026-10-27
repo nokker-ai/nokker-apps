@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { BUBBLE_THEME } from "@nokker-apps/brand";
 import type { Bubble } from "@nokker-apps/sdk";
 import { SPINNER_FRAMES, bubbleLineModel } from "../src/ui/bubbleLineModel.js";
+import { setLang } from "../src/i18n/index.js";
 
 function monitorBubble(status: Bubble["status"]): Bubble {
   return {
@@ -85,9 +86,21 @@ describe("bubbleLineModel — kind absent de ce client", () => {
   it("ne plante pas et rend une ligne neutre", () => {
     const b = { ...monitorBubble("idle"), kind: "hologramme", state: { x: 1 } } as unknown as Bubble;
     const m = bubbleLineModel(b, 0);
-    expect(m.label).toBe("Bulle");
+    expect(m.label).toBe("Bubble");
     expect(m.title).toBe("Disque host-1 /");
     expect(m.hint).toBeNull();
+  });
+
+  it("libellé dans la langue du terminal : anglais par défaut, français sur demande", () => {
+    const b = { ...monitorBubble("idle"), kind: "search" } as unknown as Bubble;
+    expect(bubbleLineModel(b, 0).label).toBe("Web search");
+    setLang("fr");
+    try {
+      expect(bubbleLineModel(b, 0).label).toBe("Recherche web");
+      expect(bubbleLineModel({ ...b, kind: "hologramme" } as unknown as Bubble, 0).label).toBe("Bulle");
+    } finally {
+      setLang("en");
+    }
   });
 
   it("artifact : titre + « page <nom> »", () => {

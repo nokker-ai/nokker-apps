@@ -10,13 +10,13 @@ describe("bin sans TTY", () => {
   it("stdin non-TTY : code 2, message, pas de trace", () => {
     const r = run([]);
     expect(r.status).toBe(2);
-    expect(r.stderr).toContain("mode interactif impossible sans terminal");
+    expect(r.stderr).toContain("interactive mode needs a terminal");
     expect(r.stderr + r.stdout).not.toMatch(/Raw mode|\bat .*\(.*:\d+:\d+\)/);
   });
   it("argument inconnu : code 2 et message", () => {
     const r = run(["status"]);
     expect(r.status).toBe(2);
-    expect(r.stderr).toContain("argument inconnu : status (nokker --help)");
+    expect(r.stderr).toContain("unknown argument: status (nokker --help)");
     expect(r.stderr).not.toMatch(/Raw mode/);
   });
 });

@@ -232,7 +232,7 @@ export function runAction(state: MockState, id: string, actionId: string): { sta
     const origin = st.pack && st.template ? { pack: st.pack, template: st.template } : null;
     const agent = createAgent(state, { name: st.name, role: st.role, model: st.model, tools: st.tools, instructions: st.instructions, trigger: st.trigger, secrets: st.secrets, budget: st.budget, auto_approve: st.auto_approve }, MOCK_USER, origin);
     closeBubble(state, b.id);
-    if (b.thread_id) state.appendTurn(b.thread_id, "", `Agent « ${agent.name} » créé et armé — il est dans l'onglet Crew.`, { sender: null, channel: "web" });
+    if (b.thread_id) state.appendTurn(b.thread_id, "", `Agent “${agent.name}” created and armed — it is in the Crew tab.`, { sender: null, channel: "web" });
     return { status: 200, body: { activated: true, agent: clone(agent) } };
   }
   const direct = directHandlers.get(b.kind);
@@ -250,7 +250,7 @@ export function runAction(state: MockState, id: string, actionId: string): { sta
   if (!b.thread_id) throw new MockHttpError(400, "bulle sans fil");
   const text = `[Action « ${action.label || actionId} » demandée sur la bulle « ${b.title} » (${b.id})]`;
   const handler = handlers.get(`${b.kind}:${actionId}`);
-  backgroundTurn(state, b.thread_id, text, () => (handler ? handler(state, b) : `Action « ${action.label} » prise en compte (démo).`), {
+  backgroundTurn(state, b.thread_id, text, () => (handler ? handler(state, b) : `Action “${action.label}” noted (demo).`), {
     channel: "web",
     delayMs: 700,
   });

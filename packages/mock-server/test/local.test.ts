@@ -75,6 +75,9 @@ describe("sessions locales", () => {
     expect(a.cwd).toBe("/work/proj");
     const raw = await (await fetch(`${mock.url}/v1/local/sessions`, { headers: { Authorization: `Bearer ${mock.localToken}` } })).json();
     expect(Array.isArray((raw as { sessions: unknown }).sessions)).toBe(true); // forme du noyau
+    // Racines (noyau 0bb77d3) : où une session peut s'ouvrir, pour le « + session de code » du web.
+    expect((raw as { roots: unknown }).roots).toEqual(["/work"]);
+    expect((await client.listLocalSessionsAndRoots()).roots).toEqual(["/work"]);
     const list = await client.listLocalSessions();
     // Forme du noyau (§7.4.1) : titre null avant le premier tour, rien en cours, aucune carte.
     expect(list.find((s) => s.thread_id === a.thread_id)).toEqual({ thread_id: a.thread_id, cwd: "/work/proj", title: null, last_turn_at: null, working: false, pending_approvals: 0 });
@@ -84,7 +87,7 @@ describe("sessions locales", () => {
     expect((await client.createLocalSession({ cwd: "/work/proj", thread_id: a.thread_id, resume: a.thread_id })).thread_id).toBe(a.thread_id);
     await expect(client.createLocalSession({ cwd: "/work/proj", thread_id: a.thread_id, resume: "th_autre" })).rejects.toMatchObject({ status: 400 });
     await expect(client.createLocalSession({ cwd: "/work/proj", resume: 12 as never })).rejects.toMatchObject({ status: 400 });
-    await expect(client.createLocalSession({ cwd: "/etc" })).rejects.toMatchObject({ status: 403 });
+    await expect(client.createLocalSession({ cwd: "/etc" })).rejects.toMatchObject({ status: 403, body: { error: { message: "dossier hors des racines déclarées" } } });
     // Fil inconnu : le noyau l'ouvre sous cet id.
     expect((await client.createLocalSession({ cwd: "/work/proj", resume: "th_inconnu" })).thread_id).toBe("th_inconnu");
     // Après un tour : titre, date ISO.
@@ -252,6 +255,21 @@ describe("hardline, annulation", () => {
     expect(types[0]).toBe("subagent.started");
     expect(types.at(-1)).toBe("subagent.finished");
     expect(types).toContain("subagent.progress");
+  });
+});
+
+describe("déclencheurs en anglais (le mock parle anglais, les demandes des deux langues sont comprises)", () => {
+  const ask = async (th: string, text: string): Promise<string> => (await client.chatCompletion(th, [{ role: "user", content: text }])).choices[0]!.message.content;
+
+  it("réponse par défaut, sous-agent, arrière-plan, commande interdite", async () => {
+    const th = await newSession("/work/trigger-en");
+    expect(await ask(th, "hello")).toBe("Local session on “trigger-en”. Ask me for example “fix test test_app”.");
+    const before = events.filter((e) => e.type === "subagent.finished").length;
+    expect(await ask(th, "run this in parallel with a sub-agent")).toBe("The sub-agent has finished: one commit on its branch, clean tree.");
+    // L'événement peut arriver juste après la réponse : on l'attend plutôt que de le compter tout de suite.
+    await until(() => events.filter((e) => e.type === "subagent.finished").length === before + 1 || undefined);
+    expect(await ask(th, "do it in the background")).toMatch(/^Two sub-agents are running in the background/);
+    expect(await ask(th, "please wipe the whole disk")).toBe("The core forbids this command, I am not running it.");
   });
 });
 

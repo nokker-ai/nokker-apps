@@ -17,14 +17,7 @@ export function loadSummary(load: DeckLoad | null, lang: Lang = "fr"): { ramPct:
   return { ramPct, cpuPct, text: cw(lang, "freeOf", { free: gb(load.ram.free_mb), total: gb(load.ram.total_mb), cpu: cpuPct, gpu }) };
 }
 
-export const SESSION_STATE_LABEL: Record<DeckSession["state"], string> = {
-  idle: "au repos",
-  working: "travaille",
-  awaiting_approval: "attend une décision",
-};
-
 export function sessionStateLabel(st: DeckSession["state"], lang: Lang = "fr"): string {
-  if (lang === "fr") return SESSION_STATE_LABEL[st] ?? st;
   return st === "idle" ? cw(lang, "sIdle") : st === "working" ? cw(lang, "sWorking") : cw(lang, "sAwaiting");
 }
 

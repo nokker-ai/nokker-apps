@@ -17,7 +17,7 @@ const done = (turn = "th_1:0"): NokkerEvent =>
 describe("écriture en direct (X22)", () => {
   it("le premier delta crée la ligne, les suivants défilent ; tool.call complète sans doublon ; tool.result replie", () => {
     let lines: ToolLine[] = applyToolEvent([], delta("c1", 0, "", { path: "index.html", field: "content" }));
-    expect(formatToolLine(lines[0]!)).toBe("⟳ write_file index.html (écriture)");
+    expect(formatToolLine(lines[0]!)).toBe("⟳ write_file index.html (write)");
     const body = Array.from({ length: 10 }, (_, i) => `ligne ${i + 1}\n`).join("");
     lines = applyToolEvent(lines, delta("c1", 1, body.slice(0, 40)));
     lines = applyToolEvent(lines, delta("c1", 1, "doublon ignoré"));
@@ -59,7 +59,7 @@ describe("écriture en direct (X22)", () => {
 describe("lignes d'outil", () => {
   it("⟳ avec l'effet en clair puis ✓ avec la durée", () => {
     let lines: ToolLine[] = applyToolEvent([], call("c1", "patch", { path: "src/app.py" }));
-    expect(formatToolLine(lines[0]!)).toBe("⟳ patch src/app.py (écriture)");
+    expect(formatToolLine(lines[0]!)).toBe("⟳ patch src/app.py (write)");
     lines = applyToolEvent(lines, result("c1", "patch"));
     expect(formatToolLine(lines[0]!)).toBe("✓ patch src/app.py 120 ms");
   });
@@ -69,7 +69,7 @@ describe("lignes d'outil", () => {
     lines = applyToolEvent(lines, call("c2", "terminal", { command: "rm -rf build" }, "destructive"));
     lines = applyToolEvent(lines, result("c1", "terminal", true, 480));
     expect(lines.map((l) => l.ok)).toEqual([true, null]);
-    expect(formatToolLine(lines[1]!)).toBe("⟳ terminal rm -rf build (destructif)");
+    expect(formatToolLine(lines[1]!)).toBe("⟳ terminal rm -rf build (destructive)");
     lines = applyToolEvent(lines, result("c2", "terminal", false, 0));
     expect(lines[1]!.ok).toBe(false);
     expect(formatToolLine(lines[1]!).startsWith("✗")).toBe(true);
@@ -111,7 +111,7 @@ describe("modèle de la carte locale", () => {
     expect(choiceToDecision("reject")).toEqual({ decision: "reject", scope: "once" });
     expect(approvalTarget(card())).toBe("rm -rf build");
     expect(decisionSummary(card(), "approved", "always", "terminal(rm -rf*)")).toContain("terminal(rm -rf*)");
-    expect(decisionSummary(card(), "expired")).toContain("expirée");
+    expect(decisionSummary(card(), "expired")).toContain("expired");
     expect(remainingSeconds(card())).toBeGreaterThan(290);
     expect(remainingSeconds(card({ expires_at: new Date(Date.now() - 5000).toISOString() }))).toBe(0);
   });
@@ -150,11 +150,11 @@ describe("carte posée par le modèle (LOKKAL.md §7.4.9)", () => {
     let lines = applyToolEvent([], call("c1", "terminal", { command: "pytest -q" }));
     lines = applyToolEvent(lines, pending("c1", "appr_1"));
     expect(lines[0]!.ok).toBeNull();
-    expect(formatToolLine(lines[0]!)).toBe("⏸ terminal pytest -q (en attente d'approbation)");
+    expect(formatToolLine(lines[0]!)).toBe("⏸ terminal pytest -q (waiting for approval)");
     lines = applyToolEvent(lines, done());
     expect(lines).toHaveLength(1); // la fin du tour qui a posé la carte ne la retire pas
     lines = applyToolEvent(lines, decided("appr_1", "approved"));
-    expect(formatToolLine(lines[0]!)).toBe("⟳ terminal pytest -q (approuvé, exécution…)");
+    expect(formatToolLine(lines[0]!)).toBe("⟳ terminal pytest -q (approved, running…)");
     lines = applyToolEvent(lines, { type: "tool.result", thread_id: "th_1", turn_id: "th_1:0", call_id: "c1", approval_id: "appr_1", name: "terminal", ok: true, is_error: false, ms: 480, preview: "1 passed" } as NokkerEvent);
     expect(formatToolLine(lines[0]!)).toBe("✓ terminal pytest -q 480 ms");
     expect(lines[0]!.preview).toBe("1 passed");
@@ -167,7 +167,7 @@ describe("carte posée par le modèle (LOKKAL.md §7.4.9)", () => {
     expect(applyToolEvent(lines, decided("appr_x", "rejected"))).toBe(lines);
     const rejected = applyToolEvent(lines, decided("appr_2", "rejected"));
     expect(formatToolLine(rejected[0]!)).toBe("✗ terminal rm -rf build");
-    expect(rejected[0]!.preview).toBe("refusé — non exécuté");
-    expect(applyToolEvent(lines, decided("appr_2", "expired"))[0]!.preview).toBe("approbation expirée — non exécuté");
+    expect(rejected[0]!.preview).toBe("rejected — not run");
+    expect(applyToolEvent(lines, decided("appr_2", "expired"))[0]!.preview).toBe("approval expired — not run");
   });
 });

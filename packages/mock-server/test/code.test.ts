@@ -105,7 +105,7 @@ describe("sessions de code (§7.28)", () => {
     const listed = await c.callCodeSessionTool(s.id, "checkpoint_list");
     expect("content" in listed && !listed.is_error).toBe(true);
     const points = JSON.parse((listed as { content: string }).content) as { hash: string; short_hash: string; reason: string }[];
-    expect(points.map((p) => p.reason)).toEqual(["avant patch src/app.py", "avant terminal", "début de session"]);
+    expect(points.map((p) => p.reason)).toEqual(["before patch src/app.py", "before terminal", "session start"]);
     expect((await c.getCodeSession(s.id)).status).toBe("active"); // l'outil rouvre le bac à sable
     const diff = await c.callCodeSessionTool(s.id, "checkpoint_diff", { hash: points[2]!.hash });
     expect(JSON.parse((diff as { content: string }).content).diff).toContain("src/app.py");

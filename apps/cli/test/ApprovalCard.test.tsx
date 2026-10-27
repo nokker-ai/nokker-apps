@@ -16,33 +16,33 @@ const DOWN = "\u001B[B";
 
 describe("ApprovalCard locale", () => {
   it("affiche le cadre, l'outil, l'effet, la commande et les choix", () => {
-    const { lastFrame } = render(<ApprovalCard approval={base} local busy={false} message={null} />);
-    const f = lastFrame()!;
-    expect(f).toContain("Action à approuver");
-    expect(f).toContain("terminal");
-    expect(f).toContain("destructif");
-    expect(f).toContain("rm -rf build");
-    expect(f).toContain("1. Une fois");
-    expect(f).toContain("2. Pour cette session");
-    expect(f).toContain("3. Toujours cette commande");
-    expect(f).toContain("3b. Toujours les commandes");
-    expect(f).toContain("4. Refuser");
+    const f = render(<ApprovalCard approval={base} local busy={false} message={null} />).lastFrame()!;
+    expect(f).toContain("⚠ Action to approve");
+    expect(f).toContain("Tool terminal · effect destructive");
+    expect(f).toContain("Command: rm -rf build");
+    expect(f).toContain("1. Once");
+    expect(f).toContain("2. For this session");
+    expect(f).toContain("3. Always this command");
+    expect(f).toContain("3b. Always commands starting with");
+    expect(f).toContain("4. Reject");
+    expect(f).toMatch(/↑\/↓ or 1-4 · Enter validates · expires in \d/);
   });
 
-  it("en anglais (langue par défaut)", () => {
-    setLang("en");
+  it("en français (langue posée par le test)", () => {
+    setLang("fr");
     try {
       const f = render(<ApprovalCard approval={base} local busy={false} message={null} />).lastFrame()!;
-      expect(f).toContain("⚠ Action to approve");
-      expect(f).toContain("Tool terminal · effect destructive");
-      expect(f).toContain("Command: rm -rf build");
-      expect(f).toContain("1. Once");
-      expect(f).toContain("2. For this session");
-      expect(f).toContain("3. Always this command");
-      expect(f).toContain("4. Reject");
-      expect(f).toMatch(/↑\/↓ or 1-4 · Enter validates · expires in \d/);
+      expect(f).toContain("Action à approuver");
+      expect(f).toContain("terminal");
+      expect(f).toContain("destructif");
+      expect(f).toContain("rm -rf build");
+      expect(f).toContain("1. Une fois");
+      expect(f).toContain("2. Pour cette session");
+      expect(f).toContain("3. Toujours cette commande");
+      expect(f).toContain("3b. Toujours les commandes");
+      expect(f).toContain("4. Refuser");
     } finally {
-      setLang("fr");
+      setLang("en");
     }
   });
 
@@ -91,17 +91,17 @@ describe("ApprovalCard locale", () => {
   it("carte forte d'une session locale : seulement Une fois / Refuser (le noyau répond 400 sinon)", () => {
     const { lastFrame } = render(<ApprovalCard approval={{ ...base, strength: "strong", suggested_rules: [] }} local busy={false} message={null} />);
     const f = lastFrame()!;
-    expect(f).toContain("1. Une fois");
-    expect(f).toContain("4. Refuser");
-    expect(f).not.toContain("2. Pour cette session");
-    expect(f).not.toContain("Toujours");
+    expect(f).toContain("1. Once");
+    expect(f).toContain("4. Reject");
+    expect(f).not.toContain("2. For this session");
+    expect(f).not.toContain("Always");
   });
 
   it("carte forte : pas de choix Toujours, « décider sur téléphone », aucune signature proposée", () => {
     const { lastFrame } = render(<ApprovalCard approval={{ ...base, strength: "strong" }} busy={false} message={null} />);
     const f = lastFrame()!;
-    expect(f).toContain("téléphone");
-    expect(f).not.toContain("Toujours");
+    expect(f).toContain("phone");
+    expect(f).not.toContain("Always");
     expect(f).not.toContain("[p]");
   });
 
@@ -118,7 +118,7 @@ describe("ApprovalCard locale", () => {
     const r = render(<ApprovalCard approval={a} local busy={false} message={null} onLocalDecision={onLocalDecision} />);
     await tick();
     const f = r.lastFrame()!;
-    expect(f).toMatch(/1\. Pour cette session[\s\S]*2\. Une fois[\s\S]*3\. Toujours[\s\S]*4\. Refuser/);
+    expect(f).toMatch(/1\. For this session[\s\S]*2\. Once[\s\S]*3\. Always[\s\S]*4\. Reject/);
     r.stdin.write("1");
     await tick();
     expect(onLocalDecision).toHaveBeenLastCalledWith("approve", "session", undefined);
@@ -132,7 +132,7 @@ describe("ApprovalCard locale", () => {
     const onLocalDecision = vi.fn();
     const r = render(<ApprovalCard approval={a} local busy={false} message={null} onLocalDecision={onLocalDecision} />);
     await tick();
-    expect(r.lastFrame()).toMatch(/1\. Une fois[\s\S]*2\. Pour cette session/);
+    expect(r.lastFrame()).toMatch(/1\. Once[\s\S]*2\. For this session/);
     r.stdin.write("2");
     await tick();
     expect(onLocalDecision).toHaveBeenLastCalledWith("approve", "session", undefined);

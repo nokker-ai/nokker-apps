@@ -38,8 +38,8 @@ describe("App (saisie pendant la connexion, en-tête)", () => {
     r.stdin.write("bonjour"); // aucune session encore : la connexion n'a même pas commencé
     await wait(20);
     r.stdin.write("\r");
-    await frameHas(r, "partira dès que la session sera prête");
-    await frameHas(r, "Session locale sur « attente »"); // la réponse du tour
+    await frameHas(r, "will be sent as soon as the session is ready");
+    await frameHas(r, "Local session on “attente”"); // la réponse du tour
     await wait(300);
     const turns = [...mock.state.threads.values()].flatMap((t) => t.turns).filter((t) => t.user === "bonjour");
     expect(turns).toHaveLength(1);
@@ -58,27 +58,27 @@ describe("App (saisie pendant la connexion, en-tête)", () => {
 describe("App (session locale)", () => {
   it("en-tête du dossier, outils, carte, choix 2, résumé dans le fil, réponse", async () => {
     const r = render(<App baseUrl={mock.url} cwd="/work/mon-projet" />);
-    await frameHas(r, "Session de code sur /work/mon-projet");
+    await frameHas(r, "Code session on /work/mon-projet");
     expect(r.lastFrame()).toContain("mon-projet");
-    expect(r.lastFrame()).toContain("routage auto");
+    expect(r.lastFrame()).toContain("auto routing");
     r.stdin.write("corrige le test add");
     await wait(50);
     r.stdin.write("\r");
-    await frameHas(r, "Action à approuver");
+    await frameHas(r, "Action to approve");
     // mode accept_edits : le patch passe sans carte, la première carte est pytest (terminal)
     expect(r.lastFrame()).toContain("✓ patch src/app.py");
-    expect(r.lastFrame()).toContain("Commande : pytest -q tests/test_add.py");
-    expect(r.lastFrame()).toContain("3. Toujours cette commande");
+    expect(r.lastFrame()).toContain("Command: pytest -q tests/test_add.py");
+    expect(r.lastFrame()).toContain("3. Always this command");
     // commande de test : « Pour cette session » est la touche 1
-    expect(r.lastFrame()).toMatch(/1\. Pour cette session[\s\S]*2\. Une fois/);
+    expect(r.lastFrame()).toMatch(/1\. For this session[\s\S]*2\. Once/);
     await wait(150); // laisse Ink brancher les touches de la carte
     r.stdin.write("1");
-    await frameHas(r, "✓ Approuvé (pour cette session) : terminal pytest -q tests/test_add.py");
-    await frameHas(r, "Commande : rm -rf build"); // destructif : carte sans « Toujours »
-    expect(r.lastFrame()).not.toContain("3. Toujours");
+    await frameHas(r, "✓ Approved (for this session): terminal pytest -q tests/test_add.py");
+    await frameHas(r, "Command: rm -rf build"); // destructif : carte sans « Toujours »
+    expect(r.lastFrame()).not.toContain("3. Always");
     await wait(150);
     r.stdin.write("1");
-    await frameHas(r, "est nettoyé");
+    await frameHas(r, "is cleaned up");
     r.unmount();
   });
 
@@ -86,21 +86,21 @@ describe("App (session locale)", () => {
     mock.state.approvalStyle = "kernel";
     try {
       const r = render(<App baseUrl={mock.url} cwd="/work/noyau" />);
-      await frameHas(r, "Session de code sur /work/noyau");
+      await frameHas(r, "Code session on /work/noyau");
       r.stdin.write("corrige le test add");
       await wait(50);
       r.stdin.write("\r");
-      await frameHas(r, "Action à approuver");
-      await frameHas(r, "⏸ terminal pytest -q tests/test_add.py (en attente d'approbation)");
+      await frameHas(r, "Action to approve");
+      await frameHas(r, "⏸ terminal pytest -q tests/test_add.py (waiting for approval)");
       await wait(150);
       r.stdin.write("2"); // Une fois
       // `tool.result` de l'exécuteur (même call_id, approval_id) : la ligne se ferme, sortie dépliée.
       await frameHas(r, "✓ terminal pytest -q tests/test_add.py");
       await frameHas(r, "1 passed in 0.12s");
-      await frameHas(r, "Commande : rm -rf build"); // la carte forte arrive dans le tour de suite
+      await frameHas(r, "Command: rm -rf build"); // la carte forte arrive dans le tour de suite
       await wait(150);
       r.stdin.write("\u0003"); // refus : rien ne tourne après (continuation « none »)
-      await frameHas(r, "✗ Refusé : terminal rm -rf build");
+      await frameHas(r, "✗ Rejected: terminal rm -rf build");
       await frameHas(r, "✗ terminal rm -rf build");
       r.unmount();
     } finally {
@@ -110,17 +110,17 @@ describe("App (session locale)", () => {
 
   it("Échap pendant une carte ne décide pas ; /cancel annule le tour", async () => {
     const r = render(<App baseUrl={mock.url} cwd="/work/annule-moi" />);
-    await frameHas(r, "Session de code sur /work/annule-moi");
+    await frameHas(r, "Code session on /work/annule-moi");
     r.stdin.write("corrige le test add");
     await wait(50);
     r.stdin.write("\r");
-    await frameHas(r, "Action à approuver");
+    await frameHas(r, "Action to approve");
     await wait(150);
     r.stdin.write("\u001B");
     await wait(300);
-    expect(r.lastFrame()).toContain("Action à approuver");
+    expect(r.lastFrame()).toContain("Action to approve");
     r.stdin.write("\u0003"); // Ctrl+C : refus (+ annulation du tour s'il tourne encore)
-    await frameHas(r, "✗ Refusé : terminal pytest -q tests/test_add.py");
+    await frameHas(r, "✗ Rejected: terminal pytest -q tests/test_add.py");
     r.unmount();
   });
 });
@@ -128,7 +128,7 @@ describe("App (session locale)", () => {
 describe("App (commandes d'outils du noyau)", () => {
   async function open(cwd: string | null) {
     const r = render(<App baseUrl={mock.url} cwd={cwd ?? "/work/cmd"} />);
-    await frameHas(r, "Session de code sur");
+    await frameHas(r, "Code session on");
     return r;
   }
   async function type(r: ReturnType<typeof render>, text: string): Promise<void> {
@@ -140,77 +140,77 @@ describe("App (commandes d'outils du noyau)", () => {
   it("/checkpoints, /diff (coloré), /plan, /skills, /agents", async () => {
     const r = await open("/work/cmds1");
     await type(r, "/checkpoints");
-    await frameHas(r, "Points de retour");
-    expect(r.lastFrame()).toContain("avant patch src/app.py");
+    await frameHas(r, "Checkpoints");
+    expect(r.lastFrame()).toContain("before patch src/app.py");
     await type(r, "/diff");
     await frameHas(r, "+    return a + b");
     await type(r, "/diff 2");
-    await frameHas(r, "depuis le point");
+    await frameHas(r, "since checkpoint");
     await type(r, "/plan");
-    await frameHas(r, "[~] Corriger add() dans src/app.py");
-    expect(r.lastFrame()).toContain("[x] Lire le test qui échoue");
+    await frameHas(r, "[~] Fix add() in src/app.py");
+    expect(r.lastFrame()).toContain("[x] Read the failing test");
     await type(r, "/skills");
     await frameHas(r, "git-bisect");
     expect(r.lastFrame()).toContain("pytest-debug");
     await type(r, "/skills git-bisect");
-    await frameHas(r, "Toujours finir par");
+    await frameHas(r, "Always finish with");
     await type(r, "/agents");
-    await frameHas(r, "Aucun sous-agent");
+    await frameHas(r, "No sub-agents");
     await type(r, "lance un sous-agent");
-    await frameHas(r, "terminé — 1 commit(s)", 8000);
+    await frameHas(r, "done — 1 commit(s)", 8000);
     await type(r, "/agents");
-    await frameHas(r, "Sous-agents :");
-    expect(r.lastFrame()).toContain("dernier outil : patch");
-    expect(r.lastFrame()).toContain("lire les tests et proposer un correctif");
+    await frameHas(r, "Sub-agents:");
+    expect(r.lastFrame()).toContain("last tool: patch");
+    expect(r.lastFrame()).toContain("read the tests and propose a fix");
     r.unmount();
   });
 
   it("ligne de coût sous chaque tour, puis /cost (session et jour)", async () => {
     const r = await open("/work/cout");
     await type(r, "bonjour");
-    await frameHas(r, "jetons · ");
-    expect(r.lastFrame()).toMatch(/· [\d,]+ k jetons · (?:< )?0,0\d €/);
+    await frameHas(r, "tokens · ");
+    expect(r.lastFrame()).toMatch(/· [\d.]+k tokens · (?:< )?€0\.0\d/);
     expect(r.lastFrame()).not.toMatch(/\d+ tokens \(/); // le pied de tour ne répète pas les jetons
     await type(r, "/cost");
-    await frameHas(r, "Coût");
-    await frameHas(r, "session : 1 tour(s)");
-    expect(r.lastFrame()).toMatch(/jour \(\d{4}-\d{2}-\d{2}, UTC\) : \d+ tour\(s\)/);
+    await frameHas(r, "Cost");
+    await frameHas(r, "session: 1 turn(s)");
+    expect(r.lastFrame()).toMatch(/day \(\d{4}-\d{2}-\d{2}, UTC\): \d+ turn\(s\)/);
     r.unmount();
   });
 
   it("/rollback : carte, approbation, résumé des fichiers restaurés", async () => {
     const r = await open("/work/cmds2");
     await type(r, "/rollback 2");
-    await frameHas(r, "Action à approuver");
+    await frameHas(r, "Action to approve");
     expect(r.lastFrame()).toContain("checkpoint_restore");
-    expect(r.lastFrame()).not.toContain("3. Toujours");
+    expect(r.lastFrame()).not.toContain("3. Always");
     await wait(150);
     r.stdin.write("1");
-    await frameHas(r, "Retour à");
-    await frameHas(r, "restauré  src/app.py");
-    expect(r.lastFrame()).toContain("conservé  notes.md");
+    await frameHas(r, "Rolled back to");
+    await frameHas(r, "restored  src/app.py");
+    expect(r.lastFrame()).toContain("kept  notes.md");
     r.unmount();
   });
 
   it("/rollback refusé : message d'échec", async () => {
     const r = await open("/work/cmds3");
     await type(r, "/rollback");
-    await frameHas(r, "Action à approuver");
+    await frameHas(r, "Action to approve");
     await wait(150);
     r.stdin.write("4");
-    await frameHas(r, "✗ Retour à");
+    await frameHas(r, "✗ Rollback to");
     r.unmount();
   });
 
   it("hors session de code (fil ordinaire) : message dédié", async () => {
     const r = await open("/work/cmds4");
     await type(r, "/thread ordinaire");
-    await frameHas(r, "Nouveau fil");
+    await frameHas(r, "New thread");
     for (const c of ["/diff", "/rollback", "/checkpoints", "/skills", "/plan", "/agents"]) {
       await type(r, c);
       await wait(150);
     }
-    const count = (r.lastFrame() ?? "").split("disponible dans une session de code (nokker dans un dossier)").length - 1;
+    const count = (r.lastFrame() ?? "").split("available in a code session (nokker in a folder)").length - 1;
     expect(count).toBe(6);
     r.unmount();
   });

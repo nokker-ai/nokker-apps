@@ -4,9 +4,10 @@
  * contraintes et les décisions descendent vers les fils qui travaillent sur la carte. « Brief du matin » en tête.
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { PLAN_KIND_LABEL, PLAN_STATUS_LABEL, type Agent, type NokkerClient, type PlanCard, type PlanCardStatus, type PlanContext } from "@nokker-apps/sdk";
+import { type Agent, type NokkerClient, type PlanCard, type PlanCardStatus, type PlanContext } from "@nokker-apps/sdk";
 import { Icon } from "../icons.js";
-import { cronHuman, lines, opsError, planTree } from "../ops/model.js";
+import { cronHuman, lines, opsError, planKindLabel, planStatusLabel, planTree } from "../ops/model.js";
+import { tr } from "../i18n/index.js";
 import { BriefDelivery } from "../project/BriefDelivery.js";
 
 type Toast = (text: string, tone?: "ok" | "error") => void;
@@ -61,7 +62,7 @@ export function PlanTab({ client, tick, toast, currentThread }: { client: Nokker
       <li key={c.id}>
         <div className={`plan-row st-${c.status} ${sel === c.id ? "on" : ""}`}>
           {kids.length ? (
-            <button type="button" className="icon-btn plan-fold" aria-expanded={isOpen} aria-label={`${isOpen ? "Replier" : "Déplier"} ${c.title}`} onClick={() => toggle(c.id)}>
+            <button type="button" className="icon-btn plan-fold" aria-expanded={isOpen} aria-label={isOpen ? tr("Collapse {0}", c.title) : tr("Expand {0}", c.title)} onClick={() => toggle(c.id)}>
               <Icon name={isOpen ? "chevronDown" : "arrowRight"} size={14} />
             </button>
           ) : (
@@ -71,12 +72,12 @@ export function PlanTab({ client, tick, toast, currentThread }: { client: Nokker
             type="button"
             className="plan-pick"
             aria-current={sel === c.id ? "true" : undefined}
-            aria-label={`${PLAN_KIND_LABEL[c.kind]} ${c.title}, ${PLAN_STATUS_LABEL[c.status]}${c.computed ? `, ${c.progress.done} sur ${c.progress.total} faites` : ""}`}
+            aria-label={`${tr("{0} {1}, {2}", planKindLabel(c.kind), c.title, planStatusLabel(c.status))}${c.computed ? `, ${tr("{0} of {1} done", c.progress.done, c.progress.total)}` : ""}`}
             onClick={() => setSel(c.id)}
           >
-            <span className="plan-kind">{PLAN_KIND_LABEL[c.kind]}</span>
+            <span className="plan-kind">{planKindLabel(c.kind)}</span>
             <span className="plan-title">{c.title}</span>
-            <span className={`plan-status st-${c.status}`}>{PLAN_STATUS_LABEL[c.status]}</span>
+            <span className={`plan-status st-${c.status}`}>{planStatusLabel(c.status)}</span>
             {c.computed ? <Progress c={c} /> : null}
           </button>
         </div>
@@ -86,7 +87,7 @@ export function PlanTab({ client, tick, toast, currentThread }: { client: Nokker
   };
 
   return (
-    <section className="ops-tab" aria-label="Plan">
+    <section className="ops-tab" aria-label={tr("Plan")}>
       <Brief client={client} toast={toast} />
       <div className="ops-split">
         <div className="ops-list">
@@ -95,7 +96,7 @@ export function PlanTab({ client, tick, toast, currentThread }: { client: Nokker
               {err}
             </p>
           ) : null}
-          {tree === null ? <p className="fine">Chargement…</p> : tree.roots.length ? <ul className="plan-tree root">{tree.roots.map(row)}</ul> : <p className="fine">Aucun objectif. Commence par un but, découpe ensuite.</p>}
+          {tree === null ? <p className="fine">{tr("Loading…")}</p> : tree.roots.length ? <ul className="plan-tree root">{tree.roots.map(row)}</ul> : <p className="fine">{tr("No goals. Start with a goal, then split it.")}</p>}
           <form
             className="team-inline-form"
             onSubmit={(e) => {
@@ -103,9 +104,9 @@ export function PlanTab({ client, tick, toast, currentThread }: { client: Nokker
               if (title.trim()) void addRoot();
             }}
           >
-            <input aria-label="Nouvel objectif" value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} placeholder="Nouvel objectif" />
+            <input aria-label={tr("New goal")} value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} placeholder={tr("New goal")} />
             <button type="submit" className="btn" disabled={!title.trim()}>
-              <Icon name="plus" size={14} /> Ajouter
+              <Icon name="plus" size={14} /> {tr("Add")}
             </button>
           </form>
         </div>
@@ -113,7 +114,7 @@ export function PlanTab({ client, tick, toast, currentThread }: { client: Nokker
           {current ? (
             <CardView key={current.id} c={current} client={client} toast={toast} currentThread={currentThread} onChanged={() => void load()} onGone={() => (setSel(null), void load())} onPick={setSel} />
           ) : (
-            <p className="fine">Choisis une carte.</p>
+            <p className="fine">{tr("Pick a card.")}</p>
           )}
         </div>
       </div>
@@ -124,7 +125,7 @@ export function PlanTab({ client, tick, toast, currentThread }: { client: Nokker
 function Progress({ c }: { c: PlanCard }): React.ReactElement {
   const pct = Math.round(c.progress.ratio * 100);
   return (
-    <span className="plan-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={`${c.progress.done} sur ${c.progress.total} tâches faites`}>
+    <span className="plan-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={tr("{0} of {1} tasks done", c.progress.done, c.progress.total)}>
       <span className="plan-progress-fill" style={{ width: `${pct}%` }} />
       <span className="plan-progress-n">
         {c.progress.done}/{c.progress.total}
@@ -169,22 +170,22 @@ function CardView({
     <article className="plan-detail">
       <header className="team-head">
         <div>
-          <span className="plan-kind">{PLAN_KIND_LABEL[c.kind]}</span>
+          <span className="plan-kind">{planKindLabel(c.kind)}</span>
           <h2>{c.title}</h2>
           {c.computed ? (
             <p className="fine">
-              {PLAN_STATUS_LABEL[c.status]} (calculé) · {c.progress.done}/{c.progress.total} faites
-              {c.progress.blocked ? ` · ${c.progress.blocked} bloquée(s)` : ""}
+              {tr("{0} (computed) · {1}/{2} done", planStatusLabel(c.status), c.progress.done, c.progress.total)}
+              {c.progress.blocked ? ` · ${tr("{0} blocked", c.progress.blocked)}` : ""}
             </p>
           ) : null}
         </div>
         {!c.computed ? (
           <label className="fine plan-status-pick">
-            Statut{" "}
+            {tr("Status")}{" "}
             <select value={c.status} onChange={(e) => void run(() => client.patchPlanCard(c.id, { status: e.target.value as PlanCardStatus }))}>
               {STATUSES.map((s) => (
                 <option key={s} value={s}>
-                  {PLAN_STATUS_LABEL[s]}
+                  {planStatusLabel(s)}
                 </option>
               ))}
             </select>
@@ -195,31 +196,31 @@ function CardView({
         <>
           {c.intent ? <p>{c.intent}</p> : null}
           <dl className="team-rules">
-            <dt>Contraintes</dt>
-            <dd>{c.constraints.length ? <ul className="plan-bullets">{c.constraints.map((x) => <li key={x}>{x}</li>)}</ul> : <span className="fine">aucune</span>}</dd>
-            <dt>Décisions</dt>
-            <dd>{c.decisions.length ? <ul className="plan-bullets">{c.decisions.map((x) => <li key={x}>{x}</li>)}</ul> : <span className="fine">aucune</span>}</dd>
+            <dt>{tr("Constraints")}</dt>
+            <dd>{c.constraints.length ? <ul className="plan-bullets">{c.constraints.map((x) => <li key={x}>{x}</li>)}</ul> : <span className="fine">{tr("none")}</span>}</dd>
+            <dt>{tr("Decisions")}</dt>
+            <dd>{c.decisions.length ? <ul className="plan-bullets">{c.decisions.map((x) => <li key={x}>{x}</li>)}</ul> : <span className="fine">{tr("none")}</span>}</dd>
           </dl>
           <button type="button" className="btn" onClick={() => setEdit(true)}>
-            Modifier
+            {tr("Edit")}
           </button>
         </>
       ) : (
         <div className="team-rules-form">
           <label className="fine" htmlFor="pc-title">
-            Titre
+            {tr("Title")}
           </label>
           <input id="pc-title" value={f.title} maxLength={200} onChange={(e) => setF({ ...f, title: e.target.value })} />
           <label className="fine" htmlFor="pc-intent">
-            But
+            {tr("Goal")}
           </label>
           <textarea id="pc-intent" rows={2} value={f.intent} onChange={(e) => setF({ ...f, intent: e.target.value })} />
           <label className="fine" htmlFor="pc-cons">
-            Contraintes (une par ligne)
+            {tr("Constraints (one per line)")}
           </label>
           <textarea id="pc-cons" rows={3} value={f.constraints} onChange={(e) => setF({ ...f, constraints: e.target.value })} />
           <label className="fine" htmlFor="pc-dec">
-            Décisions (une par ligne)
+            {tr("Decisions (one per line)")}
           </label>
           <textarea id="pc-dec" rows={3} value={f.decisions} onChange={(e) => setF({ ...f, decisions: e.target.value })} />
           <span className="team-row-actions">
@@ -227,48 +228,48 @@ function CardView({
               type="button"
               className="btn btn-brass"
               disabled={!f.title.trim()}
-              onClick={() => void run(() => client.patchPlanCard(c.id, { title: f.title.trim(), intent: f.intent.trim(), constraints: lines(f.constraints), decisions: lines(f.decisions) }), "Carte enregistrée : vaut dès le prochain appel du modèle.").then(() => setEdit(false))}
+              onClick={() => void run(() => client.patchPlanCard(c.id, { title: f.title.trim(), intent: f.intent.trim(), constraints: lines(f.constraints), decisions: lines(f.decisions) }), tr("Card saved: applies from the model's next call.")).then(() => setEdit(false))}
             >
-              Enregistrer
+              {tr("Save")}
             </button>
             <button type="button" className="btn btn-ghost" onClick={() => setEdit(false)}>
-              Annuler
+              {tr("Cancel")}
             </button>
           </span>
         </div>
       )}
 
       <section className="machine-section">
-        <h3>Travailler dessus</h3>
+        <h3>{tr("Work on it")}</h3>
         {currentThread ? (
           working ? (
             <p className="fine">
-              La session « {currentThread.title} » reçoit ce contexte.{" "}
-              <button type="button" className="btn btn-ghost" onClick={() => void run(() => client.detachPlanThread(c.id, currentThread.id), "Session détachée de la carte.")}>
-                Détacher
+              {tr("The session “{0}” receives this context.", currentThread.title)}{" "}
+              <button type="button" className="btn btn-ghost" onClick={() => void run(() => client.detachPlanThread(c.id, currentThread.id), tr("Session detached from the card."))}>
+                {tr("Detach")}
               </button>
             </p>
           ) : (
-            <button type="button" className="btn btn-brass" onClick={() => void run(() => client.attachPlanThread(c.id, currentThread.id), `La session « ${currentThread.title} » travaille sur cette carte.`)}>
-              Rattacher la session « {currentThread.title} »
+            <button type="button" className="btn btn-brass" onClick={() => void run(() => client.attachPlanThread(c.id, currentThread.id), tr("The session “{0}” is working on this card.", currentThread.title))}>
+              {tr("Attach the session “{0}”", currentThread.title)}
             </button>
           )
         ) : (
-          <p className="fine">Ouvre une session pour la rattacher.</p>
+          <p className="fine">{tr("Open a session to attach it.")}</p>
         )}
-        {c.threads.length && !working ? <p className="fine">{c.threads.length} session(s) rattachée(s).</p> : null}
+        {c.threads.length && !working ? <p className="fine">{tr("{0} attached session(s).", c.threads.length)}</p> : null}
         <button type="button" className="btn btn-ghost" onClick={() => void client.getPlanContext(c.id).then(setCtx, (e) => toast(opsError(e), "error"))}>
-          Voir ce que l'agent reçoit
+          {tr("See what the agent receives")}
         </button>
         {ctx ? (
-          <pre className="plan-context" aria-label="Contexte transmis au modèle">
+          <pre className="plan-context" aria-label={tr("Context sent to the model")}>
             {ctx.block}
           </pre>
         ) : null}
       </section>
 
       <section className="machine-section">
-        <h3>Découper</h3>
+        <h3>{tr("Split")}</h3>
         <form
           className="team-inline-form"
           onSubmit={(e) => {
@@ -276,28 +277,29 @@ function CardView({
             if (child.trim()) void run(() => client.createPlanCard({ title: child.trim(), parent_id: c.id })).then(() => setChild(""));
           }}
         >
-          <input aria-label="Nouvelle carte fille" value={child} maxLength={200} onChange={(e) => setChild(e.target.value)} placeholder={c.kind === "goal" ? "Nouveau lot" : "Nouvelle tâche"} />
+          <input aria-label={tr("New sub-card")} value={child} maxLength={200} onChange={(e) => setChild(e.target.value)} placeholder={c.kind === "goal" ? tr("New milestone") : tr("New task")} />
           <button type="submit" className="btn" disabled={!child.trim()}>
-            <Icon name="plus" size={14} /> Ajouter
+            <Icon name="plus" size={14} /> {tr("Add")}
           </button>
         </form>
         {c.parent_id ? (
           <button type="button" className="btn btn-ghost" onClick={() => onPick(c.parent_id!)}>
-            Remonter à la carte mère
+            {tr("Back to the parent card")}
           </button>
         ) : null}
         {confirmDel ? (
           <span className="team-row-actions">
             <button type="button" className="btn btn-danger" onClick={() => void client.deletePlanCard(c.id).then(onGone, (e) => toast(opsError(e), "error"))}>
-              Oui, supprimer{c.children.length ? " (les filles remontent d'un cran)" : ""}
+              {tr("Yes, delete")}
+              {c.children.length ? ` ${tr("(sub-cards move up one level)")}` : ""}
             </button>
             <button type="button" className="btn btn-ghost" onClick={() => setConfirmDel(false)}>
-              Annuler
+              {tr("Cancel")}
             </button>
           </span>
         ) : (
           <button type="button" className="btn btn-ghost" onClick={() => setConfirmDel(true)}>
-            Supprimer la carte
+            {tr("Delete the card")}
           </button>
         )}
       </section>
@@ -328,7 +330,7 @@ function Brief({ client, toast }: { client: NokkerClient; toast: Toast }): React
         await client.deleteBrief();
         setAgent(null);
       }
-      toast(on ? `Brief du matin : ${cronHuman(cron)}.` : "Brief du matin arrêté.", "ok");
+      toast(on ? tr("Morning brief: {0}.", cronHuman(cron)) : tr("Morning brief turned off."), "ok");
     } catch (e) {
       toast(opsError(e), "error");
     } finally {
@@ -339,14 +341,14 @@ function Brief({ client, toast }: { client: NokkerClient; toast: Toast }): React
     <div className="plan-brief">
       <label className="plan-brief-toggle">
         <input type="checkbox" checked={!!agent} disabled={busy} onChange={(e) => void set(e.target.checked)} />
-        <strong>Brief du matin</strong>
+        <strong>{tr("Morning brief")}</strong>
       </label>
-      <span className="fine">{agent ? `${cronHuman(cron)} (${tz}) · objectifs, blocages, incidents vivants, agenda` : "un résumé du plan chaque matin, dans une bulle"}</span>
+      <span className="fine">{agent ? tr("{0} ({1}) · goals, blockers, live incidents, calendar", cronHuman(cron), tz) : tr("a summary of the plan every morning, in a bubble")}</span>
       {agent ? (
         <span className="team-row-actions">
-          <input aria-label="Horaire (cron)" className="plan-cron" value={cron} onChange={(e) => setCron(e.target.value)} spellCheck={false} />
+          <input aria-label={tr("Schedule (cron)")} className="plan-cron" value={cron} onChange={(e) => setCron(e.target.value)} spellCheck={false} />
           <button type="button" className="btn btn-ghost" disabled={busy || !cron.trim()} onClick={() => void set(true)}>
-            Changer l'horaire
+            {tr("Change the schedule")}
           </button>
         </span>
       ) : null}

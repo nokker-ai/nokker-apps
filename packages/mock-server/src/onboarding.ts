@@ -2,7 +2,7 @@
  * Étape 5 du noyau en démo (invitation → compte → conditions, connecteurs, appairage Telegram) — mêmes routes et mêmes
  * codes d'erreur que `nokker/onboarding/http.py`, `nokker/connectors/http.py` et `nokker/telegram/http.py`, pour que le
  * parcours web tourne sans noyau. Jetons de démo : `demo` (fr, Camille), `demo-en` (en, Sam) ; tout autre jeton est
- * invalide. Un jeton accepté est consommé (usage unique). Connecteurs : tout passe sauf mot de passe `mauvais`
+ * invalide. Un jeton accepté est consommé (usage unique). Connecteurs : tout passe sauf mot de passe `mauvais` (ou `bad`)
  * (auth_failed), hôte local (host_blocked), port hors liste (port_not_allowed), hôte `down.example` (unreachable).
  */
 import { createHash } from "node:crypto";
@@ -67,7 +67,7 @@ export async function handlePublicOnboarding(
     const device: MockDeviceRecord = {
       id,
       code: id.slice(4, 10),
-      name: String(body.name ?? "appareil"),
+      name: String(body.name ?? "device"),
       publicKeySpkiB64Url: String(body.public_key_spki),
       status: "approved",
       created_at: now,
@@ -83,7 +83,7 @@ export async function handlePublicOnboarding(
 }
 
 /** Connexion par code mail (démo) : code fixe `123456`, réponse de `start` identique pour toute adresse,
- * `limite@example.com` → 429, 5 faux codes brûlent le code, tout échec = 401 `invalid_code`. */
+ * `limite@example.com` ou `limit@example.com` → 429, 5 faux codes brûlent le code, tout échec = 401 `invalid_code`. */
 export const MOCK_EMAIL_CODE = "123456";
 const emailFails = new Map<string, number>();
 
@@ -99,7 +99,7 @@ async function handleEmailLogin(
     const body = await readBody();
     const email = String(body.email ?? "").trim().toLowerCase();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return send(400, { error: "invalid_email" }), true;
-    if (email === "limite@example.com") return send(429, { error: "rate_limited" }), true;
+    if (email === "limite@example.com" || email === "limit@example.com") return send(429, { error: "rate_limited" }), true;
     emailFails.delete(email);
     send(200, { sent: true });
     return true;
@@ -108,7 +108,7 @@ async function handleEmailLogin(
     const body = await readBody();
     const email = String(body.email ?? "").trim().toLowerCase();
     const fails = emailFails.get(email) ?? 0;
-    if (fails >= 5 || String(body.code ?? "") !== MOCK_EMAIL_CODE || email.endsWith("@inconnu.example")) {
+    if (fails >= 5 || String(body.code ?? "") !== MOCK_EMAIL_CODE || email.endsWith("@inconnu.example") || email.endsWith("@unknown.example")) {
       emailFails.set(email, fails + 1);
       return send(401, { error: "invalid_code" }), true;
     }
@@ -119,7 +119,7 @@ async function handleEmailLogin(
     const device: MockDeviceRecord = {
       id,
       code: id.slice(4, 10),
-      name: String(body.name ?? "appareil"),
+      name: String(body.name ?? "device"),
       publicKeySpkiB64Url: String(body.public_key_spki),
       status: "approved",
       created_at: now,
@@ -169,7 +169,7 @@ function refuse(kind: ConnectorKind, settings: Record<string, unknown>, secret: 
   if (settings.imap_port !== undefined && ![993, 143].includes(Number(settings.imap_port))) return [400, "port_not_allowed", "port IMAP non autorisé"];
   if (settings.smtp_port !== undefined && ![465, 587].includes(Number(settings.smtp_port))) return [400, "port_not_allowed", "port SMTP non autorisé"];
   if (host === "down.example") return [502, "unreachable", "serveur injoignable"];
-  if (secret === "mauvais") return [422, "auth_failed", "identifiants refusés"];
+  if (secret === "mauvais" || secret === "bad") return [422, "auth_failed", "identifiants refusés"];
   void kind;
   return null;
 }

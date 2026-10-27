@@ -125,7 +125,7 @@ describe("session locale", () => {
     await session.openLocal("/work/suite");
     const th = session.threadId;
     const reply = await drive(session, "corrige le test add", (c) => session.decideLocal(c.id, "approve", "once"));
-    expect(reply.text).toContain("corrigé");
+    expect(reply.text).toContain("I fixed");
     expect(reply.cards.map((c) => [c.tool_name, c.effect])).toEqual([["terminal", "write"], ["terminal", "destructive"]]);
     let lines: ToolLine[] = [];
     for (const e of events) if ((e.type === "tool.call" || e.type === "tool.result") && e.thread_id === th) lines = applyToolEvent(lines, e);
@@ -221,7 +221,7 @@ describe("mode non interactif", () => {
         ["terminal", "write", "pytest -q tests/test_add.py"],
         ["terminal", "destructive", "rm -rf build"],
       ]);
-      expect(res.reply).toContain("refusée");
+      expect(res.reply).toContain("refused");
       expect(res.pending_approvals).toEqual([]);
       expect(res.cancelled).toBe(false);
       // X2 : le coût du tour recopié de `turn.cost` (LOKKAL.md §7.6).

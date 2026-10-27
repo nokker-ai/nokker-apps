@@ -67,7 +67,7 @@ const files = sources(join(root, "src"))
   .filter((p) => !isCatalogue(p))
   .map((p) => ({ p: relative(root, p), code: withoutComments(readFileSync(p, "utf-8")) }));
 
-afterEach(() => setLang("fr"));
+afterEach(() => setLang("en"));
 
 describe("catalogue", () => {
   it("chaque t(\"…\") a sa traduction française, aucune clé morte, mêmes marqueurs {n}", () => {

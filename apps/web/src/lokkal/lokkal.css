@@ -1,0 +1,51 @@
+/* Sessions de code du web servi par Lokkal : choix du « + », formulaire du dossier, ligne et en-tête d'une session. */
+.drawer-choose,
+.drawer-code {
+  flex-direction: column;
+  align-items: stretch;
+}
+.drawer-choose .btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+}
+.drawer-code select {
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  padding: 0 10px;
+  min-width: 0;
+}
+.drawer-code-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.drawer-code-root,
+.drawer-code-path {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+.drawer-code-actions {
+  display: flex;
+  gap: 6px;
+}
+.drawer-code .error {
+  font-size: 12px;
+}
+.session-row.code .session-snippet {
+  font-size: 11px;
+}
+.topbar-cwd {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 28ch;
+}
+.missing-thread {
+  margin: 8px 16px;
+}

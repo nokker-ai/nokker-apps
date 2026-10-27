@@ -52,7 +52,7 @@ export function rootFor(cwd: string, roots: string[] | null): string | null {
 }
 
 export function localTitle(cwd: string): string {
-  return basename(resolve(cwd)) || "racine";
+  return basename(resolve(cwd)) || "root";
 }
 
 /** Caviardage : secrets masqués, gros champs tronqués à 200 caractères. */
@@ -98,9 +98,9 @@ function sleep(state: MockState, ms: number, signal: AbortSignal): Promise<void>
 function scenarioFor(text: string): { kind: "fix" | "hardline" | "delegate" | "background" | "plain"; test: string } {
   const n = normalize(text);
   const test = text.match(/\btest[\s_:]*([\w./-]+)/i)?.[1] ?? "test_app";
-  if (/rm -rf \/|mkfs|fork bomb|efface tout le disque/.test(n)) return { kind: "hardline", test };
+  if (/rm -rf \/|mkfs|fork bomb|efface tout le disque|wipe the (?:whole|entire) disk/.test(n)) return { kind: "hardline", test };
   if (/arriere-plan|background/.test(n)) return { kind: "background", test };
-  if (/sous-?agent|sub-?agent|delegu|delegate|en parallele/.test(n)) return { kind: "delegate", test };
+  if (/sous-?agent|sub-?agent|delegu|delegate|en parallele|in parallel/.test(n)) return { kind: "delegate", test };
   if (/(corrig|repar|fix|debug)/.test(n) && /test/.test(n)) return { kind: "fix", test };
   return { kind: "plain", test };
 }
@@ -114,7 +114,7 @@ export async function runLocalTurn(
 ): Promise<LocalTurnResult> {
   const sc = scenarioFor(userText);
   const meta = state.localSessions.get(threadId);
-  const folder = meta ? localTitle(meta.cwd) : "dossier";
+  const folder = meta ? localTitle(meta.cwd) : "folder";
   const testFile = sc.test.includes(".") ? sc.test : `tests/${sc.test.startsWith("test_") ? sc.test : `test_${sc.test}`}.py`;
   const steps: Step[] = [];
   let rejected = false;
@@ -123,7 +123,7 @@ export async function runLocalTurn(
     await sleep(state, 120, signal);
     return signal.aborted
       ? { reply: "", cancelled: true }
-      : { reply: `Session locale sur « ${folder} ». Demande-moi par exemple « corrige le test ${sc.test} ».`, cancelled: false };
+      : { reply: `Local session on “${folder}”. Ask me for example “fix test ${sc.test}”.`, cancelled: false };
   }
   if (sc.kind === "hardline") {
     steps.push({ name: "terminal", effect: "destructive", args: { command: "rm -rf /" }, ms: 40, preview: "" });
@@ -135,7 +135,7 @@ export async function runLocalTurn(
   } else {
     steps.push(
       { name: "read_file", effect: "read", args: { path: testFile }, ms: 12, preview: `def test_add():\n    assert add(2, 3) == 5\n# ${testFile}` },
-      { name: "search_files", effect: "read", args: { pattern: "def add", path: "src" }, ms: 31, preview: "src/app.py:3: def add(a, b):\n1 résultat" },
+      { name: "search_files", effect: "read", args: { pattern: "def add", path: "src" }, ms: 31, preview: "src/app.py:3: def add(a, b):\n1 result" },
       {
         name: "patch",
         effect: "write",
@@ -144,11 +144,11 @@ export async function runLocalTurn(
         preview: "--- src/app.py\n-    return a - b\n+    return a + b",
         live: {
           field: "new_string",
-          text: 'def add(a, b):\n    """Somme de a et b."""\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n',
+          text: 'def add(a, b):\n    """Sum of a and b."""\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n',
         },
       },
       { name: "terminal", effect: "write", args: { command: `pytest -q ${testFile}` }, ms: 480, preview: ".                                  [100%]\n1 passed in 0.12s" },
-      { name: "terminal", effect: "destructive", args: { command: "rm -rf build" }, ms: 60, preview: "build/ supprimé" },
+      { name: "terminal", effect: "destructive", args: { command: "rm -rf build" }, ms: 60, preview: "build/ removed" },
     );
   }
 
@@ -161,17 +161,17 @@ export async function runLocalTurn(
       threadId,
       run: () => continueAfterDecision(state, threadId, pending, pendingStep!, rest, sc.test),
     });
-    return { reply: `La commande \`${String(pending.arguments.command ?? pending.tool_name)}\` attend ton approbation sur la carte.`, cancelled: false };
+    return { reply: `The command \`${String(pending.arguments.command ?? pending.tool_name)}\` is waiting for your approval on the card.`, cancelled: false };
   }
   rejected = r.rejected;
 
   if (sc.kind === "hardline") {
-    return { reply: "Cette commande est interdite par le noyau, je ne l'exécute pas.", cancelled: false };
+    return { reply: "The core forbids this command, I am not running it.", cancelled: false };
   }
   return {
     reply: rejected
-      ? `J'ai corrigé \`src/app.py\` (add retournait a - b) et le test ${sc.test} passe. Je n'ai pas nettoyé \`build/\` : suppression refusée.`
-      : `J'ai corrigé \`src/app.py\` (add retournait a - b), le test ${sc.test} passe et \`build/\` est nettoyé.`,
+      ? `I fixed \`src/app.py\` (add returned a - b) and test ${sc.test} passes. I did not clean \`build/\`: deletion refused.`
+      : `I fixed \`src/app.py\` (add returned a - b), test ${sc.test} passes and \`build/\` is cleaned up.`,
     cancelled: false,
   };
 }
@@ -308,7 +308,7 @@ async function continueAfterDecision(
   if (step.effect !== "read") autoCheckpoint(state, threadId, `${card.thread_id}:${card.turn_index}`, step.name);
   await sleep(state, step.ms, ran.signal);
   card.status = "executed";
-  card.result_summary = step.preview.split("\n")[0] ?? "exécuté";
+  card.result_summary = step.preview.split("\n")[0] ?? "executed";
   state.publish({
     type: "tool.result",
     thread_id: card.thread_id,
@@ -338,12 +338,12 @@ async function continueAfterDecision(
     } else if (r.pending) {
       const { pending, pendingStep, rest: left } = r;
       state.continuations.set(pending.id, { threadId, run: () => continueAfterDecision(state, threadId, pending, pendingStep!, left, test) });
-      reply = `La commande \`${String(pending.arguments.command ?? pending.tool_name)}\` attend ton approbation sur la carte.`;
-    } else reply = `Le test ${test} passe.${r.rejected ? " Une action a été refusée." : ""}`;
+      reply = `The command \`${String(pending.arguments.command ?? pending.tool_name)}\` is waiting for your approval on the card.`;
+    } else reply = `Test ${test} passes.${r.rejected ? " One action was refused." : ""}`;
   } finally {
     state.activeTurns.delete(threadId);
   }
-  state.appendTurn(threadId, block, cancelled ? "(tour annulé)" : reply, { sender: null, channel: "cli", silent: true });
+  state.appendTurn(threadId, block, cancelled ? "(turn cancelled)" : reply, { sender: null, channel: "cli", silent: true });
   state.publish({ type: "turn.delta", thread_id: threadId, turn_id: turnId, text: reply });
   publishTurnCost(state, threadId, turnId, block, reply);
   state.publish({
@@ -472,7 +472,7 @@ async function runChild(state: MockState, c: MockChild, tools: string[], stepMs:
 
 async function runDelegate(state: MockState, threadId: string, turnId: string, signal: AbortSignal): Promise<LocalTurnResult> {
   const callId = randomId("call");
-  const goal = "lire les tests et proposer un correctif";
+  const goal = "read the tests and propose a fix";
   state.publish({ type: "tool.call", thread_id: threadId, turn_id: turnId, call_id: callId, name: "delegate", effect: "write", args: { goal } });
   const c = newChild(state, threadId, goal, 0, false);
   state.publish({ type: "subagent.started", thread_id: threadId, parent_thread_id: threadId, parent_turn: turnIndex(state, threadId), child_id: c.view.child_id, child_thread_id: c.view.thread_id, goal });
@@ -481,8 +481,8 @@ async function runDelegate(state: MockState, threadId: string, turnId: string, s
   await runChild(state, c, ["read_file", "search_files", "patch"], 60);
   signal.removeEventListener("abort", stop);
   if (signal.aborted) return { reply: "", cancelled: true };
-  state.publish({ type: "tool.result", thread_id: threadId, turn_id: turnId, call_id: callId, name: "delegate", is_error: false, ms: 180, effect: "write", preview: "sous-agent terminé : 1 commit" });
-  return { reply: "Le sous-agent a terminé : un commit sur sa branche, arbre propre.", cancelled: false };
+  state.publish({ type: "tool.result", thread_id: threadId, turn_id: turnId, call_id: callId, name: "delegate", is_error: false, ms: 180, effect: "write", preview: "sub-agent finished: 1 commit" });
+  return { reply: "The sub-agent has finished: one commit on its branch, clean tree.", cancelled: false };
 }
 
 /** `delegate(tasks, background: true)` (LOKKAL.md §7.22.1) : rend TOUT DE SUITE les ids ; deux enfants tournent ensuite
@@ -557,10 +557,10 @@ function newLocalApproval(
     rule: `effect:${step.effect}`,
     reason:
       step.effect === "destructive"
-        ? "Commande destructive dans le dossier de travail."
+        ? "Destructive command in the working folder."
         : step.effect === "write"
-          ? "Commande qui modifie le dossier de travail."
-          : "Action à effet externe.",
+          ? "Command that modifies the working folder."
+          : "Action with an external effect.",
     advice: null,
     // Plus de `strength: "local"` : standard, ou strong pour le destructif (« forte-locale » : once/refuser seulement).
     strength: step.effect === "destructive" ? "strong" : "standard",
@@ -616,7 +616,7 @@ export async function askLocalApproval(
   }
   if (outcome === "approved") {
     approval.status = "executed";
-    approval.result_summary = "exécuté (démo locale).";
+    approval.result_summary = "executed (local demo).";
   }
   return outcome;
 }

@@ -88,13 +88,13 @@ describe("SSO OIDC (§7.24)", () => {
   it("lien projet : propriétaire seulement, jamais owner par un groupe, max_age borné", async () => {
     const c = await boot(true);
     const { projects } = await c.listProjects();
-    const site = projects.find((p) => p.name === "Site vitrine")!;
+    const site = projects.find((p) => p.name === "Marketing site")!;
     const sc = (await c.listSsoConnections()).connections[0]!.id;
     expect(await c.getProjectSso(site.id)).toMatchObject({ connection: sc, required: false, max_age_s: 43200 });
     expect(await fail(c.putProjectSso(site.id, { connection: sc, mappings: [{ group: "g", role: "owner" as never }] }))).toEqual({ status: 400, code: "owner_not_mappable" });
     expect(await fail(c.putProjectSso(site.id, { connection: sc, mappings: [], max_age_s: 10 }))).toEqual({ status: 400, code: "bad_request" });
     expect((await c.putProjectSso(site.id, { connection: sc, mappings: [{ group: "g", role: "viewer" }], required: true, max_age_s: 3600 })).required).toBe(true);
-    const recherche = projects.find((p) => p.name === "Recherche")!;
+    const recherche = projects.find((p) => p.name === "Research")!;
     expect((await fail(c.getProjectSso(recherche.id))).status).toBe(403);
     expect(await c.deleteProjectSso(site.id)).toEqual({ removed: true });
     expect((await fail(c.getProjectSso(site.id))).status).toBe(404);
@@ -102,17 +102,17 @@ describe("SSO OIDC (§7.24)", () => {
 
   it("SSO obligatoire : projet réduit et 403 sso_required, puis ouvert après la connexion SSO", async () => {
     const c = await boot(true);
-    const gated = (await c.listProjects()).projects.find((p) => p.name === "Recherche")!;
+    const gated = (await c.listProjects()).projects.find((p) => p.name === "Research")!;
     expect(isGatedProject(gated)).toBe(true);
     if (!isGatedProject(gated)) return;
     expect(Object.keys(gated).sort()).toEqual(["created_at", "id", "name", "role", "sso"]);
     expect(await fail(c.listProjectMembers(gated.id))).toEqual({ status: 403, code: "sso_required" });
     const body = await fetch(`${mock.url}/v1/projects/${gated.id}/members`, { headers: { Authorization: `Bearer ${(c as unknown as { token: string }).token}` } }).then((r) => r.json());
     expect(body.error).toMatchObject({ code: "sso_required", connection: gated.sso.connection });
-    // Le propriétaire n'est jamais bloqué : Site vitrine (alice propriétaire) reste ouvert.
+    // Le propriétaire n'est jamais bloqué : Marketing site (alice propriétaire) reste ouvert.
     expect((await c.listProjects()).projects.filter(isGatedProject)).toHaveLength(1);
 
-    const { pair, call } = await login(c, "groupes equipe-site", { connection: gated.sso.connection });
+    const { pair, call } = await login(c, "groups site-team", { connection: gated.sso.connection });
     const r = await call();
     expect(r.user).toBe("alice");
     expect(r.projects).toEqual([{ id: gated.id, role: "viewer" }]);
@@ -125,20 +125,20 @@ describe("SSO OIDC (§7.24)", () => {
 
   it("callback : state à usage unique, lié à la clé du start, refus du fournisseur", async () => {
     const c = await boot(true);
-    const a = await login(c, "groupes equipe-site");
+    const a = await login(c, "groups site-team");
     expect(await fail(a.call(await generateDeviceKeyPair()))).toEqual({ status: 401, code: "binding_invalid" });
     expect(await fail(a.call())).toEqual({ status: 401, code: "invalid_state" }); // consommé même en échec
     expect(await fail(c.oidcCallback({ state: "inconnu", code: "x", signature: "x" }))).toEqual({ status: 401, code: "invalid_state" });
-    const refused = await login(c, "Refuser");
+    const refused = await login(c, "Refuse");
     expect(await fail(refused.call())).toEqual({ status: 401, code: "idp_error" });
   });
 
   it.each([
-    ["non vérifiée", 403, "email_unverified"],
-    ["autre.example", 403, "domain_refused"],
-    ["déjà lié", 409, "account_conflict"],
-    ["suspendu", 403, "account_inactive"],
-    ["jeton", 401, "token_invalid"],
+    ["not verified", 403, "email_unverified"],
+    ["other.example", 403, "domain_refused"],
+    ["already linked", 409, "account_conflict"],
+    ["suspended", 403, "account_inactive"],
+    ["token", 401, "token_invalid"],
   ])("identité « %s » : %i %s", async (pick, status, code) => {
     const c = await boot(true);
     expect(await fail((await login(c, pick)).call())).toEqual({ status, code });
@@ -147,15 +147,15 @@ describe("SSO OIDC (§7.24)", () => {
   it("start : domaine non prouvé = connexion inconnue ; clé illisible refusée", async () => {
     const c = await boot(true);
     const pair = await generateDeviceKeyPair();
-    expect(await fail(c.startOidc({ email: "x@autre.example", public_key_spki: pair.publicKeySpkiB64Url }))).toEqual({ status: 404, code: "unknown_connection" });
+    expect(await fail(c.startOidc({ email: "x@other.example", public_key_spki: pair.publicKeySpkiB64Url }))).toEqual({ status: 404, code: "unknown_connection" });
     expect(await fail(c.startOidc({ email: "x@example.com", public_key_spki: "pas-une-cle" }))).toEqual({ status: 400, code: "invalid_key" });
   });
 
   it("groupes → rôles : le journal garde la connexion et le changement de rôle", async () => {
     const c = await boot(true);
     const sc = (await c.listSsoConnections()).connections[0]!.id;
-    const r = await (await login(c, "groupes equipe-site")).call();
-    const site = (await c.listProjects()).projects.find((p) => p.name === "Site vitrine")!;
+    const r = await (await login(c, "groups site-team")).call();
+    const site = (await c.listProjects()).projects.find((p) => p.name === "Marketing site")!;
     expect(r.projects).toEqual([{ id: site.id, role: "owner" }]); // le propriétaire n'est jamais touché
     const events = (await c.getSsoAudit(sc)).events.map((e) => e.event);
     expect(events[0]).toBe("login_ok");

@@ -80,7 +80,7 @@ describe("plan (X18)", () => {
     const leaf = (await c.getPlanCard(g.id)).children_cards[0]!;
     const ctx = await c.getPlanContext(leaf.id);
     expect(ctx.chain.map((x) => x.id)).toEqual([g.id, leaf.id]);
-    expect(ctx.block).toMatch(/Contrainte : Aucune donnée/);
+    expect(ctx.block).toMatch(/Contrainte : No tester's data/);
   });
 
   it("découpage : bulle plan_split, seul l'humain crée les cartes", async () => {

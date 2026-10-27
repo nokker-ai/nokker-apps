@@ -1,7 +1,7 @@
 /**
  * Boîte mail posée dans Lokkal (LOKKAL §7.25) — mock, jeton local seulement. Le mot de passe est le NOM d'un secret
  * du coffre local (une valeur, un nom absent du coffre, un champ `password` → 400 sans répéter ce qui a été envoyé).
- * Test simulé : une adresse qui contient « refus » → 422 `auth_failed` ; un hôte qui contient « injoignable » → 502
+ * Test simulé : une adresse qui contient « refus » (ou « denied ») → 422 `auth_failed` ; un hôte qui contient « injoignable » ou « unreachable » → 502
  * `unreachable` ; sinon la boîte répond. Erreurs au format des connecteurs : `{error: <code>, message}`.
  */
 import type { LocalMailCard } from "@nokker-apps/sdk";
@@ -67,8 +67,8 @@ function normalize(raw: unknown): Record<string, string | number> {
 }
 
 function test(s: Record<string, string | number>): { ok: boolean; message: string; code: string | null } {
-  if (String(s.address).includes("refus")) return { ok: false, message: "identifiants refusés par le serveur IMAP", code: "auth_failed" };
-  if (String(s.imap_host).includes("injoignable") || String(s.smtp_host).includes("injoignable")) return { ok: false, message: "serveur injoignable", code: "unreachable" };
+  if (String(s.address).includes("refus") || String(s.address).includes("denied")) return { ok: false, message: "identifiants refusés par le serveur IMAP", code: "auth_failed" };
+  if (/injoignable|unreachable/.test(`${s.imap_host} ${s.smtp_host}`)) return { ok: false, message: "serveur injoignable", code: "unreachable" };
   return { ok: true, message: "IMAP et SMTP répondent", code: null };
 }
 

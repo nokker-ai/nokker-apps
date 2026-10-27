@@ -45,3 +45,19 @@
 .publish-local {
   margin-top: 6px;
 }
+.moderation-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--hot);
+  background: rgba(var(--ov), 0.04);
+  overflow-wrap: anywhere;
+}
+.moderation-notice p {
+  margin: 0;
+}
+.moderation-id code {
+  font-size: 12px;
+}

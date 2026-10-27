@@ -42,11 +42,11 @@ export async function handleLocalMachineDev(state: MockState, method: string, pa
   if (typeof b.hooks_thread === "string") {
     const sha = randomBytes(32).toString("hex");
     m.hooks.set(b.hooks_thread, sha);
-    state.publish({ type: "hook.untrusted", thread_id: b.hooks_thread, sha256: sha, count: 2, notice: "Relis .nokker/settings.json du dépôt avant de leur faire confiance." });
+    state.publish({ type: "hook.untrusted", thread_id: b.hooks_thread, sha256: sha, count: 2, notice: "Review the repository's .nokker/settings.json before trusting them." });
   }
   if (typeof b.memory_thread === "string") {
-    const note = { name: "rule-tests-avant-commit-1a2b", kind: "rule", scope: "project", title: "Lancer les tests avant chaque commit", derived_from: "user" } as const;
-    addDemoNote(state, b.memory_thread, { ...note, origin: `${b.memory_thread}#0`, created: new Date().toISOString(), links: [], locality: "local", in_core: true, text: "L'utilisateur veut la suite de tests complète avant chaque commit." });
+    const note = { name: "rule-tests-before-commit-1a2b", kind: "rule", scope: "project", title: "Run the tests before every commit", derived_from: "user" } as const;
+    addDemoNote(state, b.memory_thread, { ...note, origin: `${b.memory_thread}#0`, created: new Date().toISOString(), links: [], locality: "local", in_core: true, text: "The user wants the full test suite before every commit." });
     state.publish({ type: "memory.noted", thread_id: b.memory_thread, turn_index: 0, ...note });
   }
   if (typeof b.sealed === "boolean") m.sealed = b.sealed;
@@ -73,7 +73,7 @@ export function handlePreview(state: MockState, req: IncomingMessage, res: Serve
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
   });
-  res.end(`<!doctype html><meta charset="utf-8"><title>${p.name}</title><body style="font:16px system-ui;display:grid;place-items:center;min-height:90vh"><main><h1>Appli de démo</h1><p>Servie par « ${p.name} » sur le port ${p.port} (démo).</p></main>`);
+  res.end(`<!doctype html><meta charset="utf-8"><title>${p.name}</title><body style="font:16px system-ui;display:grid;place-items:center;min-height:90vh"><main><h1>Demo app</h1><p>Served by “${p.name}” on port ${p.port} (demo).</p></main>`);
   return true;
 }
 
@@ -117,7 +117,7 @@ export async function handleLocalMachine(state: MockState, user: string | null, 
     if (!want) return send(404, { error: { message: "fil sans hooks de dépôt" } }), true;
     if (b.sha256 !== want) return send(409, { error: { message: "le bloc des hooks a changé depuis l'ouverture" } }), true;
     m.hooks.delete(tid);
-    return send(200, { thread_id: tid, root: "/home/alice/projets/site", sha256: want, trusted: true }), true;
+    return send(200, { thread_id: tid, root: "/home/alice/projects/site", sha256: want, trusted: true }), true;
   }
   return false;
 }

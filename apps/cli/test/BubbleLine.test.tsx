@@ -47,7 +47,7 @@ describe("BubbleLine (ink-testing-library)", () => {
     const { lastFrame } = render(<BubbleLine bubble={searchBubble} spinnerFrame={0} />);
     const frame = lastFrame();
     expect(frame).toContain("Libérer de l'espace");
-    expect(frame).toContain("Recherche web");
+    expect(frame).toContain("Web search");
   });
 
   it("affiche l'indice /goto pour une bulle notify", () => {

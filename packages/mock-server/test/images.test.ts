@@ -25,7 +25,7 @@ describe("images dans la demande (X7)", () => {
         ],
       },
     ]);
-    expect(r.choices[0]!.message.content).toMatch(/^\(démo\) Image reçue/);
+    expect(r.choices[0]!.message.content).toMatch(/^\(demo\) Image received/);
     const view = await client.getThread(thread);
     expect(view.messages.some((m) => m.role === "user" && m.content === "que vois-tu ?")).toBe(true);
   });

@@ -7,8 +7,10 @@
 import React, { useEffect, useState } from "react";
 import { NokkerApiError, type ArtifactState, type NokkerClient, type PublicPurge } from "@nokker-apps/sdk";
 import { remoteApprovalUrl } from "../auth.js";
+import { tr } from "../i18n/index.js";
 import { fmtBytes } from "../mirror/model.js";
 import "./publish.css";
+import { ModerationNotice } from "./ModerationNotice.js";
 
 type Toast = (text: string, tone?: "ok" | "error") => void;
 
@@ -26,31 +28,38 @@ export function pagesPublic(client: NokkerClient): Promise<boolean | null> {
   return p;
 }
 
-const CODE_TEXT: Record<string, string> = {
-  local_page: "Cette page est épinglée sur la machine : elle ne devient jamais publique.",
-  not_linked: "Publier passe par la passerelle : lie d'abord cette machine à ton compte nokker.ai.",
-  pages_public_not_allowed: "Les pages publiques sont réservées aux abonnés et aux comptes vérifiés.",
-};
+function codeText(code: string): string | undefined {
+  switch (code) {
+    case "local_page":
+      return tr("This page is pinned on the machine: it never becomes public.");
+    case "not_linked":
+      return tr("Publishing goes through the gateway: first link this machine to your nokker.ai account.");
+    case "pages_public_not_allowed":
+      return tr("Public pages are reserved for subscribers and verified accounts.");
+    case "page_moderated":
+      return tr("This page was removed by nokker.ai moderation: it cannot be published again.");
+    default:
+      return undefined;
+  }
+}
 export function publishError(e: unknown): { code: string | null; text: string } {
   if (e instanceof NokkerApiError) {
     const err = (e.body as { error?: { code?: string; message?: string } } | undefined)?.error;
     const code = err?.code ?? null;
-    return { code, text: (code && CODE_TEXT[code]) || err?.message || `refus de la machine (${e.status})` };
+    return { code, text: (code && codeText(code)) || err?.message || tr("machine refused ({0})", e.status) };
   }
-  return { code: null, text: "la machine ne répond pas" };
+  return { code: null, text: tr("the machine is not responding") };
 }
 
-/** « version N publiée, version M en cours » quand elles diffèrent. */
+/** « version N published, version M in progress » quand elles diffèrent. */
 export function versionsLine(s: Pick<ArtifactState, "version" | "public_version">): string {
   if (!s.public_version) return "";
-  return s.public_version === s.version ? `version ${s.public_version} publiée` : `version ${s.public_version} publiée, version ${s.version} en cours`;
+  return s.public_version === s.version ? tr("version {0} published", s.public_version) : tr("version {0} published, version {1} in progress", s.public_version, s.version);
 }
 
-const PURGE_TEXT: Record<PublicPurge, string | null> = {
-  done: null,
-  none: null,
-  pending: "La copie publique gardée chez nokker.ai part au prochain passage du miroir (nokker.ai injoignable pour l'instant).",
-};
+function purgeText(p: PublicPurge): string | null {
+  return p === "pending" ? tr("The public copy kept at nokker.ai goes at the mirror's next pass (nokker.ai unreachable for now).") : null;
+}
 
 export function PublishPanel({ client, state: s, authMode, toast }: { client: NokkerClient; state: ArtifactState; authMode: string | null; toast: Toast }): React.ReactElement | null {
   const [allowed, setAllowed] = useState<boolean | null>(null);
@@ -95,7 +104,13 @@ export function PublishPanel({ client, state: s, authMode, toast }: { client: No
         (a) => {
           if (a.status === "pending" || a.status === "approved" || a.status === "executed") return;
           setPending(null);
-          setError(a.status === "rejected" ? "Publication refusée." : a.status === "expired" ? "La carte de publication a expiré : republie pour en déposer une nouvelle." : "La publication a échoué (page épinglée, ou version disparue).");
+          setError(
+            a.status === "rejected"
+              ? tr("Publication refused.")
+              : a.status === "expired"
+                ? tr("The publication card expired: republish to place a new one.")
+                : tr("Publication failed (page pinned, or version gone)."),
+          );
         },
         () => undefined,
       );
@@ -103,7 +118,9 @@ export function PublishPanel({ client, state: s, authMode, toast }: { client: No
     return () => clearInterval(t);
   }, [client, pending]);
 
-  if (s.locality === "local") return <p className="fine publish-local">Reste sur cette machine : ni copie, ni publication.</p>;
+  if (s.locality === "local") return <p className="fine publish-local">{tr("Stays on this machine: no copy, no publication.")}</p>;
+  // Retirée par la modération : l'exposé des motifs remplace la publication (le noyau refuse de la republier).
+  if (s.moderated_at) return <ModerationNotice s={s} />;
   if (!s.public && !pending && allowed === false) return null; // pas le droit : l'action est absente, pas grisée
 
   const publish = async (): Promise<void> => {
@@ -128,7 +145,7 @@ export function PublishPanel({ client, state: s, authMode, toast }: { client: No
     try {
       const r = await client.unpublishPage(s.page_id);
       setPurge(r.purge);
-      toast("Page dépubliée : son adresse publique ne répond plus, et ne reviendra jamais.", "ok");
+      toast(tr("Page unpublished: its public address no longer answers, and never will again."), "ok");
     } catch (e) {
       setError(publishError(e).text);
     } finally {
@@ -144,32 +161,32 @@ export function PublishPanel({ client, state: s, authMode, toast }: { client: No
   };
 
   const confirmBox = (republish: boolean) => (
-    <div className="publish-confirm" role="group" aria-label={republish ? "Republier la page" : "Publier la page"}>
+    <div className="publish-confirm" role="group" aria-label={republish ? tr("Republish the page") : tr("Publish the page")}>
       <p>
-        <strong>{republish ? "Republier" : "Rendre publique"}</strong> : n'importe qui avec l'adresse pourra lire cette version.
+        <strong>{republish ? tr("Republish") : tr("Make public")}</strong>{tr(": anyone with the address will be able to read this version.")}
       </p>
       <dl className="publish-what">
-        <dt>Titre</dt>
+        <dt>{tr("Title")}</dt>
         <dd>{s.title}</dd>
-        <dt>Fichier</dt>
+        <dt>{tr("File")}</dt>
         <dd>
           <code>{s.path}</code>
         </dd>
-        <dt>Version</dt>
+        <dt>{tr("Version")}</dt>
         <dd>{s.version}</dd>
-        <dt>Taille</dt>
+        <dt>{tr("Size")}</dt>
         <dd>{fmtBytes(s.size)}</dd>
       </dl>
       <label className="team-check">
-        <input type="checkbox" checked={index} onChange={(e) => setIndex(e.target.checked)} /> indexable par les moteurs de recherche
+        <input type="checkbox" checked={index} onChange={(e) => setIndex(e.target.checked)} /> {tr("indexable by search engines")}
       </label>
-      <p className="fine">Une page publique ne peut ni pister ni collecter : aucun appel réseau, aucun formulaire. Tu signes la publication sur ton appareil (carte forte).</p>
+      <p className="fine">{tr("A public page can neither track nor collect: no network call, no form. You sign the publication on your device (strong card).")}</p>
       <span className="team-row-actions">
         <button type="button" className="btn btn-brass" disabled={busy} onClick={() => void publish()}>
-          {republish ? "Republier" : "Publier"}
+          {republish ? tr("Republish") : tr("Publish")}
         </button>
         <button type="button" className="btn btn-ghost" onClick={() => setConfirm(false)}>
-          Annuler
+          {tr("Cancel")}
         </button>
       </span>
     </div>
@@ -179,12 +196,12 @@ export function PublishPanel({ client, state: s, authMode, toast }: { client: No
     <div className="publish-panel">
       {pending ? (
         <p className="publish-pending" role="status">
-          En attente de ta signature : la carte « page_publish » (version {pending.version}) s'approuve sur ton appareil, jamais au jeton local.
+          {tr("Waiting for your signature: the “page_publish” card (version {0}) is approved on your device, never with the local token.", pending.version)}
           {authMode === "gateway" ? (
             <>
               {" "}
               <a href={remoteApprovalUrl(location.host, pending.approval_id)} target="_blank" rel="noopener noreferrer">
-                Signer sur app.nokker.ai
+                {tr("Sign on app.nokker.ai")}
               </a>
             </>
           ) : null}
@@ -193,14 +210,14 @@ export function PublishPanel({ client, state: s, authMode, toast }: { client: No
       {s.public ? (
         <>
           <div className="publish-url">
-            <input className="artifact-url mono" readOnly value={url ?? "…"} aria-label="Adresse publique de la page" onFocus={(e) => e.currentTarget.select()} />
+            <input className="artifact-url mono" readOnly value={url ?? "…"} aria-label={tr("Public address of the page")} onFocus={(e) => e.currentTarget.select()} />
             <button type="button" className="btn btn-sm" disabled={!url} onClick={copy}>
-              {copied ? "Copiée" : "Copier"}
+              {copied ? tr("Copied") : tr("Copy")}
             </button>
           </div>
           <p className="fine">
             {versionsLine(s)}
-            {s.public_index ? " · indexable" : " · non indexée"}
+            {s.public_index ? tr(" · indexable") : tr(" · not indexed")}
           </p>
           {confirm ? (
             confirmBox(true)
@@ -208,11 +225,11 @@ export function PublishPanel({ client, state: s, authMode, toast }: { client: No
             <span className="team-row-actions">
               {s.public_version !== s.version && !pending && allowed !== false ? (
                 <button type="button" className="btn" disabled={busy} onClick={() => (setIndex(!!s.public_index), setConfirm(true))}>
-                  Republier la version {s.version}
+                  {tr("Republish version {0}", s.version)}
                 </button>
               ) : null}
               <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void unpublish()}>
-                Dépublier
+                {tr("Unpublish")}
               </button>
             </span>
           )}
@@ -221,10 +238,10 @@ export function PublishPanel({ client, state: s, authMode, toast }: { client: No
         confirmBox(false)
       ) : !pending ? (
         <label className="team-check publish-switch">
-          <input type="checkbox" checked={false} disabled={busy} onChange={() => (setIndex(false), setConfirm(true))} /> publique
+          <input type="checkbox" checked={false} disabled={busy} onChange={() => (setIndex(false), setConfirm(true))} /> {tr("public")}
         </label>
       ) : null}
-      {purge && PURGE_TEXT[purge] ? <p className="fine">{PURGE_TEXT[purge]}</p> : null}
+      {purge && purgeText(purge) ? <p className="fine">{purgeText(purge)}</p> : null}
       {error ? (
         <p className="fine artifact-fail" role="alert">
           {error}

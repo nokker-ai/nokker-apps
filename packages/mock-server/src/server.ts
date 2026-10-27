@@ -249,7 +249,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     const device: MockDeviceRecord = {
       id,
       code: id.slice(4, 10), // 6 car. — APPROVALS.md §3.1 : "identifiant COURT (6 car. hex)"
-      name: String(body.name ?? "appareil sans nom"),
+      name: String(body.name ?? "unnamed device"),
       publicKeySpkiB64Url: String(body.public_key_spki ?? ""),
       // simplification #2 (sauf `devicePending` : appareil `pending` tant qu'il n'est pas confirmé par TOTP,
       // `user` déclaré obligatoire — APPROVALS.md §3.1bis).
@@ -306,7 +306,11 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   if (method === "POST" && sessionChallengeMatch) {
     const deviceId = sessionChallengeMatch[1]!;
     const device = state.devices.get(deviceId);
-    if (!device) return void sendJson(res, 404, { error: { message: "appareil inconnu" } });
+    // Codes stables du noyau (0309091) : l'écran distingue « appareil inconnu » et « en attente / retiré » d'une panne.
+    if (!device) return void sendJson(res, 404, { error: { message: deviceId, code: "device_unknown" } });
+    if (device.status !== "approved") {
+      return void sendJson(res, 400, { error: { message: `appareil non approuvé (statut='${device.status}')`, code: "device_not_approved", device_status: device.status } });
+    }
     const scope = `login:${deviceId}`;
     const nonce = randomId("nonce");
     const expMs = Date.now() + 120_000;
@@ -320,7 +324,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   // sécurisé (http sur IP Tailscale : ni WebCrypto ni WebAuthn). N'existe pas dans le contrat ni dans le noyau.
   if (method === "POST" && path === "/v1/dev/demo-session") {
     const token = randomId("sess");
-    const deviceId = "demo-sans-appareil";
+    const deviceId = "demo-no-device";
     const expiresAt = new Date(Date.now() + 12 * 3600 * 1000).toISOString();
     state.sessions.set(token, { token, deviceId, expiresAt });
     res.setHeader("X-Nokker-Mock-Extension", "true");
@@ -426,7 +430,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     const cwd = typeof body.cwd === "string" ? body.cwd.trim() : "";
     if (!cwd || !cwd.startsWith("/")) return void sendJson(res, 400, { error: { message: "cwd (chemin absolu) requis" } });
     const root = rootFor(cwd, state.localRoots);
-    if (root === null) return void sendJson(res, 403, { error: { message: "cwd hors des racines déclarées" } });
+    if (root === null) return void sendJson(res, 403, { error: { message: "dossier hors des racines déclarées" } });
     // Fil demandé : `thread_id` ou son alias `resume` (§7.4.1) ; non chaîne ou deux fils différents : 400 ; vide : neuf.
     const wanted: string[] = [];
     for (const key of ["thread_id", "resume"] as const) {
@@ -455,7 +459,8 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   }
   if (method === "GET" && path === "/v1/local/sessions") {
     // Lignes du noyau (§7.4.1) : `title` null avant le premier tour, `working` (tour en cours ou en file),
-    // `pending_approvals` (fil et sous-agents).
+    // `pending_approvals` (fil et sous-agents). `roots` (noyau 0bb77d3) : où une session peut s'ouvrir ; mock sans
+    // racines déclarées (tout accepté) : `[]`.
     const out = [...state.localSessions.entries()].map(([id, meta]) => {
       const rec = state.threads.get(id)!;
       const last = rec.turns.at(-1)?.created_at ?? null;
@@ -471,7 +476,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
       };
     });
     out.sort((a, b) => a._u.localeCompare(b._u)); // ordre du noyau : les plus anciennes d'abord
-    return void sendJson(res, 200, { sessions: out.map(({ _u, ...r }) => (void _u, r)) });
+    return void sendJson(res, 200, { sessions: out.map(({ _u, ...r }) => (void _u, r)), roots: state.localRoots ?? [] });
   }
   // ---- Coût par tour (LOKKAL.md §7.6) : totaux de la session et du jour, lecture seule ------------
   if (method === "GET" && path === "/v1/local/cost") {
@@ -971,11 +976,11 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
         ? { reply: cancelled ? "" : localReply, triggersApproval: false, after: undefined }
         : interpretDemo(state, threadId, userText, { turnId, context });
       const { triggersApproval, after } = demo;
-      const reply = imageCount > 0 && !isLocal ? `(démo) ${imageCount === 1 ? "Image reçue" : `${imageCount} images reçues`}, non analysée${imageCount === 1 ? "" : "s"} par le mock. ${demo.reply}` : demo.reply;
+      const reply = imageCount > 0 && !isLocal ? `(demo) ${imageCount === 1 ? "Image received" : `${imageCount} images received`}, not analysed by the mock. ${demo.reply}` : demo.reply;
 
       let approval: Approval | undefined;
       if (triggersApproval && !state.pendingApprovalForThread(threadId)) {
-        const args = { to: "destinataire@example.com", subject: "Démo d'approbation", body: userText };
+        const args = { to: "recipient@example.com", subject: "Approval demo", body: userText };
         approval = {
           id: randomId("appr"),
           thread_id: threadId,
@@ -986,8 +991,8 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
           args_sha256: argsSha256(args),
           effect: "send_external",
           rule: "effect:send_external",
-          reason: "Le message demande un envoi externe — approbation requise avant toute exécution réelle.",
-          advice: "Avis simulé : aucune donnée sensible détectée ; retour arrière trivial (rien n'est envoyé avant approbation).",
+          reason: "The message asks for an external send — approval required before any real execution.",
+          advice: "Simulated advice: no sensitive data detected; trivially reversible (nothing is sent before approval).",
           strength: "standard",
           status: "pending",
           created_at: new Date().toISOString(),
@@ -1011,7 +1016,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
         approvalBubble(state, approval);
       }
 
-      state.appendTurn(threadId, userText, cancelled ? "(tour annulé)" : reply, { sender: user, channel: isLocal ? "cli" : "web", silent: true, images: turnImages });
+      state.appendTurn(threadId, userText, cancelled ? "(turn cancelled)" : reply, { sender: user, channel: isLocal ? "cli" : "web", silent: true, images: turnImages });
       // Les bulles naissent pendant le tour (comme un producteur du noyau à partir d'un résultat d'outil).
       after?.();
       const endTurn = (): void => {

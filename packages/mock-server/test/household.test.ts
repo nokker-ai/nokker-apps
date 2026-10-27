@@ -152,7 +152,7 @@ describe("foyer (X23, §7.29)", () => {
     });
     expect(r).toMatchObject({ accepted: 1, quarantined: 1 });
     const q = (await c.listHouseholdQuarantine()).quarantine.find((x) => x.name === n.name)!;
-    expect((await c.restoreHouseholdQuarantine(q.id)).note.text).toContain("arachides");
+    expect((await c.restoreHouseholdQuarantine(q.id)).note.text).toContain("peanuts");
   });
 
   it("membre : sa ligne seulement, pas d'invitations ; quitte le foyer", async () => {

@@ -148,12 +148,12 @@ describe("ChatController contre le mock", () => {
     // Écriture en direct (X22) du patch : le texte proposé, puis le bloc fermé par le tool.result.
     const live = lives.filter((v) => v.name === "patch");
     expect(live.at(-1)).toMatchObject({ path: "src/app.py", field: "new_string", done: true, discarded: false });
-    expect(live.at(-1)!.text).toContain('"""Somme de a et b."""');
+    expect(live.at(-1)!.text).toContain('"""Sum of a and b."""');
     expect(live.some((v) => !v.done)).toBe(true);
     const liveMsg = posted.filter((m) => m.type === "live") as Array<Extract<ToView, { type: "live" }>>;
     expect(liveMsg.at(-1)!.live.tail.length).toBeLessThanOrEqual(6);
     const reply = posted.filter((m) => m.type === "text").map((m) => (m as { append: string }).append).join("");
-    expect(reply.trim()).toBe("J'ai corrigé `src/app.py` (add retournait a - b) et le test add passe. Je n'ai pas nettoyé `build/` : suppression refusée.");
+    expect(reply.trim()).toBe("I fixed `src/app.py` (add returned a - b) and test add passes. I did not clean `build/`: deletion refused.");
     expect(posted.find((m) => m.type === "turnEnd")).toEqual({ type: "turnEnd", stopReason: "end_turn" });
   }, 20_000);
 
@@ -175,9 +175,9 @@ describe("ChatController contre le mock", () => {
       });
       await turn;
       const txt = posted.slice(n).filter((m) => m.type === "text").map((m) => (m as { append: string }).append).join("");
-      expect(txt).toContain("attend ton approbation");
+      expect(txt).toContain("is waiting for your approval");
       // Un refus ne lance pas de tour de suite (`continuation: "none"`) : la demande et la suite de l'approbation.
-      expect(txt).not.toContain("refusée");
+      expect(txt).not.toContain("refused");
       expect(posted.slice(n).filter((m) => m.type === "cost")).toHaveLength(2);
       // L'appel approuvé se ferme sur le `tool.result` de l'exécuteur, avec la vraie sortie de l'outil.
       const tools = posted.slice(n).filter((m) => m.type === "tool").map((m) => (m as Extract<ToView, { type: "tool" }>).tool);

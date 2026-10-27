@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import type { TransferMode } from "@nokker-apps/sdk";
+import { tr } from "../i18n/index.js";
 
 /** Après un dépôt sur une session du tiroir : Déplacer / Copier / Annuler. */
 export function DropMenu({
@@ -27,18 +28,18 @@ export function DropMenu({
     return () => window.removeEventListener("keydown", onKey);
   }, [onCancel]);
   return (
-    <div className="popover drop-menu" role="dialog" aria-label={`Déposer la bulle dans la session ${threadTitle}`} style={{ top, left }} ref={ref}>
+    <div className="popover drop-menu" role="dialog" aria-label={tr("Drop the bubble into the session {0}", threadTitle)} style={{ top, left }} ref={ref}>
       <span className="drop-title">
-        Bulle <strong>{bubbleTitle}</strong> → session <strong className="brass">{threadTitle}</strong>
+        {tr("Bubble")} <strong>{bubbleTitle}</strong> → {tr("session")} <strong className="brass">{threadTitle}</strong>
       </span>
       <div className="drop-actions">
         <button type="button" className="btn" onClick={() => onPick("move")}>
-          Déplacer
+          {tr("Move")}
         </button>
         <button type="button" className="btn btn-brass" onClick={() => onPick("copy")}>
-          Copier
+          {tr("Copy")}
         </button>
-        <button type="button" className="icon-btn" aria-label="Annuler" onClick={onCancel}>
+        <button type="button" className="icon-btn" aria-label={tr("Cancel")} onClick={onCancel}>
           ✕
         </button>
       </div>

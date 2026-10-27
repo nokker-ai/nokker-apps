@@ -5,11 +5,12 @@
  */
 import React, { useEffect, useState } from "react";
 import { NokkerApiError, SSO_MAX_AGE, SSO_ROLES, type GatedProject, type NokkerClient, type SsoBinding, type SsoConnection, type SsoMapping } from "@nokker-apps/sdk";
+import { shellLang, tr } from "../i18n/index.js";
 import { Icon } from "../icons.js";
 import { goSso } from "./browser.js";
 import { cleanMappings, ssoErrorCode } from "./flow.js";
 import { settingsError } from "./SsoSettings.js";
-import { MAX_AGE_CHOICES, SSO_ROLE_LABEL, maxAgeLabel, ssoText } from "./text.js";
+import { maxAgeChoices, maxAgeLabel, ssoRoleLabel, ssoText } from "./text.js";
 
 type Toast = (text: string, tone?: "ok" | "error") => void;
 
@@ -56,7 +57,7 @@ export function ProjectSso({ client, projectId, toast }: { client: NokkerClient;
       const b = await client.putProjectSso(projectId, { connection: form.connection, mappings: cleanMappings(form.mappings), required: form.required, max_age_s: form.max_age_s });
       setBinding(b);
       setForm({ connection: b.connection, mappings: b.mappings, required: b.required, max_age_s: b.max_age_s });
-      toast("SSO du projet enregistré : les rôles suivent les groupes à la prochaine connexion de chacun.", "ok");
+      toast(tr("Project SSO saved: roles follow the groups at each person's next sign-in."), "ok");
     } catch (e) {
       toast(settingsError(e), "error");
     } finally {
@@ -69,7 +70,7 @@ export function ProjectSso({ client, projectId, toast }: { client: NokkerClient;
       await client.deleteProjectSso(projectId);
       setBinding(null);
       setForm(null);
-      toast("SSO retiré de ce projet. Les adhésions déjà posées restent.", "ok");
+      toast(tr("SSO removed from this project. Memberships already granted stay."), "ok");
     } catch (e) {
       toast(settingsError(e), "error");
     } finally {
@@ -78,17 +79,17 @@ export function ProjectSso({ client, projectId, toast }: { client: NokkerClient;
   };
 
   return (
-    <section className="machine-section sso-project" aria-label="SSO du projet">
+    <section className="machine-section sso-project" aria-label={tr("Project SSO")}>
       <h3>SSO</h3>
       {!form ? (
         <>
-          <p className="fine">Pas de SSO : les membres arrivent par invitation.</p>
+          <p className="fine">{tr("No SSO: members join by invitation.")}</p>
           {conns.length ? (
             <button type="button" className="btn" onClick={startEdit}>
-              Relier une connexion SSO
+              {tr("Link an SSO connection")}
             </button>
           ) : (
-            <p className="fine">Crée d'abord une connexion dans « SSO de l'organisation ».</p>
+            <p className="fine">{tr("First create a connection in “Organisation SSO”.")}</p>
           )}
         </>
       ) : (
@@ -99,47 +100,51 @@ export function ProjectSso({ client, projectId, toast }: { client: NokkerClient;
           }}
         >
           <div className="sso-grid">
-            <label htmlFor={`sso-c-${projectId}`}>Connexion</label>
+            <label htmlFor={`sso-c-${projectId}`}>{tr("Connection")}</label>
             <select id={`sso-c-${projectId}`} value={form.connection} onChange={(e) => setForm({ ...form, connection: e.target.value })}>
               {conns.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
-                  {c.client_secret.set ? "" : " (secret absent)"}
+                  {c.client_secret.set ? "" : tr(" (secret missing)")}
                 </option>
               ))}
             </select>
           </div>
-          <h4>Groupes → rôles</h4>
-          <p className="fine">À chaque connexion, le rôle le plus haut que donnent les groupes. Un membre arrivé par le SSO qui n'a plus aucun groupe est retiré ; une adhésion venue d'une invitation n'est touchée que si un groupe lui donne un rôle.</p>
+          <h4>{tr("Groups → roles")}</h4>
+          <p className="fine">
+            {tr(
+              "At each sign-in, the highest role the groups grant. A member who came through SSO and no longer has any group is removed; a membership that came from an invitation is only touched if a group grants it a role.",
+            )}
+          </p>
           <ul className="sso-mappings">
             {form.mappings.map((m, i) => (
               <li key={i} className="team-inline-form">
-                <input aria-label={`Groupe ${i + 1}`} value={m.group} onChange={(e) => setForm({ ...form, mappings: form.mappings.map((x, j) => (j === i ? { ...x, group: e.target.value } : x)) })} placeholder="nom du groupe" spellCheck={false} />
-                <select aria-label={`Rôle du groupe ${i + 1}`} value={m.role} onChange={(e) => setForm({ ...form, mappings: form.mappings.map((x, j) => (j === i ? { ...x, role: e.target.value as SsoMapping["role"] } : x)) })}>
+                <input aria-label={tr("Group {0}", i + 1)} value={m.group} onChange={(e) => setForm({ ...form, mappings: form.mappings.map((x, j) => (j === i ? { ...x, group: e.target.value } : x)) })} placeholder={tr("group name")} spellCheck={false} />
+                <select aria-label={tr("Role of group {0}", i + 1)} value={m.role} onChange={(e) => setForm({ ...form, mappings: form.mappings.map((x, j) => (j === i ? { ...x, role: e.target.value as SsoMapping["role"] } : x)) })}>
                   {SSO_ROLES.map((r) => (
                     <option key={r} value={r}>
-                      {SSO_ROLE_LABEL[r]}
+                      {ssoRoleLabel(r)}
                     </option>
                   ))}
                 </select>
-                <button type="button" className="btn btn-sm btn-ghost" aria-label={`Retirer le groupe ${i + 1}`} onClick={() => setForm({ ...form, mappings: form.mappings.filter((_, j) => j !== i) })}>
-                  Retirer
+                <button type="button" className="btn btn-sm btn-ghost" aria-label={tr("Remove group {0}", i + 1)} onClick={() => setForm({ ...form, mappings: form.mappings.filter((_, j) => j !== i) })}>
+                  {tr("Remove")}
                 </button>
               </li>
             ))}
           </ul>
           <button type="button" className="btn btn-sm" onClick={() => setForm({ ...form, mappings: [...form.mappings, { group: "", role: "member" }] })}>
-            <Icon name="plus" size={14} /> Un groupe
+            <Icon name="plus" size={14} /> {tr("A group")}
           </button>
-          <p className="fine">Le rôle propriétaire ne s'obtient jamais par le SSO.</p>
+          <p className="fine">{tr("The owner role is never obtained through SSO.")}</p>
           <label className="team-check">
-            <input type="checkbox" checked={form.required} onChange={(e) => setForm({ ...form, required: e.target.checked })} /> SSO obligatoire
+            <input type="checkbox" checked={form.required} onChange={(e) => setForm({ ...form, required: e.target.checked })} /> {tr("SSO required")}
           </label>
           {form.required ? (
             <div className="sso-grid">
-              <label htmlFor={`sso-a-${projectId}`}>Connexion SSO valable</label>
+              <label htmlFor={`sso-a-${projectId}`}>{tr("SSO sign-in valid for")}</label>
               <select id={`sso-a-${projectId}`} value={form.max_age_s} onChange={(e) => setForm({ ...form, max_age_s: Number(e.target.value) })}>
-                {[...MAX_AGE_CHOICES, ...(MAX_AGE_CHOICES.some((c) => c.s === form.max_age_s) ? [] : [{ s: form.max_age_s, label: maxAgeLabel(form.max_age_s) }])].map((c) => (
+                {[...maxAgeChoices(), ...(maxAgeChoices().some((c) => c.s === form.max_age_s) ? [] : [{ s: form.max_age_s, label: maxAgeLabel(form.max_age_s) }])].map((c) => (
                   <option key={c.s} value={c.s}>
                     {c.label}
                   </option>
@@ -149,20 +154,23 @@ export function ProjectSso({ client, projectId, toast }: { client: NokkerClient;
           ) : null}
           <p className="fine">
             {form.required
-              ? `Les membres (pas toi) n'ouvrent ce projet qu'après une connexion SSO de moins de ${maxAgeLabel(form.max_age_s)} ; leurs machines liées et leurs agents aussi. Toi, tu gardes la main pour réparer la configuration.`
-              : "Les membres peuvent aussi ouvrir ce projet par leur connexion habituelle."}
+              ? tr(
+                  "Members (not you) can only open this project after an SSO sign-in less than {0} old; their linked machines and agents too. You keep control to fix the configuration.",
+                  maxAgeLabel(form.max_age_s),
+                )
+              : tr("Members can also open this project through their usual sign-in.")}
           </p>
           <span className="team-row-actions">
             <button type="submit" className="btn btn-brass" disabled={busy || !form.connection}>
-              Enregistrer
+              {tr("Save")}
             </button>
             {binding ? (
               <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void remove()}>
-                Retirer le SSO
+                {tr("Remove the SSO")}
               </button>
             ) : (
               <button type="button" className="btn btn-ghost" onClick={() => setForm(null)}>
-                Annuler
+                {tr("Cancel")}
               </button>
             )}
           </span>
@@ -181,7 +189,7 @@ export function SsoGate({ client, project: p }: { client: NokkerClient; project:
       <header className="team-head">
         <div>
           <h2>{p.name}</h2>
-          <p className="fine">Ce projet demande une connexion par le SSO de son organisation, récente.</p>
+          <p className="fine">{tr("This project requires a recent sign-in through its organisation's SSO.")}</p>
         </div>
       </header>
       {err ? (
@@ -196,13 +204,13 @@ export function SsoGate({ client, project: p }: { client: NokkerClient; project:
         onClick={() => {
           setBusy(true);
           setErr(null);
-          goSso(client, "fr", { connection: p.sso.connection }).catch((e: unknown) => {
-            setErr(ssoText("fr", ssoErrorCode(e)));
+          goSso(client, shellLang(), { connection: p.sso.connection }).catch((e: unknown) => {
+            setErr(ssoText(shellLang(), ssoErrorCode(e)));
             setBusy(false);
           });
         }}
       >
-        {busy ? "Redirection…" : "Se connecter avec le SSO"}
+        {busy ? tr("Redirecting…") : tr("Sign in with SSO")}
       </button>
     </div>
   );

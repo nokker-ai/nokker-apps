@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import type { Bubble, Thread, TransferMode } from "@nokker-apps/sdk";
+import { tr } from "../i18n/index.js";
 
 /** Alternative clavier (et tactile) au glisser-déposer : « Envoyer vers… » une autre session. */
 export function SendToMenu({
@@ -24,18 +25,18 @@ export function SendToMenu({
   }, [onClose]);
   const from = bubble.thread_id ?? (bubble.kind === "notify" ? bubble.state.from_thread : null);
   return (
-    <div className="popover send-pop" role="dialog" aria-label={`Envoyer la bulle ${bubble.title} vers une session`} ref={ref} onPointerDown={(e) => e.stopPropagation()}>
-      <span className="eyebrow">Envoyer vers…</span>
+    <div className="popover send-pop" role="dialog" aria-label={tr("Send the bubble {0} to a session", bubble.title)} ref={ref} onPointerDown={(e) => e.stopPropagation()}>
+      <span className="eyebrow">{tr("Send to…")}</span>
       {threads
         .filter((t) => t.id !== from)
         .map((t) => (
           <div key={t.id} className="send-row">
             <span className="pick-name">{t.title}</span>
-            <button type="button" className="btn btn-sm" onClick={() => onPick(t.id, "move")} aria-label={`Déplacer vers ${t.title}`}>
-              Déplacer
+            <button type="button" className="btn btn-sm" onClick={() => onPick(t.id, "move")} aria-label={tr("Move to {0}", t.title)}>
+              {tr("Move")}
             </button>
-            <button type="button" className="btn btn-sm btn-brass" onClick={() => onPick(t.id, "copy")} aria-label={`Copier vers ${t.title}`}>
-              Copier
+            <button type="button" className="btn btn-sm btn-brass" onClick={() => onPick(t.id, "copy")} aria-label={tr("Copy to {0}", t.title)}>
+              {tr("Copy")}
             </button>
           </div>
         ))}

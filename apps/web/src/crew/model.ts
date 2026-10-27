@@ -1,6 +1,7 @@
 /** Deck Crew (X14, BUBBLES.md §9.5) — libellés purs, testés. La couleur n'est jamais le seul signal. Langue de l'interface
  * en dernier paramètre (le français par défaut). */
 import type { AgentRun, AgentRunStatus, AgentTrigger } from "@nokker-apps/sdk";
+import { trIn } from "../i18n/index.js";
 import { DAYS, cw, type Lang } from "./i18n.js";
 
 const pad = (n: string): string => n.padStart(2, "0");
@@ -86,7 +87,7 @@ export function runCost(r: Pick<AgentRun, "cost">, lang: Lang = "fr"): string | 
     : money(r.cost.amount, r.cost.currency);
   if (r.cost.calls === undefined) return amounts;
   const n = r.cost.calls;
-  return `${amounts} · ${n} ${lang === "en" ? (n > 1 ? "calls" : "call") : n > 1 ? "appels" : "appel"}`;
+  return `${amounts} · ${n > 1 ? trIn(lang, "{0} calls", n) : trIn(lang, "{0} call", n)}`;
 }
 
 /** Fusionne un passage reçu par événement dans la liste affichée (le plus récent d'abord). */

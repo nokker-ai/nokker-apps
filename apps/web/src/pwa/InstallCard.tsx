@@ -8,6 +8,24 @@ export function InstallCard({ lang, bare = false }: { lang: Lang; bare?: boolean
   const mode = useSyncExternalStore(subscribeInstall, currentInstallMode, () => "none" as const);
   const [busy, setBusy] = useState(false);
   if (mode === "none") return null;
+  // Ordinateur dont le navigateur sait installer l'app : une ligne discrète, pas le bloc du téléphone.
+  if (mode === "desktop-prompt") {
+    return (
+      <p className="ob-note pwa-desktop" data-install={mode}>
+        <button
+          type="button"
+          className="ob-btn"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            void promptInstall().finally(() => setBusy(false));
+          }}
+        >
+          {t(lang, "installDesktop")}
+        </button>
+      </p>
+    );
+  }
   return (
     <div className={bare ? "ob-install" : "ob-card"} data-install={mode}>
       {bare ? <h2 className="ob-sub">{t(lang, "installTitle")}</h2> : <h2 className="ob-title">{t(lang, "installTitle")}</h2>}

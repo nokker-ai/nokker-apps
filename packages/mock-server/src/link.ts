@@ -97,7 +97,7 @@ export async function handleLinkDev(
   const m = linkMock(state);
   const b = await readBody();
   if (b.rate === true) m.rateOnce = true;
-  const name = typeof b.machine === "string" && b.machine ? b.machine : "Atelier";
+  const name = typeof b.machine === "string" && b.machine ? b.machine : "Workshop";
   if (b.linked === true) {
     const seen = typeof b.last_seen_s === "number" ? now() - b.last_seen_s : null;
     const mc = addMachine(m, name, null, seen);
@@ -109,8 +109,8 @@ export async function handleLinkDev(
       m.approvals.set(id, {
         machineId: mc.id,
         approval_id: id,
-        title: mail ? "Envoyer le compte rendu (démo)" : "Supprimer le dossier build/ (démo)",
-        reason: mail ? "La session « Compta » veut envoyer le compte rendu de la réunion." : "La session « Nettoyage » veut lancer rm -rf build/ dans ~/projets/site.",
+        title: mail ? "Send the meeting minutes (demo)" : "Delete the build/ folder (demo)",
+        reason: mail ? "The “Accounting” session wants to send the meeting minutes." : "The “Cleanup” session wants to run rm -rf build/ in ~/projects/site.",
         strength: "strong",
         expires_at: new Date(Date.now() + (typeof b.expires_in === "number" ? b.expires_in : 600) * 1000).toISOString(),
         challenge: randomBytes(32).toString("base64url"),
@@ -120,11 +120,11 @@ export async function handleLinkDev(
           ? {
               tool: "mail_send",
               class: "external_send",
-              headline: "Envoyer un e-mail en ton nom à 2 destinataires",
+              headline: "Send an email in your name to 2 recipients",
               lines: [
-                { key: "to", label: "À", value: "alice@example.com, bob@example.com", items: ["alice@example.com", "bob@example.com"], count: 2 },
-                { key: "subject", label: "Objet", value: "Compte rendu du 25.10" },
-                { key: "body", label: "Message", value: "Bonjour, voici le compte rendu de la réunion de ce matin. Les décisions : 1) on garde la date du 6.11 ; 2) la démo passe par le téléphone ; 3) mot de passe ‹caviardé›", truncated: true, length: 1240, redacted: true },
+                { key: "to", label: "To", value: "alice@example.com, bob@example.com", items: ["alice@example.com", "bob@example.com"], count: 2 },
+                { key: "subject", label: "Subject", value: "Minutes of 25.10" },
+                { key: "body", label: "Message", value: "Hello, here are the minutes of this morning's meeting. Decisions: 1) we keep the 6.11 date; 2) the demo goes over the phone; 3) password ‹redacted›", truncated: true, length: 1240, redacted: true },
               ],
               erased: false,
             }
@@ -236,7 +236,7 @@ export async function handleLink(
         machine_id: mc.id, name: mc.name, host: mc.host, online: online(mc),
         load_age_s: mc.lastSeenAt === null ? null : nowS - mc.lastSeenAt,
         load: online(mc)
-          ? { ram: { total_mb: 32768, free_mb: i === 0 ? 9100 : 21400 }, cpu: { count: 16, load1: i === 0 ? 7.2 : 1.1, rel: i === 0 ? 0.45 : 0.07 }, gpus: i === 0 ? [{ name: "GPU de démo", memory_total_mb: 24576, memory_free_mb: 20000, util_pct: 12 }] : [], sessions: 2, active_turns: i === 0 ? 1 : 0 }
+          ? { ram: { total_mb: 32768, free_mb: i === 0 ? 9100 : 21400 }, cpu: { count: 16, load1: i === 0 ? 7.2 : 1.1, rel: i === 0 ? 0.45 : 0.07 }, gpus: i === 0 ? [{ name: "Demo GPU", memory_total_mb: 24576, memory_free_mb: 20000, util_pct: 12 }] : [], sessions: 2, active_turns: i === 0 ? 1 : 0 }
           : null,
         deck_at: mc.lastSeenAt, deck_age_s: mc.lastSeenAt === null ? null : nowS - mc.lastSeenAt,
         sessions: online(mc)

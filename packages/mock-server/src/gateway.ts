@@ -126,7 +126,7 @@ export async function handleGatewayAuthorize(
   const host = String(b.host ?? "").toLowerCase();
   const challenge = String(b.code_challenge ?? "");
   if (!/^[a-z0-9.-]+(:\d+)?$/.test(host) || !/^[A-Za-z0-9_-]{43}$/.test(challenge) || b.code_challenge_method !== "S256") return send(400, { error: { message: "requête invalide" } }), true;
-  if (host.startsWith("autre-")) return send(403, { error: { message: "machine inconnue de ce compte" } }), true;
+  if (host.startsWith("autre-") || host.startsWith("other-")) return send(403, { error: { message: "machine inconnue de ce compte" } }), true;
   const code = randomBytes(16).toString("base64url");
   gw(state).codes.set(code, { host, challenge, expiresAt: Date.now() + 60_000 });
   const scheme = /\.nokker\.app$/.test(host) ? "https" : "http";

@@ -4,7 +4,8 @@
  * n'a pas de `backdrop-filter`/glow réel, on simule par un spinner tournant pendant que la bulle
  * travaille (seul signal dynamique disponible en texte).
  */
-import { bubbleTheme, type BubbleKindTheme } from "@nokker-apps/brand";
+import { bubbleLabel, bubbleTheme, type BubbleKindTheme } from "@nokker-apps/brand";
+import { lang } from "../i18n/index.js";
 import type { Bubble } from "@nokker-apps/sdk";
 
 export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
@@ -55,7 +56,7 @@ export function bubbleLineModel(bubble: Bubble, spinnerFrame: number): BubbleLin
     id: bubble.id,
     glyph: ICON_GLYPH[theme.icon],
     color: theme.color,
-    label: theme.label,
+    label: bubbleLabel(bubble.kind, lang()),
     title: bubble.title,
     statusGlyph: statusGlyphFor(bubble.status, spinnerFrame),
     hint:

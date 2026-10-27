@@ -6,6 +6,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { canRole, type BudgetWindow, type NokkerClient, type Project, type ProjectAgentEntry, type ProjectAuditEvent, type ProjectBudgetCap, type ProjectBudgetView } from "@nokker-apps/sdk";
 import { fmtWhen, teamError } from "../team/model.js";
+import { shellLang, tr } from "../i18n/index.js";
 import "./project.css";
 
 type Toast = (text: string, tone?: "ok" | "error") => void;
@@ -16,13 +17,13 @@ export function money(v: number, currency: string): string {
 
 /** État d'une fenêtre écrit en clair (§7.27.4). */
 export function windowState(w: BudgetWindow): string {
-  return w.state === "over" ? "atteint : les tours du projet sont refusés" : w.state === "warning" ? "80 % passé" : w.state === "ok" ? "ok" : "pas de plafond";
+  return w.state === "over" ? tr("reached: the project's turns are refused") : w.state === "warning" ? tr("over 80%") : w.state === "ok" ? tr("ok") : tr("no cap");
 }
 
 /** Heure de remise à zéro, en heure suisse. */
 export function resetsLabel(iso: string): string {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : new Intl.DateTimeFormat("fr-CH", { dateStyle: "short", timeStyle: "short", timeZone: "Europe/Zurich" }).format(d);
+  return Number.isNaN(d.getTime()) ? iso : new Intl.DateTimeFormat(shellLang() === "fr" ? "fr-CH" : "en-GB", { dateStyle: "short", timeStyle: "short", timeZone: "Europe/Zurich" }).format(d);
 }
 
 function Bar({ label, w, currency }: { label: string; w: BudgetWindow; currency: string }): React.ReactElement {
@@ -37,11 +38,11 @@ function Bar({ label, w, currency }: { label: string; w: BudgetWindow; currency:
         </span>
       </div>
       {w.cap !== null ? (
-        <div className="budget-track" role="progressbar" aria-label={`${label} : ${pct} %`} aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+        <div className="budget-track" role="progressbar" aria-label={tr("{0}: {1}%", label, pct)} aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
           <span style={{ width: `${pct}%` }} />
         </div>
       ) : null}
-      <span className="fine">repart le {resetsLabel(w.resets_at)}</span>
+      <span className="fine">{tr("resets on {0}", resetsLabel(w.resets_at))}</span>
     </div>
   );
 }
@@ -71,7 +72,7 @@ export function ProjectBudget({ client, p, toast, onSaved }: { client: NokkerCli
     try {
       if (body.daily === undefined && body.monthly === undefined) await client.deleteProjectBudget(p.id);
       else await client.putProjectBudget(p.id, body);
-      toast("Budget du projet enregistré.", "ok");
+      toast(tr("Project budget saved."), "ok");
       setEdit(null);
       onSaved();
       await load();
@@ -84,31 +85,31 @@ export function ProjectBudget({ client, p, toast, onSaved }: { client: NokkerCli
 
   return (
     <section className="machine-section project-budget">
-      <h3>Budget</h3>
+      <h3>{tr("Budget")}</h3>
       {!v.counted ? (
-        <p className="fine">Plafond rangé, pas encore décompté sur cette instance.</p>
+        <p className="fine">{tr("Cap stored, not yet counted on this instance.")}</p>
       ) : (
         <>
           {v.unconverted?.length ? (
             <p className="budget-warn" role="alert">
-              Dépenses dans une devise sans taux ({v.unconverted.join(", ")}) : le budget refuse les tours par prudence.
+              {tr("Spending in a currency without a rate ({0}): the budget refuses turns as a precaution.", v.unconverted.join(", "))}
             </p>
           ) : null}
-          {v.today ? <Bar label="Aujourd'hui" w={v.today} currency={currency} /> : null}
-          {v.month ? <Bar label="Ce mois" w={v.month} currency={currency} /> : null}
+          {v.today ? <Bar label={tr("Today")} w={v.today} currency={currency} /> : null}
+          {v.month ? <Bar label={tr("This month")} w={v.month} currency={currency} /> : null}
           {v.members?.length ? (
             <table className="budget-members">
               <thead>
                 <tr>
-                  <th scope="col">Membre</th>
-                  <th scope="col">Aujourd'hui</th>
-                  <th scope="col">Ce mois</th>
+                  <th scope="col">{tr("Member")}</th>
+                  <th scope="col">{tr("Today")}</th>
+                  <th scope="col">{tr("This month")}</th>
                 </tr>
               </thead>
               <tbody>
                 {v.members.map((m) => (
                   <tr key={m.account_id}>
-                    <td>{m.former ? "ancien membre" : m.you ? `${m.email ?? m.account_id} (toi)` : (m.email ?? m.account_id)}</td>
+                    <td>{m.former ? tr("former member") : m.you ? tr("{0} (you)", m.email ?? m.account_id) : (m.email ?? m.account_id)}</td>
                     <td>{money(m.today, currency)}</td>
                     <td>{money(m.month, currency)}</td>
                   </tr>
@@ -116,7 +117,7 @@ export function ProjectBudget({ client, p, toast, onSaved }: { client: NokkerCli
               </tbody>
             </table>
           ) : null}
-          {v.unpriced_models?.length ? <p className="fine">Modèles sans prix (comptés 0) : {v.unpriced_models.join(", ")}.</p> : null}
+          {v.unpriced_models?.length ? <p className="fine">{tr("Models without a price (counted as 0): {0}.", v.unpriced_models.join(", "))}</p> : null}
         </>
       )}
       {can ? (
@@ -129,12 +130,12 @@ export function ProjectBudget({ client, p, toast, onSaved }: { client: NokkerCli
             }}
           >
             <label>
-              Par jour <input inputMode="decimal" value={edit.daily} onChange={(e) => setEdit({ ...edit, daily: e.target.value })} placeholder="aucun" aria-label="Plafond par jour" />
+              {tr("Per day")} <input inputMode="decimal" value={edit.daily} onChange={(e) => setEdit({ ...edit, daily: e.target.value })} placeholder={tr("none")} aria-label={tr("Daily cap")} />
             </label>
             <label>
-              Par mois <input inputMode="decimal" value={edit.monthly} onChange={(e) => setEdit({ ...edit, monthly: e.target.value })} placeholder="aucun" aria-label="Plafond par mois" />
+              {tr("Per month")} <input inputMode="decimal" value={edit.monthly} onChange={(e) => setEdit({ ...edit, monthly: e.target.value })} placeholder={tr("none")} aria-label={tr("Monthly cap")} />
             </label>
-            <select aria-label="Devise" value={edit.currency} onChange={(e) => setEdit({ ...edit, currency: e.target.value as ProjectBudgetCap["currency"] })}>
+            <select aria-label={tr("Currency")} value={edit.currency} onChange={(e) => setEdit({ ...edit, currency: e.target.value as ProjectBudgetCap["currency"] })}>
               {(["EUR", "CHF", "USD"] as const).map((c) => (
                 <option key={c} value={c}>
                   {c}
@@ -142,16 +143,16 @@ export function ProjectBudget({ client, p, toast, onSaved }: { client: NokkerCli
               ))}
             </select>
             <button type="submit" className="btn btn-brass" disabled={busy}>
-              Enregistrer
+              {tr("Save")}
             </button>
             <button type="button" className="btn btn-ghost" onClick={() => setEdit(null)}>
-              Annuler
+              {tr("Cancel")}
             </button>
-            <p className="fine budget-form-note">Laisse les deux vides pour retirer le plafond. Un tour commencé sous le plafond va à son terme.</p>
+            <p className="fine budget-form-note">{tr("Leave both empty to remove the cap. A turn started under the cap runs to completion.")}</p>
           </form>
         ) : (
           <button type="button" className="btn btn-ghost" onClick={() => setEdit({ daily: v.budget?.daily?.toString() ?? "", monthly: v.budget?.monthly?.toString() ?? "", currency })}>
-            {v.budget ? "Modifier le plafond" : "Poser un plafond"}
+            {v.budget ? tr("Edit the cap") : tr("Set a cap")}
           </button>
         )
       ) : null}
@@ -161,15 +162,45 @@ export function ProjectBudget({ client, p, toast, onSaved }: { client: NokkerCli
 
 /** Déclencheur d'un agent en clair (pour un événement, la famille seulement). */
 export function triggerText(t: Record<string, unknown> | null | undefined): string {
-  if (!t) return "manuel";
-  if (t.kind === "schedule") return `planifié (${String(t.cron ?? "")}${t.tz ? `, ${String(t.tz)}` : ""})`;
-  if (t.kind === "once") return `une fois${t.at ? ` (${String(t.at)})` : ""}`;
-  if (t.kind === "event") return `sur événement ${String(t.event ?? t.family ?? "")}`;
-  return String(t.kind ?? "manuel");
+  if (!t) return tr("manual");
+  if (t.kind === "schedule") return tr("scheduled ({0})", `${String(t.cron ?? "")}${t.tz ? `, ${String(t.tz)}` : ""}`);
+  if (t.kind === "once") return t.at ? tr("once ({0})", String(t.at)) : tr("once");
+  if (t.kind === "event") return tr("on event {0}", String(t.event ?? t.family ?? ""));
+  return String(t.kind ?? tr("manual"));
 }
 
-const STATUS: Record<string, string> = { armed: "armé", paused: "au repos", running: "en marche", failed: "en échec" };
-const RUN: Record<string, string> = { done: "réussi", failed: "en échec", running: "en cours", queued: "en attente", cancelled: "annulé", skipped: "écarté" };
+function statusText(s: string): string {
+  switch (s) {
+    case "armed":
+      return tr("armed");
+    case "paused":
+      return tr("idle");
+    case "running":
+      return tr("running");
+    case "failed":
+      return tr("failed");
+    default:
+      return s;
+  }
+}
+function runText(s: string): string {
+  switch (s) {
+    case "done":
+      return tr("succeeded");
+    case "failed":
+      return tr("failed");
+    case "running":
+      return tr("in progress");
+    case "queued":
+      return tr("queued");
+    case "cancelled":
+      return tr("cancelled");
+    case "skipped":
+      return tr("skipped");
+    default:
+      return s;
+  }
+}
 
 export function ProjectAgents({ client, p, toast }: { client: NokkerClient; p: Project; toast: Toast }): React.ReactElement {
   const [items, setItems] = useState<ProjectAgentEntry[] | null>(null);
@@ -191,7 +222,7 @@ export function ProjectAgents({ client, p, toast }: { client: NokkerClient; p: P
     setConfirm(null);
     try {
       await client.disarmProjectAgent(p.id, a.id);
-      toast(a.mine ? `« ${a.name} » désarmé.` : `« ${a.name} » désarmé ; ${a.owner.email} est prévenu et pourra le réarmer.`, "ok");
+      toast(a.mine ? tr("“{0}” disarmed.", a.name) : tr("“{0}” disarmed; {1} has been notified and can re-arm it.", a.name, a.owner.email), "ok");
       await load();
     } catch (e) {
       toast(teamError(e), "error");
@@ -199,59 +230,67 @@ export function ProjectAgents({ client, p, toast }: { client: NokkerClient; p: P
   };
   return (
     <section className="machine-section">
-      <h3>Agents du projet</h3>
+      <h3>{tr("Project agents")}</h3>
       {err ? <p className="error">{err}</p> : null}
       {items?.length ? (
         <ul className="secret-list project-agents">
           {items.map((a) => (
             <li key={a.id}>
               <div>
-                <strong>{a.name}</strong> <span className="chip">{STATUS[a.status] ?? a.status}</span>
+                <strong>{a.name}</strong> <span className="chip">{statusText(a.status)}</span>
                 <p className="fine">
-                  {a.mine ? "à toi (dans Crew)" : `à ${a.owner.email}`} · {triggerText(a.trigger as Record<string, unknown> | null)}
-                  {a.last_run ? ` · dernier passage ${RUN[a.last_run.status] ?? a.last_run.status}${a.last_run.ended_at ? ` le ${fmtWhen(a.last_run.ended_at)}` : ""}` : ""}
+                  {a.mine ? tr("yours (in Crew)") : tr("belongs to {0}", a.owner.email)} · {triggerText(a.trigger as Record<string, unknown> | null)}
+                  {a.last_run ? ` · ${a.last_run.ended_at ? tr("last run {0} on {1}", runText(a.last_run.status), fmtWhen(a.last_run.ended_at)) : tr("last run {0}", runText(a.last_run.status))}` : ""}
                 </p>
               </div>
               {a.can_disarm ? (
                 confirm === a.id ? (
                   <span className="team-row-actions">
                     <button type="button" className="btn btn-sm btn-danger" onClick={() => void disarm(a)}>
-                      Oui, désarmer
+                      {tr("Yes, disarm")}
                     </button>
                     <button type="button" className="btn btn-sm btn-ghost" onClick={() => setConfirm(null)}>
-                      Annuler
+                      {tr("Cancel")}
                     </button>
                   </span>
                 ) : (
                   <button type="button" className="btn btn-sm btn-ghost" onClick={() => setConfirm(a.id)}>
-                    Désarmer
+                    {tr("Disarm")}
                   </button>
                 )
               ) : null}
-              {confirm === a.id && !a.mine ? <p className="fine project-agent-note">{a.owner.email} sera prévenu et pourra le réarmer.</p> : null}
+              {confirm === a.id && !a.mine ? <p className="fine project-agent-note">{tr("{0} will be notified and can re-arm it.", a.owner.email)}</p> : null}
             </li>
           ))}
         </ul>
       ) : items ? (
-        <p className="fine">Aucun agent n'est rattaché à ce projet.</p>
+        <p className="fine">{tr("No agent is attached to this project.")}</p>
       ) : null}
     </section>
   );
 }
 
-const AUDIT_LABEL: Record<string, string> = {
-  budget_set: "plafond posé",
-  budget_removed: "plafond retiré",
-  note_restored: "version de note remise en place",
-  agent_disarmed: "agent d'un membre désarmé",
-};
+function auditLabel(event: string): string {
+  switch (event) {
+    case "budget_set":
+      return tr("cap set");
+    case "budget_removed":
+      return tr("cap removed");
+    case "note_restored":
+      return tr("note version restored");
+    case "agent_disarmed":
+      return tr("member's agent disarmed");
+    default:
+      return event;
+  }
+}
 
 export function auditLine(e: ProjectAuditEvent): string {
   const d = e.detail ?? {};
-  const bits: string[] = [AUDIT_LABEL[e.event] ?? e.event];
-  if (e.event === "budget_set") bits.push([d.daily !== undefined ? `${d.daily}/jour` : "", d.monthly !== undefined ? `${d.monthly}/mois` : "", String(d.currency ?? "")].filter(Boolean).join(" "));
-  if (typeof d.name === "string") bits.push(`« ${d.name} »`);
-  if (typeof d.owner_account === "string") bits.push(`de ${d.owner_account}`);
+  const bits: string[] = [auditLabel(e.event)];
+  if (e.event === "budget_set") bits.push([d.daily !== undefined ? tr("{0}/day", String(d.daily)) : "", d.monthly !== undefined ? tr("{0}/month", String(d.monthly)) : "", String(d.currency ?? "")].filter(Boolean).join(" "));
+  if (typeof d.name === "string") bits.push(tr("“{0}”", d.name));
+  if (typeof d.owner_account === "string") bits.push(tr("from {0}", d.owner_account));
   return bits.join(" · ");
 }
 
@@ -271,15 +310,15 @@ export function ProjectAudit({ client, p }: { client: NokkerClient; p: Project }
         }}
       >
         <summary>
-          <strong>Journal du projet</strong>
+          <strong>{tr("Project log")}</strong>
         </summary>
         {err ? <p className="error">{err}</p> : null}
-        {events?.length === 0 ? <p className="fine">Rien pour l'instant.</p> : null}
+        {events?.length === 0 ? <p className="fine">{tr("Nothing yet.")}</p> : null}
         {events?.length ? (
           <ul className="secret-list">
             {events.map((e) => (
               <li key={e.id}>
-                <span className="fine">{e.at ? new Date(e.at).toLocaleString("fr-CH") : "—"}</span> <span>{auditLine(e)}</span> <span className="fine">par {e.actor_account}</span>
+                <span className="fine">{e.at ? new Date(e.at).toLocaleString(shellLang() === "fr" ? "fr-CH" : "en-GB") : "—"}</span> <span>{auditLine(e)}</span> <span className="fine">{tr("by {0}", e.actor_account)}</span>
               </li>
             ))}
           </ul>

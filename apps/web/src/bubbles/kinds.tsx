@@ -9,40 +9,92 @@ import React, { useEffect, useRef, useState } from "react";
 import { NokkerApiError, type Approval, type Bubble, type BubbleBase } from "@nokker-apps/sdk";
 import { useStore } from "../context.js";
 import { Icon } from "../icons.js";
+import { shellLang, tr } from "../i18n/index.js";
+import { approvalStatusLabel } from "../ops/model.js";
 import { PublishPanel } from "../publish/PublishPanel.js";
 import { PackAgents } from "../packs/PackAgents.js";
 
 type B<K extends Bubble["kind"]> = BubbleBase<K>;
 
+/** Locale des dates et nombres, d'après la langue de l'interface. */
+const locale = (): string => (shellLang() === "fr" ? "fr-CH" : "en-GB");
+
+/** Un texte traduit qui entoure un nœud JSX : on traduit avec un repère, puis on coupe dessus. */
+const SLOT = "\u0001";
+function around(text: string, node: React.ReactNode): React.ReactElement {
+  const [before, after] = text.split(SLOT);
+  return (
+    <>
+      {before}
+      {node}
+      {after ?? ""}
+    </>
+  );
+}
+
+/** Libellé du type de bulle (le thème de la marque porte le français ; ici, la langue de l'interface). */
+export function bubbleLabel(kind: string): string {
+  switch (kind) {
+    case "monitor":
+      return tr("Monitoring");
+    case "search":
+      return tr("Web search");
+    case "notify":
+      return tr("Notification");
+    case "timer":
+      return tr("Timer");
+    case "script":
+      return tr("Script");
+    case "media":
+      return tr("Preview");
+    case "artifact":
+      return tr("Page");
+    case "agent_draft":
+      return tr("New agent");
+    case "approval":
+      return tr("Approval");
+    case "handoff":
+      return tr("Handoff");
+    case "plan_split":
+      return tr("Split");
+    case "brief":
+      return tr("Brief");
+    case "pack_agents":
+      return tr("Pack agents");
+    default:
+      return tr("Bubble");
+  }
+}
+
 export function statusLabel(b: Bubble, now: number): string {
   switch (b.kind) {
     case "monitor":
-      return b.status === "working" ? "mesure" : b.status === "failed" ? "échec" : "vivante";
+      return b.status === "working" ? tr("measuring") : b.status === "failed" ? tr("failed") : tr("live");
     case "search":
-      return b.status === "working" ? "cherche" : `${b.state.results?.length ?? 0} sources`;
+      return b.status === "working" ? tr("searching") : tr("{0} sources", b.state.results?.length ?? 0);
     case "timer": {
-      if (b.status === "done") return "terminé";
+      if (b.status === "done") return tr("finished");
       const left = Math.max(0, Date.parse(b.state.ends_at) - now);
       return fmtDuration(left);
     }
     case "script":
-      return b.status === "working" ? "tourne" : b.state.exit_code === 0 ? "exit 0" : b.state.exit_code != null ? `exit ${b.state.exit_code}` : b.status;
+      return b.status === "working" ? tr("running") : b.state.exit_code === 0 ? "exit 0" : b.state.exit_code != null ? `exit ${b.state.exit_code}` : b.status;
     case "media":
-      return b.state.mime?.split("/")[0] ?? "aperçu";
+      return b.state.mime?.split("/")[0] ?? tr("preview");
     case "artifact":
-      return b.status === "working" ? "écrit" : `v${b.state.version ?? 1}`;
+      return b.status === "working" ? tr("writing") : `v${b.state.version ?? 1}`;
     case "notify":
       return b.state.from_title;
     case "agent_draft":
-      return b.status === "working" ? "Nina remplit" : "prête";
+      return b.status === "working" ? tr("Nina is filling it in") : tr("ready");
     case "approval":
-      return b.status === "working" ? "en attente" : b.status === "done" ? "approuvée" : b.status === "failed" ? "refusée" : b.status;
+      return b.status === "working" ? tr("pending") : b.status === "done" ? tr("approved") : b.status === "failed" ? tr("rejected") : b.status;
     case "handoff":
-      return HANDOFF_LABEL[b.state.state] ?? b.state.state;
+      return handoffLabel(b.state.state);
     case "plan_split":
-      return SPLIT_LABEL[b.state.state] ?? b.state.state;
+      return splitLabel(b.state.state);
     case "brief":
-      return b.state.date ? new Date(b.state.date).toLocaleDateString("fr-CH", { weekday: "short", day: "numeric", month: "short" }) : "brief";
+      return b.state.date ? new Date(b.state.date).toLocaleDateString(locale(), { weekday: "short", day: "numeric", month: "short" }) : tr("brief");
     default:
       return (b as { status: string }).status;
   }
@@ -98,11 +150,11 @@ function Monitor({ b, readOnly }: { b: B<"monitor">; readOnly: boolean }) {
       <code className="mono cyan">{s.target} · {s.metric}</code>
       <div className="metric">
         <span className={`metric-value ${hot ? "hot" : ""}`}>
-          {s.value.toLocaleString("fr-CH", { maximumFractionDigits: 1 })}
+          {s.value.toLocaleString(locale(), { maximumFractionDigits: 1 })}
           <small>{s.unit}</small>
         </span>
         {series.length > 1 ? (
-          <svg className="spark" viewBox="0 0 100 32" preserveAspectRatio="none" role="img" aria-label={`Évolution : de ${vals[0]} à ${vals.at(-1)} ${s.unit}`}>
+          <svg className="spark" viewBox="0 0 100 32" preserveAspectRatio="none" role="img" aria-label={tr("Trend: from {0} to {1} {2}", vals[0]!, vals.at(-1)!, s.unit)}>
             <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
           </svg>
         ) : null}
@@ -137,7 +189,7 @@ function Search({ b }: { b: B<"search"> }) {
   const s = b.state;
   return (
     <div className="bubble-body">
-      <span className="query">« {s.query} »</span>
+      <span className="query">{tr("“{0}”", s.query)}</span>
       <div className="sources">
         {(s.results ?? []).map((r) => {
           const p = r.preview;
@@ -163,7 +215,8 @@ function Search({ b }: { b: B<"search"> }) {
         })}
       </div>
       <span className="fine">
-        {s.took_ms ? `${s.took_ms} ms · ${s.engines.join(", ")} · ` : ""}Les sources se montrent, elles ne se citent pas.
+        {s.took_ms ? `${s.took_ms} ms · ${s.engines.join(", ")} · ` : ""}
+        {tr("Sources are shown, not quoted.")}
       </span>
     </div>
   );
@@ -185,7 +238,7 @@ function Timer({ b }: { b: B<"timer"> }) {
       <div className="bar">
         <div className="bar-fill" style={{ width: `${pct}%` }} />
       </div>
-      <span className="fine">Fin : {new Date(end).toLocaleTimeString("fr-CH", { hour: "2-digit", minute: "2-digit" })}</span>
+      <span className="fine">{tr("Ends: {0}", new Date(end).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" }))}</span>
     </div>
   );
 }
@@ -198,10 +251,10 @@ function Script({ b }: { b: B<"script"> }) {
         {s.host ? `${s.host} $ ` : "$ "}
         {s.command}
       </code>
-      <pre className="log" aria-label="Fin du journal">
+      <pre className="log" aria-label={tr("End of log")}>
         {(s.log_tail ?? []).slice(-8).join("\n") || " "}
       </pre>
-      {s.exit_code != null ? <span className={`chip ${s.exit_code === 0 ? "ok" : "ko"}`}>code de sortie {s.exit_code}</span> : null}
+      {s.exit_code != null ? <span className={`chip ${s.exit_code === 0 ? "ok" : "ko"}`}>{tr("exit code {0}", s.exit_code)}</span> : null}
     </div>
   );
 }
@@ -225,7 +278,7 @@ function Media({ b }: { b: B<"media"> }) {
   if (isPage) {
     return (
       <div className="bubble-body">
-        <a className="link-card" href={s.url} target="_blank" rel="noopener noreferrer" aria-label={`Ouvrir ${p?.title ?? b.title}`}>
+        <a className="link-card" href={s.url} target="_blank" rel="noopener noreferrer" aria-label={tr("Open {0}", p?.title ?? b.title)}>
           {image ? (
             <img src={image} alt="" className="link-card-img" />
           ) : b.status === "working" ? (
@@ -249,7 +302,7 @@ function Media({ b }: { b: B<"media"> }) {
   }
   return (
     <div className="bubble-body">
-      <a className="media" href={s.url} target="_blank" rel="noopener noreferrer" aria-label={`Ouvrir ${b.title}`}>
+      <a className="media" href={s.url} target="_blank" rel="noopener noreferrer" aria-label={tr("Open {0}", b.title)}>
         {image ? <img src={image} alt="" className="media-img" /> : <div className="skel media-img" />}
         <span className="media-play" aria-hidden="true">
           <Icon name="play" size={22} />
@@ -357,31 +410,31 @@ function Artifact({ b }: { b: B<"artifact"> }) {
             loading="lazy"
           />
         ) : failed ? (
-          <p className="fine artifact-fail">L'aperçu n'a pas pu se charger — ouvre la page dans un onglet.</p>
+          <p className="fine artifact-fail">{tr("The preview could not load — open the page in a tab.")}</p>
         ) : (
           <div className="skel artifact-iframe" />
         )}
         {live ? (
           // X22 : le texte qui s'écrit, en vue code — jamais exécuté (pas de srcdoc), l'iframe reste montée dessous.
-          <pre className="artifact-code" aria-label={`Écriture en cours de ${s.path}`}>
+          <pre className="artifact-code" aria-label={tr("Writing {0}", s.path)}>
             {liveTail(live.text, 40, 200).join("\n")}
             {live.truncated ? "\n…" : ""}
           </pre>
         ) : null}
-        {b.status === "working" ? <span className="artifact-writing">écriture…</span> : null}
+        {b.status === "working" ? <span className="artifact-writing">{tr("writing…")}</span> : null}
       </div>
       <div className="artifact-meta fine">
         <span>
           {s.path} · v{s.version ?? 1}
         </span>
-        <span className={`artifact-vis ${s.public ? "is-public" : ""}`}>{s.public ? "publique" : "privée"}</span>
+        <span className={`artifact-vis ${s.public ? "is-public" : ""}`}>{s.public ? tr("public") : tr("private")}</span>
       </div>
       <div className="bubble-actions">
         <button type="button" className="btn" disabled={!pageId || opening} onClick={() => void open()}>
-          <Icon name="goto" /> Ouvrir
+          <Icon name="goto" /> {tr("Open")}
         </button>
         <button type="button" className="btn" disabled={!pageId || busy !== null} onClick={() => void download()}>
-          Télécharger
+          {tr("Download")}
         </button>
         {b.actions.map((a) => (
           <button key={a.id} type="button" className={`btn ${a.primary ? "btn-brass" : ""}`} onClick={() => void store.runAction(b, a.id)}>
@@ -412,7 +465,7 @@ function Notify({ b }: { b: B<"notify"> }) {
           </button>
         ))}
         <button type="button" className="btn btn-ghost" onClick={() => store.gotoFromNotify(b)}>
-          <Icon name="goto" /> Aller à la session
+          <Icon name="goto" /> {tr("Go to the session")}
         </button>
       </div>
     </div>
@@ -422,10 +475,10 @@ function Notify({ b }: { b: B<"notify"> }) {
 function AgentDraft({ b, readOnly }: { b: B<"agent_draft">; readOnly: boolean }) {
   const s = b.state;
   const rows: [string, React.ReactNode, boolean][] = [
-    ["Nom", <span className="agent-name">{s.name}</span>, !!s.name],
-    ["Rôle", s.role, !!s.role],
-    ["Modèle", <span className="mono cyan">{s.model}</span>, !!s.model],
-    ["Outils", <span className="tools">{s.tools.map((t) => <span key={t} className="chip">{t}</span>)}</span>, s.tools.length > 0],
+    [tr("Name"), <span className="agent-name">{s.name}</span>, !!s.name],
+    [tr("Role"), s.role, !!s.role],
+    [tr("Model"), <span className="mono cyan">{s.model}</span>, !!s.model],
+    [tr("Tools"), <span className="tools">{s.tools.map((t) => <span key={t} className="chip">{t}</span>)}</span>, s.tools.length > 0],
   ];
   return (
     <div className="bubble-body">
@@ -437,10 +490,10 @@ function AgentDraft({ b, readOnly }: { b: B<"agent_draft">; readOnly: boolean })
           </React.Fragment>
         ))}
       </dl>
-      <div className="bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(s.fill * 100)} aria-label="Remplissage de la carte">
+      <div className="bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(s.fill * 100)} aria-label={tr("Card completion")}>
         <div className="bar-fill" style={{ width: `${s.fill * 100}%` }} />
       </div>
-      <span className="fine">À l'activation, la carte se réduit et rejoint le deck Crew.</span>
+      <span className="fine">{tr("On activation, the card shrinks and joins the Crew deck.")}</span>
       <Actions b={b} readOnly={readOnly} />
     </div>
   );
@@ -467,7 +520,7 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
       const f = l.find((y) => y.id === approvalId)?.forwarded;
       return f === undefined ? x : { ...x, forwarded: f };
     };
-    read().then((x) => live && setA(x), (e) => live && setErr(e instanceof NokkerApiError && e.status === 404 ? "Carte introuvable ou réservée à un autre compte." : String(e)));
+    read().then((x) => live && setA(x), (e) => live && setErr(e instanceof NokkerApiError && e.status === 404 ? tr("Card not found or reserved for another account.") : String(e)));
     return () => {
       live = false;
     };
@@ -508,10 +561,10 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
     <div className="bubble-body">
       <p className="notify-text">{a.reason}</p>
       <dl className="kv">
-        <dt>Outil</dt>
+        <dt>{tr("Tool")}</dt>
         <dd className="mono">{a.tool_name}</dd>
-        <dt>Effet</dt>
-        <dd>{a.effect} · niveau {a.strength}</dd>
+        <dt>{tr("Effect")}</dt>
+        <dd>{tr("{0} · level {1}", a.effect ?? "", a.strength)}</dd>
       </dl>
       {a.advice ? <p className="fine">{a.advice}</p> : null}
       {pending ? (
@@ -519,23 +572,23 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
           {canSign ? (
             <div className="bubble-actions">
               <button type="button" className="btn btn-brass" disabled={busy} onClick={() => void go("approve", false)}>
-                <Icon name="shield" /> Approuver (appareil)
+                <Icon name="shield" /> {tr("Approve (device)")}
               </button>
               <button type="button" className="btn" disabled={busy} onClick={() => void go("reject", false)}>
-                Refuser
+                {tr("Reject")}
               </button>
             </div>
           ) : null}
           {local && a.strength !== "strong" ? (
             <div className="bubble-actions">
               <button type="button" className="btn btn-brass" disabled={busy} onClick={() => void guardLocal("approve", "once")}>
-                Approuver une fois
+                {tr("Approve once")}
               </button>
               <button type="button" className="btn" disabled={busy} onClick={() => void guardLocal("approve", "session")}>
-                Pour la session
+                {tr("For the session")}
               </button>
               <button type="button" className="btn" disabled={busy} onClick={() => void guardLocal("reject", "once")}>
-                Refuser
+                {tr("Reject")}
               </button>
             </div>
           ) : local ? (
@@ -543,9 +596,9 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
           ) : null}
           {viaGateway && gwHost ? (
             <p className="fine">
-              Approbation forte : confirme-la depuis un appareil enrôlé.{" "}
+              {tr("Strong approval: confirm it from an enrolled device.")}{" "}
               <a href={remoteApprovalUrl(gwHost, a.id)} target="_blank" rel="noopener noreferrer">
-                Ouvrir sur app.nokker.ai
+                {tr("Open on app.nokker.ai")}
               </a>
             </p>
           ) : null}
@@ -557,41 +610,80 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
                 void go("approve", true);
               }}
             >
-              <label htmlFor={`totp-${uid}`}>Code TOTP</label>
+              <label htmlFor={`totp-${uid}`}>{tr("TOTP code")}</label>
               <input id={`totp-${uid}`} inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={totp} onChange={(e) => setTotp(e.target.value.replace(/\D/g, ""))} autoComplete="one-time-code" />
               <button type="submit" className="btn btn-brass" disabled={busy || totp.length !== 6}>
-                Approuver
+                {tr("Approve")}
               </button>
               <button type="button" className="btn" disabled={busy || totp.length !== 6} onClick={() => void go("reject", true)}>
-                Refuser
+                {tr("Reject")}
               </button>
             </form>
           ) : null}
         </>
       ) : (
-        <span className={`chip ${a.status === "executed" || a.status === "approved" ? "ok" : "ko"}`}>{a.status}</span>
+        <span className={`chip ${a.status === "executed" || a.status === "approved" ? "ok" : "ko"}`}>{approvalStatusLabel(a.status)}</span>
       )}
       {err ? <span className="error" role="alert">{err}</span> : null}
     </div>
   );
 }
 
-const HANDOFF_LABEL: Record<string, string> = {
-  proposed: "proposé",
-  waiting: "attend la machine",
-  accepted: "accepté",
-  running: "en cours",
-  awaiting_approval: "attend ta décision",
-  done: "terminé",
-  refused: "refusé",
-  expired: "expiré",
-  failed: "échec",
-};
-const NEED_LABEL: Record<string, string> = { repo: "dépôt", host: "hôte", connector: "connecteur", mcp: "serveur MCP" };
+function handoffLabel(state: string): string {
+  switch (state) {
+    case "proposed":
+      return tr("proposed");
+    case "waiting":
+      return tr("waiting for the machine");
+    case "accepted":
+      return tr("accepted");
+    case "running":
+      return tr("in progress");
+    case "awaiting_approval":
+      return tr("awaiting your decision");
+    case "done":
+      return tr("finished");
+    case "refused":
+      return tr("refused");
+    case "expired":
+      return tr("request expired");
+    case "failed":
+      return tr("failed");
+    default:
+      return state;
+  }
+}
+function needLabel(kind: string): string {
+  switch (kind) {
+    case "repo":
+      return tr("repository");
+    case "host":
+      return tr("host");
+    case "connector":
+      return tr("connector");
+    case "mcp":
+      return tr("MCP server");
+    default:
+      return kind;
+  }
+}
 
 /** X21 (LOKKAL §7.16) : la session web propose de passer le relais à la machine qui a la ressource. L'utilisateur seul
  * décide ; la machine travaille avec SES permissions ; seule sa réponse finale revient ici. Actions selon l'état. */
-const SPLIT_LABEL: Record<string, string> = { proposed: "à décider", accepted: "cartes créées", refused: "refusé", stale: "carte disparue" };
+function splitLabel(state: string): string {
+  switch (state) {
+    case "proposed":
+      return tr("to decide");
+    case "accepted":
+      return tr("cards created");
+    case "refused":
+      return tr("refused");
+    case "stale":
+      return tr("card gone");
+    default:
+      return state;
+  }
+}
 
 /** X18 : découpage proposé par le modèle. Seul l'humain crée les cartes (actions accept/refuse, en direct). */
 function PlanSplit({ b, readOnly }: { b: B<"plan_split">; readOnly: boolean }) {
@@ -599,7 +691,7 @@ function PlanSplit({ b, readOnly }: { b: B<"plan_split">; readOnly: boolean }) {
   return (
     <div className="bubble-body plan-split">
       <p className="fine">
-        Carte « <strong>{s.card_title}</strong> » en {s.children.length} :
+        {around(tr("Card “{0}” split into {1}:", SLOT, s.children.length), <strong>{s.card_title}</strong>)}
       </p>
       <ol className="plan-split-list">
         {s.children.map((c, i) => (
@@ -610,8 +702,8 @@ function PlanSplit({ b, readOnly }: { b: B<"plan_split">; readOnly: boolean }) {
           </li>
         ))}
       </ol>
-      {s.reason ? <p className="fine">Pourquoi : {s.reason}</p> : null}
-      {s.state === "proposed" ? <Actions b={b} readOnly={readOnly} /> : <p className="fine">{SPLIT_LABEL[s.state] ?? s.state}.</p>}
+      {s.reason ? <p className="fine">{tr("Why: {0}", s.reason)}</p> : null}
+      {s.state === "proposed" ? <Actions b={b} readOnly={readOnly} /> : <p className="fine">{splitLabel(s.state)}.</p>}
     </div>
   );
 }
@@ -623,33 +715,35 @@ function Handoff({ b }: { b: B<"handoff"> }) {
     s.state === "proposed"
       ? b.actions
       : s.state === "waiting"
-        ? b.actions.filter((a) => a.id === "refuse").map((a) => ({ ...a, label: "Annuler", primary: false }))
+        ? b.actions.filter((a) => a.id === "refuse").map((a) => ({ ...a, label: tr("Cancel"), primary: false }))
         : [];
   return (
     <div className="bubble-body handoff">
       <p className="handoff-task">{s.task}</p>
       <dl className="kv">
-        <dt>Besoin</dt>
+        <dt>{tr("Need")}</dt>
         <dd>
-          {NEED_LABEL[s.need.kind] ?? s.need.kind} <code>{s.need.name}</code>
+          {needLabel(s.need.kind)} <code>{s.need.name}</code>
         </dd>
-        <dt>Machine</dt>
+        <dt>{tr("Machine")}</dt>
         <dd>
-          {s.machine_name} <span className={`chip ${s.online ? "ok" : ""}`}>{s.online ? "en ligne" : "hors ligne"}</span>
+          {s.machine_name} <span className={`chip ${s.online ? "ok" : ""}`}>{s.online ? tr("online") : tr("offline")}</span>
         </dd>
       </dl>
       {!s.online && (s.state === "proposed" || s.state === "waiting") ? (
-        <p className="fine">La machine est éteinte : la demande attendra qu'elle revienne (24 h au plus).</p>
+        <p className="fine">{tr("The machine is off: the request will wait until it is back (24 h at most).")}</p>
       ) : null}
-      {s.state === "proposed" ? <p className="fine">Elle travaillera avec ses propres permissions ; seule sa réponse finale reviendra ici.</p> : null}
+      {s.state === "proposed" ? <p className="fine">{tr("It will work with its own permissions; only its final answer will come back here.")}</p> : null}
       {s.pending_approvals > 0 ? (
         <p className="fine">
-          {s.pending_approvals} carte{s.pending_approvals > 1 ? "s" : ""} en attente sur la machine : elles arrivent sur ton téléphone.
+          {s.pending_approvals === 1
+            ? tr("1 card is waiting on the machine: it will arrive on your phone.")
+            : tr("{0} cards are waiting on the machine: they will arrive on your phone.", s.pending_approvals)}
         </p>
       ) : null}
       {s.reply ? (
         <div className="handoff-reply">
-          <span className="eyebrow">Réponse de « {s.machine_name} »</span>
+          <span className="eyebrow">{tr("Reply from “{0}”", s.machine_name)}</span>
           <Markdown text={s.reply} />
         </div>
       ) : null}
@@ -700,13 +794,13 @@ export function BubbleBody({ b, readOnly }: { b: Bubble; readOnly: boolean }): R
     case "brief":
       return (
         <div className="bubble-body brief">
-          <Markdown text={b.state.text || "(brief vide)"} />
+          <Markdown text={b.state.text || tr("(empty brief)")} />
         </div>
       );
     default:
       return (
         <div className="bubble-body">
-          <p className="fine">Ce type de bulle n'est pas géré par cette version de l'app.</p>
+          <p className="fine">{tr("This bubble type is not handled by this version of the app.")}</p>
         </div>
       );
   }

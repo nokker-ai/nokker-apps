@@ -6,7 +6,7 @@ Mode 1, pas à pas : pty_drive.py '<json>'   avec {"argv": [...], "cwd": "...", 
 
 Mode 2, scénario (mesure) : pty_drive.py --task "<texte>" --server URL --cwd DIR [--max-decisions N] [--decide 1|2]
   [--config-dir DIR | --token-file F] [--idle 12] [--timeout 300] [--cli "cmd args"]
-  Lance la CLI, attend « Session de code sur », envoie la tâche, puis détecte les cartes UNIQUEMENT par
+  Lance la CLI, attend « Code session on », envoie la tâche, puis détecte les cartes UNIQUEMENT par
   GET /v1/local/approvals (nouvel id = UNE décision, jamais deux pour le même id), attend le rendu de la carte sur le DELTA
   d'écran depuis la détection (jamais sur le tampon cumulé), envoie la touche --decide, borne le nombre de décisions et
   s'arrête quand plus aucune carte n'est en attente et que l'écran n'a plus reçu de texte depuis --idle secondes.
@@ -77,9 +77,9 @@ def scenario(argv):
     thread_id = None
     try:
         t0 = time.time()
-        while "Session de code sur" not in strip_ansi(st["out"]) and time.time() - t0 < 40 and st["alive"]:
+        while "Code session on" not in strip_ansi(st["out"]) and time.time() - t0 < 40 and st["alive"]:
             pump(0.2)  # marqueur UNIQUE de démarrage : lu une seule fois
-        if "Session de code sur" not in strip_ansi(st["out"]):
+        if "Code session on" not in strip_ansi(st["out"]):
             raise RuntimeError("la CLI n'a pas ouvert de session de code en 40 s")
         sessions = api(a.server, token, "/v1/local/sessions").get("sessions", [])
         mine = [s for s in sessions if s.get("cwd") == a.cwd]
@@ -112,7 +112,7 @@ def scenario(argv):
                 t1 = time.time()
                 while time.time() - t1 < 10 and st["alive"]:
                     pump(0.2)
-                    if "Action à approuver" in strip_ansi(st["out"][pos:]):
+                    if "Action to approve" in strip_ansi(st["out"][pos:]):
                         seen = True
                         break
                 if not seen:

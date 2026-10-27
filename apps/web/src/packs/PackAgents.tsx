@@ -2,6 +2,7 @@
  * choisit pas — désarmer, supprimer ou garder (décidé en direct par le noyau ; un agent supprimé entre-temps est sauté). */
 import React, { useState } from "react";
 import type { BubbleBase } from "@nokker-apps/sdk";
+import { tr } from "../i18n/index.js";
 import "./packs.css";
 
 export function PackAgents({ b, onAction }: { b: BubbleBase<"pack_agents">; onAction: (id: string) => void }): React.ReactElement {
@@ -9,11 +10,11 @@ export function PackAgents({ b, onAction }: { b: BubbleBase<"pack_agents">; onAc
   const [confirmDelete, setConfirmDelete] = useState(false);
   return (
     <div className="bubble-body pack-agents">
-      <p>{s.note || `Le pack « ${s.pack} » est retiré ; ces agents en viennent.`}</p>
+      <p>{s.note || tr("The “{0}” pack is removed; these agents came from it.", s.pack)}</p>
       <ul className="pack-agents-list">
         {(s.agents ?? []).map((a) => (
           <li key={a.id}>
-            <strong>{a.name}</strong> <span className="fine">{a.armed ? "armé" : a.status === "running" ? "en marche" : "au repos"}</span>
+            <strong>{a.name}</strong> <span className="fine">{a.armed ? tr("armed") : a.status === "running" ? tr("running") : tr("idle")}</span>
           </li>
         ))}
       </ul>
@@ -21,10 +22,10 @@ export function PackAgents({ b, onAction }: { b: BubbleBase<"pack_agents">; onAc
         {confirmDelete ? (
           <>
             <button type="button" className="btn btn-danger" onClick={() => onAction("delete")}>
-              Oui, supprimer {s.agents?.length === 1 ? "l'agent" : "les agents"}
+              {s.agents?.length === 1 ? tr("Yes, delete the agent") : tr("Yes, delete the agents")}
             </button>
             <button type="button" className="btn btn-ghost" onClick={() => setConfirmDelete(false)}>
-              Annuler
+              {tr("Cancel")}
             </button>
           </>
         ) : (

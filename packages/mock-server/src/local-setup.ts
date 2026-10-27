@@ -89,7 +89,7 @@ export function httpsHost(baseUrl: string): string | null {
   }
 }
 
-const CATALOG = ["modele-grand", "modele-rapide"];
+const CATALOG = ["large-model", "fast-model"];
 const OLLAMA_MODELS = ["llama3.1:8b", "qwen2.5:7b"];
 
 const HTTP_URL = /^https?:\/\/([^/?#\s]+)/;

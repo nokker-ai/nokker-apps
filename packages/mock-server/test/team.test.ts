@@ -32,11 +32,11 @@ describe("projets d'équipe (X17)", () => {
   it("démo : deux projets, une invitation en attente, rôles par projet", async () => {
     const l = await c.listProjects();
     expect(l.projects.map((p) => [p.name, p.role])).toEqual([
-      ["Site vitrine", "owner"],
-      ["Recherche", "viewer"],
+      ["Marketing site", "owner"],
+      ["Research", "viewer"],
     ]);
     expect(l.invitations).toBe(1);
-    expect((await c.listMyInvitations()).invitations[0]).toMatchObject({ project: { name: "Compta partagée" }, role: "member" });
+    expect((await c.listMyInvitations()).invitations[0]).toMatchObject({ project: { name: "Shared accounting" }, role: "member" });
   });
 
   it("projet inconnu : 404, comme un non-membre", async () => {
@@ -45,7 +45,7 @@ describe("projets d'équipe (X17)", () => {
   });
 
   it("lecture seule : un viewer lit tout et n'écrit rien (403 forbidden)", async () => {
-    const r = await byName("Recherche");
+    const r = await byName("Research");
     expect((await c.listProjectMembers(r.id)).members.length).toBeGreaterThan(1);
     expect(await fail(c.putProjectRules(r.id, { ask: ["terminal"], deny: [] }))).toEqual({ status: 403, code: "forbidden" });
     expect(await fail(c.putProjectSecret(r.id, "CLE"))).toEqual({ status: 403, code: "forbidden" });
@@ -53,14 +53,14 @@ describe("projets d'équipe (X17)", () => {
   });
 
   it("règles : restreindre seulement (allow ou mode auto → 400 rules_widen)", async () => {
-    const s = await byName("Site vitrine");
+    const s = await byName("Marketing site");
     expect(await fail(c.putProjectRules(s.id, { ask: [], deny: [], allow: [] } as never))).toEqual({ status: 400, code: "rules_widen" });
     expect(await fail(c.putProjectRules(s.id, { mode: "auto", ask: [], deny: [] } as never))).toEqual({ status: 400, code: "rules_widen" });
     expect((await c.putProjectRules(s.id, { mode: "plan", ask: ["terminal(git push*)"], deny: [] })).rules).toMatchObject({ mode: "plan" });
   });
 
   it("secrets : des noms, jamais une valeur", async () => {
-    const s = await byName("Site vitrine");
+    const s = await byName("Marketing site");
     const r = await fetch(`${mock.url}/v1/projects/${s.id}/secrets/CLE_X`, {
       method: "PUT",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${(c as unknown as { token: string }).token}` },
@@ -73,16 +73,16 @@ describe("projets d'équipe (X17)", () => {
 
   it("accepter une invitation donne le rôle de l'invitation ; le propriétaire reste fixe", async () => {
     const iv = (await c.listMyInvitations()).invitations[0]!;
-    expect(await c.answerInvitation(iv.id, true)).toMatchObject({ name: "Compta partagée", role: "member" });
+    expect(await c.answerInvitation(iv.id, true)).toMatchObject({ name: "Shared accounting", role: "member" });
     expect((await c.listProjects()).invitations).toBe(0);
-    const s = await byName("Site vitrine");
+    const s = await byName("Marketing site");
     const me = (await c.listProjectMembers(s.id)).members.find((m) => m.you)!;
     expect((await fail(c.setProjectMemberRole(s.id, me.account_id, "member"))).code).toBe("owner_fixed");
   });
 
   it("notes : seulement en miroir", async () => {
-    const s = await byName("Site vitrine");
+    const s = await byName("Marketing site");
     expect((await c.listProjectNotes(s.id)).notes.length).toBeGreaterThan(0);
-    expect(await fail(c.listProjectNotes((await byName("Recherche")).id))).toMatchObject({ status: 409, code: "mirror_off" });
+    expect(await fail(c.listProjectNotes((await byName("Research")).id))).toMatchObject({ status: 409, code: "mirror_off" });
   });
 });

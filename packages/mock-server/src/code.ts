@@ -147,10 +147,10 @@ function create(state: MockState, c: C, user: string, body: Record<string, unkno
   const now = new Date().toISOString();
   const s: CodeSession = { id, thread_id: id, status: "active", mode, workspace: MOUNT, backend: "kubernetes", repo: url ? { url, ref, credential: cred } : null, created_at: now, last_used_at: now };
   const x = extrasFor(!!url);
-  c.sessions.set(id, { s, user, points: [point("avant patch src/app.py", 2, 1), point("avant terminal", 9, 2), point("début de session", 15, 0)], busy: false, x });
+  c.sessions.set(id, { s, user, points: [point("before patch src/app.py", 2, 1), point("before terminal", 9, 2), point("session start", 15, 0)], busy: false, x });
   sync(c.sessions.get(id)!);
   // Le fil de la session au hub, au nom du compte (§7.28.3).
-  const t = state.createThread("session de code" + (url ? ` — ${url}` : ""), { id, members: [user] });
+  const t = state.createThread("code session" + (url ? ` — ${url}` : ""), { id, members: [user] });
   t.thread.owner = user;
   return s;
 }
@@ -300,7 +300,7 @@ function toolCall(state: MockState, c: C, r: Rec, b: Record<string, unknown>): [
     args_sha256: createHash("sha256").update(JSON.stringify(restoreArgs)).digest("hex"),
     effect: "destructive",
     rule: "checkpoints:restore",
-    reason: `checkpoint_restore : retour à ${target.short_hash}`,
+    reason: `checkpoint_restore: restore to ${target.short_hash}`,
     advice: null,
     strength: "strong",
     status: "pending",

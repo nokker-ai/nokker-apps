@@ -5,8 +5,8 @@ export default defineConfig({
     environment: "node",
     include: ["test/**/*.test.ts", "test/**/*.test.tsx"],
     testTimeout: 30_000,
-    // Les tests historiques vérifient les libellés français : la suite tourne en français (les processus lancés par les
-    // tests en héritent), les tests de l'anglais (langue par défaut) posent `setLang("en")` ou `NOKKER_LANG=en`.
-    env: { NOKKER_LANG: "fr" },
+    // La suite tourne en anglais, la langue par défaut (les processus lancés par les tests en héritent) ; les tests du
+    // français posent `setLang("fr")` ou `NOKKER_LANG=fr`.
+    env: { NOKKER_LANG: "en" },
   },
 });

@@ -2,7 +2,7 @@
  * Crew avec moteur (BUBBLES.md §9.5, lot X14, contrat provisoire du 25.10) — mock.
  *
  * Un passage simulé : queued → running (≈ 3 s) → succeeded, dans un fil à lui (un tour ordinaire), avec un coût de
- * démo. Un agent dont le nom contient « échec » échoue (pour voir le rouge). `arm` avec une règle `auto_approve`
+ * démo. Un agent dont le nom contient « échec » ou « fail » échoue (pour voir le rouge). `arm` avec une règle `auto_approve`
  * d'écriture rend 202 `{approval_id}` et l'agent reste `paused` (le mock ne simule pas la carte forte).
  */
 import { randomBytes } from "node:crypto";
@@ -146,11 +146,11 @@ function startRun(state: MockState, a: Agent, kind: AgentTrigger["kind"]): Agent
   publishRun(state, run);
   state.later(3000, () => {
     if (run.status !== "running") return;
-    const fails = /échec/i.test(a.name);
+    const fails = /échec|fail/i.test(a.name);
     run.status = fails ? "failed" : "succeeded";
     run.ended_at = new Date().toISOString();
     run.cost = { tokens_in: 4200, tokens_out: 610, amount: 0.012, currency: "EUR", calls: 3 };
-    run.summary = fails ? "(démo) Échec : la source ne répond pas." : `(démo) Passage terminé : ${a.instructions ?? a.role}`;
+    run.summary = fails ? "(demo) Failure: the source is not responding." : `(demo) Run completed: ${a.instructions ?? a.role}`;
     state.appendTurn(thread.thread.id, a.instructions ?? a.role, run.summary, { sender: null, channel: "agent", silent: true });
     publishRun(state, run);
     if (state.agents.has(a.id)) {
@@ -176,7 +176,7 @@ export function seedRuns(state: MockState, a: Agent, n: number, failedLast = fal
       status: st,
       thread_id: null,
       cost: { tokens_in: 3800, tokens_out: 540, amount: 0.011, currency: "EUR" },
-      summary: st === "failed" ? "(démo) Échec : la source ne répond pas." : "(démo) Rien à signaler.",
+      summary: st === "failed" ? "(demo) Failure: the source is not responding." : "(demo) Nothing to report.",
     });
   }
   const last = l[0]!;

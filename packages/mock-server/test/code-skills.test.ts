@@ -45,7 +45,7 @@ describe("sessions de code : skills du dépôt (§7.28.13)", () => {
       ["test-runner", "project"],
     ]);
     const view = json<{ content: string; linked_files: string[] }>(await c.callCodeSessionTool(s.id, "skill_view", { name: "release-notes" }));
-    expect(view.content).toContain("# Notes de version");
+    expect(view.content).toContain("# Release notes");
     expect(view.linked_files).toEqual(["templates/changelog.md"]);
     expect(await c.callCodeSessionTool(s.id, "skill_view", { name: "nope" })).toMatchObject({ is_error: true });
   });

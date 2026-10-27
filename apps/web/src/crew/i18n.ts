@@ -1,6 +1,6 @@
 /** Onglet Crew (X14, X15, BUBBLES §9.5) : textes FR/EN. La langue est celle de l'interface (`uiLang`). */
 import type { AgentStatus } from "@nokker-apps/sdk";
-import { AGENT_STATUS_THEME } from "@nokker-apps/brand";
+import { agentStatusLabel } from "@nokker-apps/brand";
 
 export type Lang = "fr" | "en";
 
@@ -263,11 +263,9 @@ export function cw(lang: Lang, key: Key, vars: Record<string, string | number> =
   return CREW_TEXTS[lang][key].replace(/\{(\w+)\}/g, (s, k: string) => (k in vars ? String(vars[k]) : s));
 }
 
-const STATUS_EN: Record<AgentStatus, string> = { paused: "Paused", armed: "Armed", running: "Running", failed: "Failing" };
-
-/** Libellé d'un état d'agent : le français vient de la marque (`AGENT_STATUS_THEME`), l'anglais d'ici. */
+/** Libellé d'un état d'agent : table de la marque, dans la langue de l'écran. */
 export function statusLabel(lang: Lang, st: AgentStatus): string {
-  return lang === "en" ? (STATUS_EN[st] ?? st) : (AGENT_STATUS_THEME[st] ?? AGENT_STATUS_THEME.paused).label;
+  return agentStatusLabel(st, lang);
 }
 
 export const DAYS: Record<Lang, string[]> = {

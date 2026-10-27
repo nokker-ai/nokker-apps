@@ -601,10 +601,10 @@ export function finalizeDecision(
   let summary: string;
   if (decision === "approve") {
     approval.status = "executed";
-    approval.result_summary = `exécuté (démo, décidé par ${decidedBy} via ${via}).`;
-    summary = `[Approbation] outil « ${approval.tool_name} » exécuté (décidé par ${decidedBy} via ${via}).`;
+    approval.result_summary = `executed (demo, decided by ${decidedBy} via ${via}).`;
+    summary = `[Approbation] tool “${approval.tool_name}” executed (decided by ${decidedBy} via ${via}).`;
   } else {
-    summary = `[Approbation] refusé par ${decidedBy} (via ${via}).`;
+    summary = `[Approbation] refused by ${decidedBy} (via ${via}).`;
   }
   state.appendTurn(approval.thread_id, "", summary, { channel: "approval", sender: null });
   state.publishThread(approval.thread_id);

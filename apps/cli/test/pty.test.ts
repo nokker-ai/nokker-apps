@@ -46,8 +46,8 @@ async function drive(steps: Array<[number, string] | [number, string, string]>, 
 
 describe.skipIf(!hasPython)("pty", () => {
   it("« /sessions\\r » envoyé d'un bloc exécute la commande, puis « /quit\\r » quitte", async () => {
-    const { screen, exited } = await drive([[30, "/sessions\r", "Session de code sur"], [10, "/quit\r", "Sessions de code :"]]);
-    expect(screen).toContain("Sessions de code :");
+    const { screen, exited } = await drive([[30, "/sessions\r", "Code session on"], [10, "/quit\r", "Code sessions:"]]);
+    expect(screen).toContain("Code sessions:");
     expect(screen).not.toContain("> /sessions/quit");
     expect(exited).toBe(true);
   }, 70_000);
@@ -61,8 +61,8 @@ describe.skipIf(!hasPython)("pty", () => {
   }, 70_000);
 
   it("touche par touche : texte puis Entrée seule", async () => {
-    const { screen, exited } = await drive([[30, "/sessions", "Session de code sur"], [0.4, "\r"], [10, "/quit", "Sessions de code :"], [0.4, "\r"]]);
-    expect(screen).toContain("Sessions de code :");
+    const { screen, exited } = await drive([[30, "/sessions", "Code session on"], [0.4, "\r"], [10, "/quit", "Code sessions:"], [0.4, "\r"]]);
+    expect(screen).toContain("Code sessions:");
     expect(exited).toBe(true);
   }, 70_000);
 });

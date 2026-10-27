@@ -170,9 +170,18 @@ export interface BriefState {
   date: string;
 }
 
-export const INCIDENT_STATE_LABEL: Record<IncidentState, string> = { open: "ouvert", in_progress: "en cours", resolved: "résolu" };
-export const PLAN_STATUS_LABEL: Record<PlanCardStatus, string> = { todo: "à faire", in_progress: "en cours", blocked: "bloqué", done: "fait" };
-export const PLAN_KIND_LABEL: Record<PlanCardKind, string> = { goal: "objectif", milestone: "lot", task: "tâche" };
+/** Libellés : l'anglais est la source, le français vient des tables `*_FR` (fonctions `…Label(x, lang)`). */
+export const INCIDENT_STATE_LABEL: Record<IncidentState, string> = { open: "open", in_progress: "in progress", resolved: "resolved" };
+export const PLAN_STATUS_LABEL: Record<PlanCardStatus, string> = { todo: "to do", in_progress: "in progress", blocked: "blocked", done: "done" };
+export const PLAN_KIND_LABEL: Record<PlanCardKind, string> = { goal: "goal", milestone: "milestone", task: "task" };
+export const INCIDENT_STATE_LABEL_FR: Record<IncidentState, string> = { open: "ouvert", in_progress: "en cours", resolved: "résolu" };
+export const PLAN_STATUS_LABEL_FR: Record<PlanCardStatus, string> = { todo: "à faire", in_progress: "en cours", blocked: "bloqué", done: "fait" };
+export const PLAN_KIND_LABEL_FR: Record<PlanCardKind, string> = { goal: "objectif", milestone: "lot", task: "tâche" };
+
+export type OpsLang = "en" | "fr";
+export const incidentStateLabel = (s: IncidentState, lang: OpsLang = "en"): string => (lang === "fr" ? INCIDENT_STATE_LABEL_FR : INCIDENT_STATE_LABEL)[s] ?? s;
+export const planCardStatusLabel = (s: PlanCardStatus, lang: OpsLang = "en"): string => (lang === "fr" ? PLAN_STATUS_LABEL_FR : PLAN_STATUS_LABEL)[s] ?? s;
+export const planCardKindLabel = (k: PlanCardKind, lang: OpsLang = "en"): string => (lang === "fr" ? PLAN_KIND_LABEL_FR : PLAN_KIND_LABEL)[k] ?? k;
 
 /** Livraison du brief hors de l'app (§7.18.5) : choix de chaque personne, tout éteint par défaut. L'e-mail ne part
  * qu'après une carte forte (`brief_delivery_arm`) signée pour cette adresse et cette boîte. */

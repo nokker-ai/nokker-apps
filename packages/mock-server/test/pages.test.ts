@@ -124,6 +124,26 @@ describe("pages (BUBBLES.md §10)", () => {
     expect((await client.getBubble(bubble.id)).state).toMatchObject({ locality: "local" });
   });
 
+  it("retrait par la modération (DSA) : dépubliée, exposé des motifs dans le state, republier refusé (403 page_moderated), rendue", async () => {
+    const { bubble, pageId } = await newPage();
+    const dev = (b: unknown) => fetch(`${mock.url}/v1/dev/pages-mock`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
+    const req = await client.publishPage(pageId);
+    await dev({ approve: req.approval_id });
+    const link = await client.getPageLink(pageId);
+    await dev({ moderate: { page_id: pageId, reason: "contenu trompeur (démo)" } });
+    const st = (await client.getBubble(bubble.id)).state as Record<string, unknown>;
+    expect(st).toMatchObject({ public: false, moderation: { reason: "contenu trompeur (démo)", appeal: { fr: expect.stringContaining("moderation@nokker.ai"), en: expect.stringContaining("moderation@nokker.ai") } } });
+    expect(typeof st.moderated_at).toBe("number");
+    expect((await fetch(`${mock.url}${link.public_url}`)).status).toBe(404);
+    const fail = (p: Promise<unknown>) => p.then(() => null, (e: { status: number; body: { error: { code?: string } } }) => [e.status, e.body.error.code]);
+    expect(await fail(client.publishPage(pageId))).toEqual([403, "page_moderated"]);
+    await dev({ restore: pageId });
+    const back = (await client.getBubble(bubble.id)).state as Record<string, unknown>;
+    // Le noyau garde `moderated_at` dans le state (null hors retrait) ; l'exposé des motifs s'efface.
+    expect(back.moderated_at).toBeNull();
+    expect(back.moderation ?? null).toBeNull();
+  });
+
   it("télécharger : pièce jointe par lien signé download seulement ; pas d'adresse publique d'une page privée", async () => {
     const { pageId } = await newPage();
     const link = await client.getPageLink(pageId, { download: true });

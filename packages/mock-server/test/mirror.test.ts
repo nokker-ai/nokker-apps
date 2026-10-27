@@ -36,7 +36,7 @@ describe("miroir de la machine (§7.23)", () => {
     expect(st.behind_s).toBeGreaterThan(0);
     expect(st.pending).toMatchObject({ turns: 3, pages: 1 });
     expect(st.pages_space).toMatchObject({ quota: 50 * 1024 * 1024 });
-    expect([...teamMemoryProjects(st)]).toEqual([["p-0a1b2c3d4e5f6a7b", "Site vitrine"]]);
+    expect([...teamMemoryProjects(st)]).toEqual([["p-0a1b2c3d4e5f6a7b", "Marketing site"]]);
     expect(JSON.stringify(st)).not.toMatch(/https?:\/\/|token/i); // ni URL ni jeton dans l'état
   });
 
@@ -79,9 +79,9 @@ describe("historique des versions remplacées (§7.15)", () => {
     const s = new NokkerClient({ baseUrl: mock.url });
     await s.demoSessionMockExtension();
     const { projects } = await s.listProjects();
-    const site = projects.find((p) => p.name === "Site vitrine")!;
-    expect((await s.listProjectQuarantine(site.id)).quarantine[0]).toMatchObject({ name: "rule-tarifs-ttc-1a2b", reason: expect.stringMatching(/remplacée/) });
-    const viewer = projects.find((p) => p.name === "Recherche")!;
+    const site = projects.find((p) => p.name === "Marketing site")!;
+    expect((await s.listProjectQuarantine(site.id)).quarantine[0]).toMatchObject({ name: "rule-pricing-final-1a2b", reason: expect.stringMatching(/remplacée/) });
+    const viewer = projects.find((p) => p.name === "Research")!;
     expect(await fail(s.listProjectQuarantine(viewer.id))).toEqual({ status: 403, code: "forbidden" });
   });
 });

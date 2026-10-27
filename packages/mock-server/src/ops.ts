@@ -70,30 +70,30 @@ function seed(): Ops {
   const o: Ops = { sources: new Map(), incidents: new Map(), cards: new Map(), proposals: new Map(), brief: null, seen: new Map(), delivery: { telegram: false, email: null, armed: null, approval: null, chats: 1, sender: `${MOCK_USER}@example.com`, last: null } };
   const sid = hex("as");
   o.sources.set(sid, {
-    s: { id: sid, name: "Prometheus (démo)", format: "alertmanager", url: `/v1/alerts/${sid}`, created_by: MOCK_USER, created_at: iso(Date.now() - 86400_000 * 3), last_seen_at: iso(Date.now() - 600_000), has_secret: true, auth: "bearer" },
+    s: { id: sid, name: "Prometheus (demo)", format: "alertmanager", url: `/v1/alerts/${sid}`, created_by: MOCK_USER, created_at: iso(Date.now() - 86400_000 * 3), last_seen_at: iso(Date.now() - 600_000), has_secret: true, auth: "bearer" },
     key: "nkb_demo",
   });
-  const src = { id: sid, name: "Prometheus (démo)" };
+  const src = { id: sid, name: "Prometheus (demo)" };
   const mk = (name: string, title: string, severity: string, state: Incident["state"], agoMin: number, extra: Partial<Incident> = {}, tl: IncidentTimelineEntry[] = []): void => {
     const id = hex("in", 16);
     const t0 = Date.now() - agoMin * 60_000;
-    const timeline: IncidentTimelineEntry[] = [{ at: iso(t0), kind: "opened", text: `Alerte « ${name} » reçue de Prometheus (démo).` }, ...tl];
+    const timeline: IncidentTimelineEntry[] = [{ at: iso(t0), kind: "opened", text: `Alert “${name}” received from Prometheus (demo).` }, ...tl];
     o.incidents.set(id, {
       timeline,
       i: {
         id, source: src, fingerprint: createHash("sha256").update(name).digest("hex").slice(0, 16), name, title, severity, state,
-        labels: { alertname: name, severity, instance: "web-1 (démo)" }, summary: title, occurrences: 1,
+        labels: { alertname: name, severity, instance: "web-1 (demo)" }, summary: title, occurrences: 1,
         first_seen_at: iso(t0), last_seen_at: iso(t0), started_at: iso(t0), resolved_at: null, resolved_by: null, acked_by: null,
         runs: [], created_at: iso(t0), updated_at: iso(t0), last_event: timeline.at(-1)!, ...extra,
       },
     });
   };
-  mk("DiskAlmostFull", "Disque /var à 92 % sur web-1 (démo)", "warning", "in_progress", 14, { occurrences: 3, runs: [{ run_id: "run_demo_disk", agent_id: "ag_demo", agent: "Veilleur disque", status: "waiting_approval", summary: null, thread_id: null, ended_at: null, approvals: [{ id: "ap_demo_disk", tool: "ssh_run", status: "pending", strength: "strong" }] }] }, [
-    { at: iso(Date.now() - 13 * 60_000), kind: "agent_run", text: "« Veilleur disque » démarre : il lit l'occupation et les plus gros dossiers.", run_id: "run_demo_disk" },
-    { at: iso(Date.now() - 11 * 60_000), kind: "card", text: "Carte forte posée : purger les journaux de plus de 14 jours (ssh_run).", approval_id: "ap_demo_disk" },
+  mk("DiskAlmostFull", "Disk /var at 92% on web-1 (demo)", "warning", "in_progress", 14, { occurrences: 3, runs: [{ run_id: "run_demo_disk", agent_id: "ag_demo", agent: "Disk watcher", status: "waiting_approval", summary: null, thread_id: null, ended_at: null, approvals: [{ id: "ap_demo_disk", tool: "ssh_run", status: "pending", strength: "strong" }] }] }, [
+    { at: iso(Date.now() - 13 * 60_000), kind: "agent_run", text: "“Disk watcher” starts: it reads the usage and the biggest folders.", run_id: "run_demo_disk" },
+    { at: iso(Date.now() - 11 * 60_000), kind: "card", text: "Strong card posted: purge logs older than 14 days (ssh_run).", approval_id: "ap_demo_disk" },
   ]);
-  mk("HighLatency", "Latence p95 de l'API au-dessus de 800 ms (démo)", "critical", "open", 3, {}, [{ at: iso(Date.now() - 3 * 60_000 + 2000), kind: "no_agent", text: "Aucun agent armé sur « alert:HighLatency »." }]);
-  mk("CertExpiring", "Certificat de l'API qui expire dans 7 jours (démo)", "info", "resolved", 60 * 26, { resolved_at: iso(Date.now() - 3600_000 * 20), resolved_by: "source:Prometheus (démo)" }, [{ at: iso(Date.now() - 3600_000 * 20), kind: "resolved", text: "Résolu par la source." }]);
+  mk("HighLatency", "API p95 latency above 800 ms (demo)", "critical", "open", 3, {}, [{ at: iso(Date.now() - 3 * 60_000 + 2000), kind: "no_agent", text: "No agent armed on “alert:HighLatency”." }]);
+  mk("CertExpiring", "API certificate expiring in 7 days (demo)", "info", "resolved", 60 * 26, { resolved_at: iso(Date.now() - 3600_000 * 20), resolved_by: "source:Prometheus (demo)" }, [{ at: iso(Date.now() - 3600_000 * 20), kind: "resolved", text: "Resolved by the source." }]);
 
   const card = (title: string, parent: string | null, extra: Partial<Card> = {}): string => {
     const id = hex("pc");
@@ -101,15 +101,15 @@ function seed(): Ops {
     o.cards.set(id, { id, parent_id: parent, project: null, kind: (["goal", "milestone"][depth] ?? "task") as PlanCardKind, title, intent: "", constraints: [], decisions: [], status: "todo", agents: [], threads: [], position: o.cards.size, created_by: MOCK_USER, created_at: iso(Date.now() - 86400_000 * 2), updated_at: iso(Date.now() - 3600_000), ...extra });
     return id;
   };
-  const g = card("Lancer la bêta publique", null, { intent: "Ouvrir les inscriptions à 50 testeurs avant la fin du mois.", constraints: ["Aucune donnée d'un testeur visible d'un autre", "Paiement en mode test seulement"], decisions: ["Une seule offre au lancement"] });
-  const m1 = card("Parcours d'inscription", g, { intent: "Invitation → conditions → appareil → connecteurs." });
-  card("Mail d'invitation", m1, { status: "done" });
-  card("Conditions v2 relues", m1, { status: "done" });
-  card("Appairage Telegram", m1, { status: "in_progress" });
-  const m2 = card("Isolation des comptes", g, { constraints: ["Suite d'isolation verte avant chaque déploiement"] });
-  card("Suite d'isolation sur la prod", m2, { status: "done" });
-  card("Revue des journaux partagés", m2, { status: "blocked", intent: "Bloqué : attend l'accès en lecture aux journaux." });
-  card("Page tarifs", g);
+  const g = card("Launch the public beta", null, { intent: "Open registrations to 50 testers before the end of the month.", constraints: ["No tester's data visible to another", "Payments in test mode only"], decisions: ["A single offer at launch"] });
+  const m1 = card("Sign-up flow", g, { intent: "Invitation → terms → device → connectors." });
+  card("Invitation email", m1, { status: "done" });
+  card("Terms v2 reviewed", m1, { status: "done" });
+  card("Telegram pairing", m1, { status: "in_progress" });
+  const m2 = card("Account isolation", g, { constraints: ["Isolation suite green before every deployment"] });
+  card("Isolation suite on prod", m2, { status: "done" });
+  card("Review of shared logs", m2, { status: "blocked", intent: "Blocked: waiting for read access to the logs." });
+  card("Pricing page", g);
   return o;
 }
 function ops(state: MockState): Ops {
@@ -173,7 +173,7 @@ function receive(state: MockState, o: Ops, src: Src, a: { name: string; status: 
   const live = [...o.incidents.values()].find((x) => x.i.source.id === src.s.id && x.i.fingerprint === fp && x.i.state !== "resolved");
   if (a.status === "resolved") {
     if (!live) return { incident_id: null, name: a.name, result: "ignored" };
-    touchInc(state, live, { state: "resolved", resolved_at: iso(), resolved_by: `source:${src.s.name}` }, { at: iso(), kind: "resolved", text: "Résolu par la source." });
+    touchInc(state, live, { state: "resolved", resolved_at: iso(), resolved_by: `source:${src.s.name}` }, { at: iso(), kind: "resolved", text: "Resolved by the source." });
     return { incident_id: live.i.id, name: a.name, result: "resolved" };
   }
   if (live) {
@@ -182,15 +182,15 @@ function receive(state: MockState, o: Ops, src: Src, a: { name: string; status: 
   }
   const id = hex("in", 16);
   const x: Inc = {
-    timeline: [{ at: iso(), kind: "opened", text: `Alerte « ${a.name} » reçue de ${src.s.name}.` }],
+    timeline: [{ at: iso(), kind: "opened", text: `Alert “${a.name}” received from ${src.s.name}.` }],
     i: { id, source: { id: src.s.id, name: src.s.name }, fingerprint: fp, name: a.name, title: a.title ?? a.name, severity: a.severity ?? null, state: "open", labels: { alertname: a.name }, summary: a.title ?? "", occurrences: 1, first_seen_at: iso(), last_seen_at: iso(), started_at: iso(), resolved_at: null, resolved_by: null, acked_by: null, runs: [], created_at: iso(), updated_at: iso(), last_event: null },
   };
   o.incidents.set(id, x);
   const runs = fireAgentEvent(state, `alert:${a.name}`);
-  if (!runs.length) touchInc(state, x, {}, { at: iso(), kind: "no_agent", text: `Aucun agent armé sur « alert:${a.name} ».` });
+  if (!runs.length) touchInc(state, x, {}, { at: iso(), kind: "no_agent", text: `No agent armed on “alert:${a.name}”.` });
   else {
     const ag = (aid: string): string => state.agents.get(aid)?.name ?? aid;
-    touchInc(state, x, { state: "in_progress", runs: runs.map((r) => ({ run_id: r.run_id, agent_id: r.agent_id, agent: ag(r.agent_id), status: r.status, summary: null, thread_id: r.thread_id, ended_at: null, approvals: [] })) }, { at: iso(), kind: "agent_run", text: `« ${ag(runs[0]!.agent_id)} » démarre.`, run_id: runs[0]!.run_id });
+    touchInc(state, x, { state: "in_progress", runs: runs.map((r) => ({ run_id: r.run_id, agent_id: r.agent_id, agent: ag(r.agent_id), status: r.status, summary: null, thread_id: r.thread_id, ended_at: null, approvals: [] })) }, { at: iso(), kind: "agent_run", text: `“${ag(runs[0]!.agent_id)}” starts.`, run_id: runs[0]!.run_id });
     state.later(3100, () => {
       const r = runs[0]!;
       touchInc(state, x, { runs: x.i.runs.map((y) => (y.run_id === r.run_id ? { ...y, status: r.status, summary: r.summary, ended_at: r.ended_at } : y)) }, { at: iso(), kind: "agent_run", text: r.summary ?? `Passage ${r.status}.`, run_id: r.run_id });
@@ -305,18 +305,18 @@ export async function handleOpsDev(state: MockState, method: string, path: strin
   if (b.action === "split") {
     const card = o.cards.get(String(b.card_id ?? "")) ?? [...o.cards.values()].find((c) => !childrenOf(o, c.id).length)!;
     const children: PlanChildProposal[] = [
-      { title: "Écrire le texte de la page", kind: null, intent: "Une offre, un prix final.", constraints: [] },
-      { title: "Relire sur mobile", kind: null, intent: "", constraints: ["Aucun défilement horizontal"] },
-      { title: "Brancher le bouton vers la bêta", kind: null, intent: "", constraints: [] },
+      { title: "Write the page text", kind: null, intent: "One offer, one final price.", constraints: [] },
+      { title: "Review on mobile", kind: null, intent: "", constraints: ["No horizontal scrolling"] },
+      { title: "Wire the button to the beta", kind: null, intent: "", constraints: [] },
     ];
-    const p: PlanProposal = { id: hex("pp"), card_id: card.id, children, reason: "Trois étapes indépendantes, chacune vérifiable.", state: "proposed", proposed_by: "nina", thread_id: threadId, bubble_id: null, created: [], decided_by: null, decided_at: null, created_at: iso() };
+    const p: PlanProposal = { id: hex("pp"), card_id: card.id, children, reason: "Three independent steps, each verifiable.", state: "proposed", proposed_by: "nina", thread_id: threadId, bubble_id: null, created: [], decided_by: null, decided_at: null, created_at: iso() };
     const bu = createBubble(state, threadId, {
       kind: "plan_split",
-      title: `Découper « ${card.title} »`,
+      title: `Split “${card.title}”`,
       status: "idle",
       actions: [
-        { id: "accept", label: "Créer ces cartes", primary: true },
-        { id: "refuse", label: "Non" },
+        { id: "accept", label: "Create these cards", primary: true },
+        { id: "refuse", label: "No" },
       ],
       state: { proposal_id: p.id, card_id: card.id, card_title: card.title, children, reason: p.reason, state: "proposed" } as never,
     });
@@ -326,7 +326,7 @@ export async function handleOpsDev(state: MockState, method: string, path: strin
     return send(201, { proposal: p, bubble_id: bu.id }), true;
   }
   if (b.action === "brief") {
-    const text = "**Objectifs** : Lancer la bêta publique (3/5 tâches faites).\n\n**Bloqué** : Revue des journaux partagés, attend l'accès en lecture.\n\n**Incidents vivants** : 2 (HighLatency ouvert, DiskAlmostFull en cours).\n\n**Aujourd'hui** : pas de connecteur d'agenda, aucun rendez-vous inventé.";
+    const text = "**Goals**: Launch the public beta (3/5 tasks done).\n\n**Blocked**: Review of shared logs, waiting for read access.\n\n**Live incidents**: 2 (HighLatency open, DiskAlmostFull in progress).\n\n**Today**: no calendar connector, no appointment made up.";
     const bu = createBubble(state, threadId, { kind: "brief", title: `Brief du ${iso().slice(0, 10)}`, status: "done", state: { text, run_id: hexId("run"), agent_id: o.brief ?? "ag_brief", date: iso() } as never });
     return send(201, { bubble_id: bu.id }), true;
   }
@@ -381,11 +381,11 @@ export async function handleOps(state: MockState, user: string, method: string, 
     if (!im[2] && method === "GET") return send(200, incJson(x, true)), true;
     if (method === "POST") {
       if (x.i.state === "resolved") return err(send, 409, "resolved", "incident déjà résolu");
-      if (im[2] === "/ack") touchInc(state, x, { state: "in_progress", acked_by: user }, { at: iso(), kind: "acked", text: "Pris en charge.", by: user });
+      if (im[2] === "/ack") touchInc(state, x, { state: "in_progress", acked_by: user }, { at: iso(), kind: "acked", text: "Taken over.", by: user });
       else {
         const b = await readBody();
         const note = typeof b.note === "string" && b.note.trim() ? ` : ${b.note.trim().slice(0, 500)}` : "";
-        touchInc(state, x, { state: "resolved", resolved_at: iso(), resolved_by: user }, { at: iso(), kind: "resolved", text: `Résolu à la main${note}`, by: user });
+        touchInc(state, x, { state: "resolved", resolved_at: iso(), resolved_by: user }, { at: iso(), kind: "resolved", text: `Resolved by hand${note}`, by: user });
       }
       return send(200, incJson(x, true)), true;
     }
@@ -547,7 +547,7 @@ function deliveryCard(state: MockState, o: Ops, owner: string, to: string, from:
     args_sha256: createHash("sha256").update(JSON.stringify(args)).digest("hex"),
     effect: "external",
     rule: "brief:mail_delivery",
-    reason: `envoyer chaque matin le brief du matin à ${to}, depuis ta boîte ${from} (ce brief seulement, vers cette adresse seulement)`,
+    reason: `send the morning brief to ${to} every morning, from your mailbox ${from} (this brief only, to this address only)`,
     advice: null,
     strength: "strong",
     status: "pending",
@@ -563,7 +563,7 @@ function deliveryCard(state: MockState, o: Ops, owner: string, to: string, from:
   state.approvalEffects.set(a.id, () => {
     if (o.delivery.approval === a.id) o.delivery.approval = null;
     if (o.delivery.email === to) o.delivery.armed = fingerprint;
-    return `livraison du brief armée vers ${to}`;
+    return `brief delivery armed for ${to}`;
   });
   state.publish({ type: "approval.requested", approval: a });
   return a.id;

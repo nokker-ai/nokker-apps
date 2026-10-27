@@ -51,16 +51,16 @@ describe("doctor : coffre (X4)", () => {
     await writeFile(join(dir, "vault", "approle", "secret_id"), SECRET);
     const calls: string[][] = [];
     const r = await checkVault(cfg(), bao({ initialized: true, sealed: false }, calls));
-    expect(r).toMatchObject({ name: "coffre", status: "ok" });
+    expect(r).toMatchObject({ name: "vault", status: "ok" });
     expect(calls[0]!.join(" ")).toBe(`docker compose -p nokker --env-file ${join(dir, ".env")} -f ${join(dir, "docker-compose.yml")} exec -T openbao bao status -format=json`);
     expect(JSON.stringify(r)).not.toContain(SECRET);
   });
 
   it("scellé : la bonne commande selon le mode ; AppRole vide : nommé, jamais lu", async () => {
     await writeFile(join(dir, ".env"), "NOKKER_SECRETS_PROVIDER=openbao\nNOKKER_VAULT_UNSEAL=manual\n");
-    expect((await checkVault(cfg(), bao({ initialized: true, sealed: true })))!.detail).toBe("coffre scellé : docker compose -p nokker exec openbao bao operator unseal");
+    expect((await checkVault(cfg(), bao({ initialized: true, sealed: true })))!.detail).toBe("vault sealed: docker compose -p nokker exec openbao bao operator unseal");
     await writeFile(join(dir, ".env"), "NOKKER_SECRETS_PROVIDER=openbao\n");
-    expect((await checkVault(cfg(), bao({ initialized: true, sealed: true })))!.detail).toBe("vault-unseal ne descelle pas : docker compose -p nokker logs vault-unseal");
+    expect((await checkVault(cfg(), bao({ initialized: true, sealed: true })))!.detail).toBe("vault-unseal does not unseal: docker compose -p nokker logs vault-unseal");
     expect((await checkVault(cfg(), bao(null)))!.status).toBe("ko");
     await writeFile(join(dir, "vault", "approle", "secret_id"), "");
     const r = await checkVault(cfg(), bao({ initialized: true, sealed: false }));

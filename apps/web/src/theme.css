@@ -2582,6 +2582,16 @@ button:disabled {
 }
 
 /* ---- Page /approve (approbation forte d'une machine liée) ---- */
+.ra-elsewhere {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ra-link {
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
 .ra-machine {
   color: var(--muted);
   font-size: 14px;

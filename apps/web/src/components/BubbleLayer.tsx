@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Bubble as BubbleT, TransferMode } from "@nokker-apps/sdk";
 import { bubbleTheme } from "@nokker-apps/brand";
+import { tr } from "../i18n/index.js";
 import { useStore } from "../context.js";
 import { Icon } from "../icons.js";
-import { statusLabel } from "../bubbles/kinds.js";
+import { bubbleLabel, statusLabel } from "../bubbles/kinds.js";
 import { loadPositions, loadViews, savePositions, saveViews, type BubblePositions, type BubbleViews } from "../viewState.js";
 import { arrange, placeNew, type Rect } from "../placement.js";
 import { Bubble, type Popover } from "./Bubble.js";
@@ -356,9 +357,9 @@ export function BubbleLayer({
     const chips = visible.filter((r) => isCollapsed(r.b.id) && !r.leaving);
     const open = visible.filter((r) => !isCollapsed(r.b.id) || r.leaving);
     return (
-      <section className="bubble-inline" aria-label="Bulles de la session">
+      <section className="bubble-inline" aria-label={tr("Session bubbles")}>
         {chips.length ? (
-          <div className="chip-row" aria-label="Bulles réduites">
+          <div className="chip-row" aria-label={tr("Collapsed bubbles")}>
             {chips.map(({ b }) => {
               const t = bubbleTheme(b.kind);
               return (
@@ -367,11 +368,11 @@ export function BubbleLayer({
                   type="button"
                   className={`bubble-chip ${b.status === "working" ? "working" : ""}`}
                   style={{ "--k-l": t.light, "--krgb-l": t.lightRgb, "--k-d": t.color, "--krgb-d": t.rgb } as React.CSSProperties}
-                  aria-label={`Déployer la bulle ${t.label} ${b.title}, ${statusLabel(b, Date.now())}`}
+                  aria-label={tr("Expand the bubble {0} {1}, {2}", bubbleLabel(b.kind), b.title, statusLabel(b, Date.now()))}
                   onClick={() => setViews((v) => ({ ...v, [b.id]: { ...v[b.id], collapsed: false } }))}
                 >
                   <Icon name={t.icon} size={14} />
-                  {t.label}
+                  {bubbleLabel(b.kind)}
                   <span className="chip-status">· {statusLabel(b, Date.now())}</span>
                 </button>
               );

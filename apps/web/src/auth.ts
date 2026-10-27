@@ -10,6 +10,7 @@
  *    (code + PKCE, `gateway/auth.ts`), jeton d'accès en mémoire, aucune clé d'appareil sur cette origine.
  */
 import { NokkerApiError, NokkerClient, generateDeviceKeyPair, signChallenge, type AcceptInvitationResult } from "@nokker-apps/sdk";
+import { tr } from "./i18n/index.js";
 import { registerPasskey, signDecisionWithPasskey } from "./webauthn.js";
 import { takeLocalToken } from "./onboarding/localToken.js";
 import { AUTHORIZE_BASE, GatewayAuthError, RETRY_MS, beginLogin, completeCallback, gatewayHost, refreshDelayMs, refreshToken, type GatewayToken } from "./gateway/auth.js";
@@ -95,6 +96,25 @@ async function deviceKeySession(client: NokkerClient, key: StoredKey): Promise<A
 /** Appareil inconnu du serveur (base remise à zéro), révoqué ou refusé : on l'oublie, le visiteur revoit l'accueil. */
 const GONE = new Set([401, 403, 404]);
 
+/** Appareil rangé que le noyau refuse au défi de session (`device_not_approved`, noyau 0309091) : en attente de sa
+ * confirmation (`pending`), retiré (`revoked`)… Ni une panne ni un appareil inconnu : l'écran dit quoi faire. */
+export class DeviceNotApprovedError extends Error {
+  constructor(readonly deviceStatus: string) {
+    super("device_not_approved");
+  }
+}
+
+/** Refus du défi de session : `forget` (appareil inconnu ou plus reconnu : on oublie la clé, retour à l'accueil),
+ * l'erreur d'appareil non approuvé, ou `null` (autre erreur : on la laisse remonter). */
+export function deviceRefusal(err: unknown): "forget" | DeviceNotApprovedError | null {
+  if (!(err instanceof NokkerApiError)) return null;
+  const e = (err.body as { error?: { code?: unknown; device_status?: unknown } } | undefined)?.error;
+  const code = e && typeof e === "object" ? e.code : undefined;
+  if (code === "device_unknown") return "forget";
+  if (code === "device_not_approved") return new DeviceNotApprovedError(typeof e?.device_status === "string" ? e.device_status : "pending");
+  return GONE.has(err.status) ? "forget" : null;
+}
+
 export async function forgetDevice(): Promise<void> {
   await idb((s) => s.delete(DEVICE_RECORD_KEY), "readwrite");
   try {
@@ -113,15 +133,16 @@ async function deviceKeyLogin(client: NokkerClient, stored: StoredKey): Promise<
   try {
     return await deviceKeySession(client, stored);
   } catch (err) {
-    if (err instanceof NokkerApiError && GONE.has(err.status)) {
+    const r = deviceRefusal(err);
+    if (r === "forget") {
       await forgetDevice();
       return null;
     }
-    throw err;
+    throw r ?? err;
   }
 }
 
-export const deviceName = (): string => `web-${navigator.platform || "navigateur"}`;
+export const deviceName = (): string => `web-${navigator.platform || tr("browser")}`;
 
 /** Connexion par code reçu par mail : la clé NON extractible est générée ici, le serveur l'enregistre comme
  * appareil actif (le code prouve la boîte mail) ; la session se reprend ensuite par `restoreLogin`. */
@@ -152,11 +173,12 @@ async function passkeyRestore(client: NokkerClient): Promise<AuthResult | null> 
   try {
     return await passkeySession(client, device);
   } catch (err) {
-    if (err instanceof NokkerApiError && GONE.has(err.status)) {
+    const r = deviceRefusal(err);
+    if (r === "forget") {
       await forgetDevice();
       return null;
     }
-    throw err;
+    throw r ?? err;
   }
 }
 
@@ -259,7 +281,7 @@ function keepFresh(client: NokkerClient, host: string, tok: GatewayToken): void 
         },
         (err: unknown) => {
           if (err instanceof GatewayAuthError && err.kind === "forbidden") {
-            console.error("passerelle : /_gw/refresh refusé (403, Origin ou Content-Type) — renouvellement arrêté");
+            console.error("gateway: /_gw/refresh refused (403, Origin or Content-Type) — renewal stopped");
             return;
           }
           schedule(err instanceof GatewayAuthError && err.retryAfterMs ? err.retryAfterMs : RETRY_MS);
@@ -279,13 +301,22 @@ export function remoteApprovalUrl(host: string, approvalId: string): string {
 
 const authorizeBase = (): string => (import.meta.env?.VITE_NOKKER_AUTHORIZE_URL as string | undefined) ?? AUTHORIZE_BASE;
 
-const GATEWAY_ERRORS: Record<string, string> = {
-  state: "La connexion n'a pas pu être vérifiée (lien périmé ou ouvert dans un autre onglet). Recharge la page.",
-  denied: "Connexion refusée sur nokker.ai.",
-  exchange: "La connexion a expiré en route. Recharge la page.",
-  unavailable: "Le service de connexion de nokker.ai est indisponible. Réessaie dans un instant.",
-  forbidden: "La connexion à la passerelle a été refusée (erreur de l'application). Recharge la page.",
-};
+function gatewayErrorText(kind: string): string | undefined {
+  switch (kind) {
+    case "state":
+      return tr("The sign-in could not be verified (expired link or opened in another tab). Reload the page.");
+    case "denied":
+      return tr("Sign-in refused on nokker.ai.");
+    case "exchange":
+      return tr("The sign-in expired along the way. Reload the page.");
+    case "unavailable":
+      return tr("The nokker.ai sign-in service is unavailable. Try again in a moment.");
+    case "forbidden":
+      return tr("The gateway sign-in was refused (application error). Reload the page.");
+    default:
+      return undefined;
+  }
+}
 
 /** Un seul passage par chargement de page : le code du callback est à usage unique, et React (StrictMode, ou un
  * remontage) peut relancer l'effet de connexion — le second passage relancerait sinon une connexion en boucle. */
@@ -319,7 +350,7 @@ async function gatewayLogin(client: NokkerClient, host: string): Promise<AuthRes
     keepFresh(client, host, tok);
     return { mode: "gateway", user: tokenSubject(tok.access_token) };
   } catch (err) {
-    if (err instanceof GatewayAuthError) throw new Error(GATEWAY_ERRORS[err.kind] ?? err.message);
+    if (err instanceof GatewayAuthError) throw new Error(gatewayErrorText(err.kind) ?? err.message);
     throw err;
   }
 }
@@ -349,5 +380,5 @@ export async function restoreLogin(client: NokkerClient, mock: boolean): Promise
     const session = await client.demoSessionMockExtension();
     return { mode: "demo", user: session.user };
   }
-  throw new Error("Contexte non sécurisé (http) : ouvre Nokker en https pour enrôler cet appareil.");
+  throw new Error(tr("Insecure context (http): open Nokker over https to enrol this device."));
 }

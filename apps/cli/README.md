@@ -1,159 +1,160 @@
-# nokker — client terminal
+# nokker — terminal client
 
-Client terminal de Nokker Lokkal : une session de code dans le dossier courant, contre le noyau (ou le
-`mock-server` pour développer). Ink 8 + React 19, bin `nokker`, parle au noyau par `@nokker-apps/sdk`.
+Terminal client for Nokker Lokkal: a code session in the current folder, against the core (or the `mock-server` for
+development). Ink 8 + React 19, `nokker` binary, talks to the core through `@nokker-apps/sdk`.
 
 ## Usage
 
 ```
-nokker                          session de code sur le dossier courant (reprend le fil de ce dossier)
-nokker -p "demande"             un tour, réponse sur stdout (mode non interactif)
-nokker -p "demande" --json      {reply, thread_id, cwd, pending_approvals, refused, cancelled, cost?}
-nokker doctor [--fix]           contrôles : docker, compose Lokkal, serveur, authentification, mémoire, version, git
+nokker                          code session in the current folder (resumes this folder's thread)
+nokker -p "request"             one turn, answer on stdout (non-interactive mode)
+nokker -p "request" --json      {reply, thread_id, cwd, pending_approvals, refused, cancelled, cost?}
+nokker doctor [--fix]           checks: docker, Lokkal compose, server, authentication, memory, version, git
 nokker logs [-f] [-n N] [--since 1h|30m|2d] [--component core|cli]
-nokker update [--check]         met à jour le noyau (install.sh --update, sinon env_file + compose pull/up) puis remplace le binaire ;
-                                --check compare la version installée à la dernière release lokkal-v*
-nokker acp                      agent ACP (Agent Client Protocol v1) sur stdio, pour un éditeur : Zed, JetBrains, Neovim…
-nokker --server <url>           serveur (priorité : --server > $NOKKER_SERVER_URL > api_url de lokkal.json > http://127.0.0.1:8742)
-nokker --sound                  sonnette terminal sur les bulles (coupée par défaut)
-nokker --lang en|fr             langue de l'interface (sinon NOKKER_LANG, LC_ALL, LC_MESSAGES, LANG ; anglais par défaut)
+nokker update [--check]         updates the core (install.sh --update, otherwise env_file + compose pull/up), then replaces the binary;
+                                --check compares the installed version with the latest lokkal-v* release
+nokker acp                      ACP agent (Agent Client Protocol v1) on stdio, for an editor: Zed, JetBrains, Neovim…
+nokker --server <url>           server (priority: --server > $NOKKER_SERVER_URL > api_url in lokkal.json > http://127.0.0.1:8742)
+nokker --sound                  terminal bell on bubbles (off by default)
+nokker --lang en|fr             interface language (otherwise NOKKER_LANG, LC_ALL, LC_MESSAGES, LANG; English by default)
 ```
 
-### Langue
+### Language
 
-Libellés en **anglais par défaut**, en français quand la langue commence par `fr` : `--lang` > `NOKKER_LANG` > `LC_ALL` >
-`LC_MESSAGES` > `LANG` (la première variable non vide l'emporte, comme POSIX ; `C`/`POSIX` = anglais). Lignes d'outils,
-cartes, ligne de coût (`12.4k tokens · €0.03` / `12,4 k jetons · 0,03 €`), aides, `doctor`, `update`, `logs` et le pont
-ACP suivent. Le texte source est l'anglais (`t("Once")`, `src/i18n/index.ts`) ; les traductions vivent dans un seul
-catalogue (`src/i18n/fr.ts` et `fr-ops.ts`). `test/i18n.test.ts` refuse une clé sans traduction, une clé morte, des
-marqueurs `{n}` différents, une clé non littérale, et toute chaîne ou texte JSX français écrit en dur hors du catalogue.
-La suite de tests tourne en français (`NOKKER_LANG=fr` dans `vitest.config.ts`) ; les tests de l'anglais posent la langue.
+Labels are in **English by default**, in French when the language starts with `fr`: `--lang` > `NOKKER_LANG` > `LC_ALL` >
+`LC_MESSAGES` > `LANG` (the first non-empty variable wins, as in POSIX; `C`/`POSIX` = English). `NOKKER_LANG=en` forces
+English whatever the locale. Tool lines, cards, the cost line (`12.4k tokens · €0.03` / `12,4 k jetons · 0,03 €`), help
+texts, `doctor`, `update`, `logs` and the ACP bridge all follow. The source text is English (`t("Once")`,
+`src/i18n/index.ts`); translations live in a single catalogue (`src/i18n/fr.ts` and `fr-ops.ts`). `test/i18n.test.ts`
+rejects a key without a translation, a dead key, mismatched `{n}` markers, a non-literal key, and any French string or JSX
+text hard-coded outside the catalogue. The test suite runs in English; the French tests set the language themselves.
 
-`doctor`, `logs` et `update` expliquent proprement l'absence de docker ou de compose connu (pas de trace de pile) ;
-`logs --component cli` et `doctor` marchent sans docker.
+`doctor`, `logs` and `update` explain a missing docker or unknown compose cleanly (no stack trace); `logs --component cli`
+and `doctor` work without docker.
 
-### En session
+### In a session
 
-- Chaque appel d'outil : `⟳ patch src/app.py (écriture)` puis `✓ patch src/app.py 120 ms`. Effets en clair :
-  lecture / écriture / destructif / envoi / dépense / secret. Aperçu du résultat sur 3 lignes, replié : `o` (champ de
-  saisie vide) ou `/out` le déplie ; `/tools` déplie tout. Les sous-agents sont des lignes indentées.
-- Mode par défaut d'une session locale : `accept_edits` — `write_file`/`patch` dans le dossier passent sans carte ;
-  les commandes `terminal` (tests, build) demandent une carte locale ; le destructif une carte « forte-locale »
-  (sans « Toujours »). Une commande interdite (hardline : `rm -rf /`, mkfs…) est refusée sans carte : la ligne d'outil
-  s'affiche en refus.
-- **Carte « Action à approuver »** (outil, effet, commande ou chemin) : `1. Une fois · 2. Pour cette session ·
-  3. Toujours cette commande · 3b. Toujours les commandes qui commencent par …* · 4. Refuser` ; ↑/↓, chiffres, Entrée.
-  Pour une **commande de test** (`pytest|unittest|npm test|pnpm test|yarn test|go test|cargo test|make test|vitest|jest`)
-  l'ordre devient `1. Pour cette session · 2. Une fois · 3. Toujours… · 4. Refuser` (la touche affichée est la touche).
-  « 3 »/« 3b » montrent la règle exacte qui sera écrite dans vos réglages Nokker (`settings.json` du dossier d'état) avant que Entrée la
-  valide. Pas de 3 sur une carte forte ni destructive ; la règle envoyée est toujours l'une des `suggested_rules` de la carte.
-  Échap ne décide pas ; Ctrl+C = refus (puis annulation du tour) ; compte à rebours de 300 s puis refus « expirée » ;
-  une ligne résumé reste dans le fil.
-- Carte `strong` (web) : à décider sur téléphone ; la CLI ne signe plus avec sa clé logicielle (refusé par le noyau).
-- Ce qui est tapé pendant « connexion… » est mis en attente et envoyé une fois la session ouverte (`/confirm`, `/quit` et
-  `/help` s'exécutent tout de suite). L'en-tête tronque le titre du fil à 32 caractères ; le compte à rebours d'une carte
-  s'affiche « 24 h », « 59 min » puis « m:ss ».
-- Échap pendant un tour = `POST /v1/threads/{id}/cancel` (le noyau arrête le tour), pas seulement l'affichage.
-- **Coût par tour** : sous chaque tour, une ligne discrète tirée de l'événement `turn.cost` (publié juste avant
-  `turn.done`) : `· 12,4 k jetons · 0,03 €`, ou les jetons seuls quand le modèle n'a pas de prix dans le catalogue du
-  noyau (jamais un prix deviné ; la devise est celle du catalogue, plusieurs devises sont jointes par « + »). `/cost`
-  affiche la session (fil et sous-agents) et le jour UTC, lus sur `GET /v1/local/cost` ; ailleurs que sur un noyau local :
-  « non disponible sur ce serveur ». Mise en forme partagée avec le web : `formatCostLine` du SDK. En `-p --json`, le
-  champ `cost` recopie l'événement (sans `type`). Le mock publie un `turn.cost` en EUR à chaque tour.
-- Commandes : `/sessions` (dossiers), `/threads`, `/goto`, `/thread [titre]` (nouveau fil ; `/new` est réservé à la
-  frontière d'épisode du noyau), `/cost`, `/cancel`, `/out`, `/tools`, `/bubbles`, `/bubble`, `/send`, `/ask`, `/approvals`,
-  `/confirm <TOTP>`, `/login`, `/help`, `/quit`, et, **en session de code** (ailleurs : « disponible dans une session de
-  code (nokker dans un dossier) ») :
+- Each tool call: `⟳ patch src/app.py (write)` then `✓ patch src/app.py 120 ms`. Effects in plain words: read / write /
+  destructive / send / spend / secret. The result preview is folded to 3 lines: `o` (empty input field) or `/out`
+  unfolds it; `/tools` unfolds everything. Sub-agents are indented lines.
+- Default mode of a local session: `accept_edits` — `write_file`/`patch` inside the folder pass without a card; `terminal`
+  commands (tests, build) ask for a local card; destructive effects ask for a "strong-local" card (no "Always"). A
+  forbidden command (hardline: `rm -rf /`, mkfs…) is refused without a card: the tool line shows the refusal.
+- **"Action to approve" card** (tool, effect, command or path): `1. Once · 2. For this session · 3. Always this command ·
+  3b. Always commands starting with this prefix · 4. Reject`; ↑/↓, digits, Enter. For a **test command**
+  (`pytest|unittest|npm test|pnpm test|yarn test|go test|cargo test|make test|vitest|jest`) the order becomes
+  `1. For this session · 2. Once · 3. Always… · 4. Reject` (the key shown is the key to press). "3"/"3b" show the exact
+  rule that will be written to your Nokker settings (`settings.json` in the state folder) before Enter confirms it. No 3
+  on a strong or destructive card; the rule sent is always one of the card's `suggested_rules`. Esc does not decide;
+  Ctrl+C = reject (then cancels the turn); a 300 s countdown, then an "expired" rejection; a summary line stays in the
+  thread.
+- `strong` card (web): decided on the phone; the CLI no longer signs with its software key (refused by the core).
+- What you type during "connecting…" is queued and sent once the session is open (`/confirm`, `/quit` and `/help` run
+  immediately). The header truncates the thread title to 32 characters; a card's countdown shows "24 h", "59 min", then
+  "m:ss".
+- Esc during a turn = `POST /v1/threads/{id}/cancel` (the core stops the turn), not just the display.
+- **Cost per turn**: under each turn, a discreet line taken from the `turn.cost` event (published just before
+  `turn.done`): `· 12.4k tokens · €0.03`, or tokens only when the model has no price in the core's catalogue (never a
+  guessed price; the currency is the catalogue's, several currencies are joined with "+"). `/cost` shows the session
+  (thread and sub-agents) and the UTC day, read from `GET /v1/local/cost`; on anything but a local core: "not available
+  on this server". Formatting is shared with the web app: `formatCostLine` in the SDK. With `-p --json`, the `cost` field
+  copies the event (without `type`). The mock publishes a `turn.cost` in EUR on every turn.
+- Commands: `/sessions` (folders), `/threads`, `/goto`, `/thread [title]` (new thread; `/new` is reserved for the core's
+  episode boundary), `/cost`, `/cancel`, `/out`, `/tools`, `/bubbles`, `/bubble`, `/send`, `/ask`, `/approvals`,
+  `/confirm <TOTP>`, `/login`, `/help`, `/quit`, and, **in a code session** (elsewhere: "available in a code session
+  (nokker in a folder)"):
 
-  | Commande | Outil du noyau | Rendu |
+  | Command | Core tool | Rendering |
   |---|---|---|
-  | `/diff [hash\|n]` | `checkpoint_diff` | diff vert/rouge dans le fil, tronqué à 300 lignes (mention du reste) |
-  | `/checkpoints` | `checkpoint_list` | hash court, heure, raison, fichiers (n°1 = le plus récent) |
-  | `/rollback [hash\|n]` | `checkpoint_restore {safe:true}` | carte « Action à approuver » (même carte qu'une commande destructive), puis fichiers restaurés / conservés ; sans argument : le dernier point |
-  | `/skills [nom]` | `skill_list` / `skill_view` | confiance des skills du dépôt en tête, puis tableau par famille (`[project]` = skill du dépôt) / corps Markdown rendu |
-  | `/skills trust` | `POST /v1/local/skills/trust` | rouvre la carte de confiance (voir plus bas) |
-  | `/plan` | `todo` | liste à puces avec état (`[x]` fait, `[~]` en cours, `[ ]` à faire) |
-  | `/agents [id]` | `delegate_status` + événements `subagent.*` | id, état, (arrière-plan), but tronqué, dernier outil, durée, commits, résultat ; avec un id (ou un préfixe) : tout, résultat complet compris |
-  | `/agents cancel <id\|all>` | `delegate_cancel` / `POST /v1/threads/{id}/cancel` | `all` arrête tous les sous-agents du fil (et le tour en cours) ; un seul : voir « Limites » |
-  | `/memory [note]` | `memory {action: list\|view}` + `GET /v1/local/memory` | notes apprises (type, portée, origine, toujours dans le contexte ou rappelée), sections des fichiers d'instructions, état de la mémoire longue / une note ou une section |
-  | `/memory forget <note>` | `memory {action: forget}` | carte de confirmation (y/o/Entrée, n/Échap), puis l'oubli ; en mode `default` l'oubli (WRITE) passe aussi par une carte du noyau ; une section d'un fichier ne s'oublie pas (on modifie le fichier) |
+  | `/diff [hash\|n]` | `checkpoint_diff` | green/red diff in the thread, truncated to 300 lines (the rest is mentioned) |
+  | `/checkpoints` | `checkpoint_list` | short hash, time, reason, files (no. 1 = the most recent) |
+  | `/rollback [hash\|n]` | `checkpoint_restore {safe:true}` | "Action to approve" card (the same card as a destructive command), then restored / kept files; without an argument: the latest checkpoint |
+  | `/skills [name]` | `skill_list` / `skill_view` | trust state of the repository skills first, then a table by family (`[project]` = repository skill) / rendered Markdown body |
+  | `/skills trust` | `POST /v1/local/skills/trust` | reopens the trust card (see below) |
+  | `/plan` | `todo` | bullet list with state (`[x]` done, `[~]` in progress, `[ ]` to do) |
+  | `/agents [id]` | `delegate_status` + `subagent.*` events | id, state, (background), truncated goal, last tool, duration, commits, result; with an id (or a prefix): everything, including the full result |
+  | `/agents cancel <id\|all>` | `delegate_cancel` / `POST /v1/threads/{id}/cancel` | `all` stops every sub-agent of the thread (and the turn in progress); a single one: see "Limits" |
+  | `/memory [note]` | `memory {action: list\|view}` + `GET /v1/local/memory` | learned notes (kind, scope, origin, always in context or recalled), sections of the instruction files, state of the long-term memory / one note or section |
+  | `/memory forget <note>` | `memory {action: forget}` | confirmation card (y/Enter, n/Esc), then the forget; in `default` mode the forget (WRITE) also goes through a core card; a section of a file cannot be forgotten (edit the file) |
 
-### Skills du dépôt : carte de confiance
+### Repository skills: trust card
 
-Les skills d'un dépôt (`.nokker/skills/<famille>/<skill>/SKILL.md`) sont des consignes écrites par un tiers : le noyau les
-ignore tant que l'utilisateur n'a pas fait confiance à CE dossier et à CETTE empreinte (sha256 de l'arbre entier). Quand
-la réponse de `POST /v1/local/sessions` porte `skills.project: "untrusted"`, ou à l'événement `skill.untrusted` (l'arbre a
-changé pendant la session), la CLI ouvre une carte « Faire confiance aux skills de ce dépôt ? » : racine, nombre de skills,
-empreinte complète. `y` (ou `o`) = `POST /v1/local/skills/trust {thread_id, sha256}` (409 : l'arbre a changé depuis la
-lecture, une nouvelle carte suit) ; Entrée ne vaut JAMAIS confiance, et la carte ignore les touches de ses 500 premières
-ms (une commande en train d'être tapée ne lui répond pas) ; `n`/Échap = rien (les skills restent ignorés, `/skills trust` plus tard). Une carte par
-empreinte. Noyau sans skills de dépôt (drapeau `local.project_skills` éteint : pas de clé `skills`) ou session reprise
-(le noyau ne donne l'état qu'à l'ouverture) : `/skills` le dit.
+A repository's skills (`.nokker/skills/<family>/<skill>/SKILL.md`) are instructions written by a third party: the core
+ignores them until the user has trusted THIS folder and THIS fingerprint (sha256 of the whole tree). When the
+`POST /v1/local/sessions` response carries `skills.project: "untrusted"`, or on the `skill.untrusted` event (the tree
+changed during the session), the CLI opens a "Trust this repository's skills?" card: root, number of skills, full
+fingerprint. `y` = `POST /v1/local/skills/trust {thread_id, sha256}` (409: the tree changed since it was read, a new card
+follows); Enter NEVER means trust, and the card ignores keys during its first 500 ms (a command being typed does not
+answer it); `n`/Esc = nothing (the skills stay ignored, `/skills trust` later). One card per fingerprint. A core without
+repository skills (`local.project_skills` flag off: no `skills` key) or a resumed session (the core only gives the state
+when the session opens): `/skills` says so.
 
-### Route locale d'appel d'outil
+### Local tool-call route
 
-`POST /v1/local/tools/call {thread_id, name, arguments}` (jeton local ; fil de session locale seulement, sinon 404).
-Liste blanche du noyau `checkpoint_list|checkpoint_diff|checkpoint_create|checkpoint_restore|skill_list|skill_view|todo`,
-plus `memory` (drapeau `local.project_memory`) et `delegate_status` (serveur local) ; autre nom (dont `delegate_cancel`) :
-403 ; `todo` est en lecture seule : `arguments` doit être `{}`, sinon 400 ; `delegate_status` sans `wait_s`, sinon 400 ;
-409 si un tour est en cours sur le fil, la CLI affiche « un tour est en cours, réessayez après » (pour `/agents`, l'état
-vient alors des événements).
-`200 {content, is_error}` si l'outil est autorisé (READ/WRITE) ; un refus par règle ou par le mode plan est aussi un `200 {content, is_error: true}` ; `202 {approval_id}` si l'effet exige une carte
-(`checkpoint_restore` : DESTRUCTIVE) : la carte suit le chemin normal (`approval.requested`, `GET /v1/local/approvals`,
-`decide`) et le résultat (rejet de la carte compris : `is_error: true`) arrive dans UN événement `tool.result {thread_id, approval_id, content, is_error}`, sans tour modèle ni autre événement.
-`content` est le texte du résultat tel quel (formes mesurées sur le noyau) : `checkpoint_list` = liste JSON NUE
-`[{hash, short_hash, timestamp, reason, files_changed, insertions, deletions, thread_id?, turn_index?, tool?}]` (les trois
-derniers : noyau du 25.10, quand le point est relié à un tour ; `/checkpoints` affiche alors « tour n ») (la CLI tolère aussi `{checkpoints}`) ;
-`checkpoint_diff` = `{stat, diff, message?}` ; `checkpoint_restore` = `{success, restored_files, skipped_user_edits}` ;
-`skill_list` = `{skills:[…]}` ; `skill_view` = Markdown ; `todo` = `{todos, revision, summary}` ; `memory list` =
-`{project, notes:[{name, kind, scope, title, origin, derived_from, created, links, in_core}], sources:[{path, sections:[{name,
-title, in_core}]}]}`, `view` = la note (`text`) ou la section (`source`), `forget` = `{forgotten}` ; `delegate_status` =
-`{children:[{child_id, thread_id, goal, elapsed_s, status: queued|running|stopping|completed|failed|interrupted,
-last_tool?, exit_reason?, summary?, worktree?, tokens?, cost?}], running, finished, unknown?}`. `checkpoint_create` répond
-202 (carte) en attendant un 200 en accept_edits : la CLI gère les deux. La carte d'un appel direct a `channel: "local-direct"` ;
-le `tool.result` n'a pas de `call_id` (apparié par `approval_id`). Erreurs : 400 `arguments invalides (todo : lecture seule,
-sans argument)`, 403 `outil non appelable directement : <nom>` (la CLI affiche `error.message` tel quel). Le chemin vit dans
-`LOCAL_TOOL_CALL_PATH` (`packages/sdk/src/client.ts`) ; SDK : `callLocalTool(threadId, name, args)`. Le mock simule 3 points
-de retour, 4 skills et un plan de 3 étapes.
+`POST /v1/local/tools/call {thread_id, name, arguments}` (local token; local session threads only, otherwise 404). Core
+allow-list `checkpoint_list|checkpoint_diff|checkpoint_create|checkpoint_restore|skill_list|skill_view|todo`, plus
+`memory` (`local.project_memory` flag) and `delegate_status` (local server); any other name (including `delegate_cancel`):
+403; `todo` is read-only: `arguments` must be `{}`, otherwise 400; `delegate_status` without `wait_s`, otherwise 400; 409 if
+a turn is running on the thread, the CLI shows "a turn is in progress, try again afterwards" (for `/agents`, the state then
+comes from the events).
+`200 {content, is_error}` if the tool is allowed (READ/WRITE); a refusal by a rule or by plan mode is also a
+`200 {content, is_error: true}`; `202 {approval_id}` if the effect needs a card (`checkpoint_restore`: DESTRUCTIVE): the
+card follows the normal path (`approval.requested`, `GET /v1/local/approvals`, `decide`) and the result (a rejected card
+included: `is_error: true`) arrives in ONE `tool.result {thread_id, approval_id, content, is_error}` event, with no model
+turn and no other event.
+`content` is the tool's result text as is (shapes measured on the core): `checkpoint_list` = a BARE JSON list
+`[{hash, short_hash, timestamp, reason, files_changed, insertions, deletions, thread_id?, turn_index?, tool?}]` (the last
+three: core of 25.10, when the checkpoint is tied to a turn; `/checkpoints` then shows "turn n") (the CLI also accepts
+`{checkpoints}`); `checkpoint_diff` = `{stat, diff, message?}`; `checkpoint_restore` =
+`{success, restored_files, skipped_user_edits}`; `skill_list` = `{skills:[…]}`; `skill_view` = Markdown; `todo` =
+`{todos, revision, summary}`; `memory list` = `{project, notes:[{name, kind, scope, title, origin, derived_from, created,
+links, in_core}], sources:[{path, sections:[{name, title, in_core}]}]}`, `view` = the note (`text`) or the section
+(`source`), `forget` = `{forgotten}`; `delegate_status` = `{children:[{child_id, thread_id, goal, elapsed_s, status:
+queued|running|stopping|completed|failed|interrupted, last_tool?, exit_reason?, summary?, worktree?, tokens?, cost?}],
+running, finished, unknown?}`. `checkpoint_create` answers 202 (card) until it becomes a 200 in accept_edits: the CLI
+handles both. The card of a direct call has `channel: "local-direct"`; the `tool.result` has no `call_id` (matched by
+`approval_id`). Errors: 400 (invalid arguments) and 403 (tool not callable directly): the CLI shows `error.message` as is.
+The path lives in `LOCAL_TOOL_CALL_PATH` (`packages/sdk/src/client.ts`); SDK: `callLocalTool(threadId, name, args)`. The
+mock simulates 3 checkpoints, 4 skills and a 3-step plan.
 
-### Mode non interactif et erreurs d'usage
+### Non-interactive mode and usage errors
 
-Un argument ou drapeau inconnu (`nokker status`) sort avec « argument inconnu : … (nokker --help) » sur stderr, code 2. Sans
-terminal (stdin ou stdout non-TTY) la TUI ne démarre jamais : « mode interactif impossible sans terminal ; utilisez nokker
--p "…" », code 2.
+An unknown argument or flag (`nokker status`) exits with "unknown argument: … (nokker --help)" on stderr, code 2. Without
+a terminal (stdin or stdout not a TTY) the TUI never starts: "interactive mode needs a terminal; use nokker -p "…"",
+code 2.
 
-Dans une session locale, personne ne peut décider une carte : tout effet que le noyau n'a pas déjà couvert par une
-règle est **refusé par défaut** (mode sans surveillance) et listé dans `refused` (`tool`, `effect`, `target`).
-Les cartes d'un fil ordinaire restent `pending` (`pending_approvals`).
+In a local session nobody can decide a card: any effect the core has not already covered with a rule is **refused by
+default** (unattended mode) and listed in `refused` (`tool`, `effect`, `target`). Cards of an ordinary thread stay
+`pending` (`pending_approvals`).
 
-## Éditeurs : `nokker acp`
+## Editors: `nokker acp`
 
-`nokker acp` parle l'**Agent Client Protocol** (v1, la version stable du SDK officiel `@agentclientprotocol/sdk` 2.0.2 :
-JSON-RPC 2.0, un message JSON par ligne sur stdin/stdout ; rien d'autre sur stdout, le journal va dans `cli.log`). Il fait
-le pont vers l'API locale du noyau, avec le même jeton que la CLI :
+`nokker acp` speaks the **Agent Client Protocol** (v1, the stable version of the official SDK `@agentclientprotocol/sdk`
+2.0.2: JSON-RPC 2.0, one JSON message per line on stdin/stdout; nothing else on stdout, the log goes to `cli.log`). It
+bridges to the core's local API, with the same token as the CLI:
 
-| ACP | Noyau |
+| ACP | Core |
 |---|---|
-| `initialize` | protocole 1 ; `loadSession`, images, contexte embarqué, `session/list` ; aucune méthode d'authentification (jeton local) |
-| `session/new {cwd}` | `POST /v1/local/sessions {cwd}` (fil neuf du dossier de l'éditeur) ; hors racines : erreur `-32602` claire |
-| `session/load`, `session/list` | `GET /v1/local/sessions`, historique rejoué par `GET /v1/threads/{id}` |
-| `session/prompt` | `POST /v1/chat/completions` en flux → `agent_message_chunk` (ajouts seulement) ; images → `attachments` (§7.6) ; fichier embarqué → bloc de contexte ; lien de fichier → `@chemin` |
-| `tool_call` / `tool_call_update` | `tool.call` / `tool.result` : `kind` d'après l'outil et l'effet, `locations`, `rawInput` caviardé, contenu `diff` pour `patch`/`write_file` (fichier lu avant et après, sinon passage remplacé) |
-| `session/request_permission` | carte locale (`GET /v1/local/approvals`), options = mêmes choix que la CLI (`allow_once` = une fois, `allow_always` = pour la session / toujours + règle, `reject_once` = refuser), décision `POST /v1/local/approvals/{id}/decide` ; une seule décision par carte, 25 au plus par tour ; demande retirée par `$/cancel_request` si la carte est décidée ailleurs ou expire |
-| carte forte | jamais proposée à l'éditeur : l'appel dit où elle attend — « Action forte : elle attend ton téléphone » si le noyau l'a déposée chez nokker.ai (`forwarded`, `approval.forwarded`, machine liée), sinon « Action forte : à décider dans le terminal (`nokker`) » ; le texte change si elle part au téléphone après coup |
-| `session/cancel` | `POST /v1/threads/{id}/cancel`, réponse `stopReason: "cancelled"` |
-| `/cost`, `/diff [hash]`, `/plan`, `/checkpoints` | commandes annoncées (`available_commands_update`), sans tour modèle (`GET /v1/local/cost`, `POST /v1/local/tools/call`) ; `/plan` → mise à jour `plan` |
+| `initialize` | protocol 1; `loadSession`, images, embedded context, `session/list`; no authentication method (local token) |
+| `session/new {cwd}` | `POST /v1/local/sessions {cwd}` (new thread for the editor's folder); outside the roots: a clear `-32602` error |
+| `session/load`, `session/list` | `GET /v1/local/sessions`, history replayed from `GET /v1/threads/{id}` |
+| `session/prompt` | streamed `POST /v1/chat/completions` → `agent_message_chunk` (additions only); images → `attachments` (§7.6); embedded file → context block; file link → `@path` |
+| `tool_call` / `tool_call_update` | `tool.call` / `tool.result`: `kind` from the tool and the effect, `locations`, redacted `rawInput`, `diff` content for `patch`/`write_file` (file read before and after, otherwise the replaced passage) |
+| `session/request_permission` | local card (`GET /v1/local/approvals`), options = the same choices as the CLI (`allow_once` = once, `allow_always` = for the session / always + rule, `reject_once` = reject), decision `POST /v1/local/approvals/{id}/decide`; one decision per card, at most 25 per turn; the request is withdrawn with `$/cancel_request` if the card is decided elsewhere or expires |
+| strong card | never offered to the editor: the call says where it waits — "Strong action: it waits for your phone." if the core forwarded it to nokker.ai (`forwarded`, `approval.forwarded`, linked machine), otherwise "Strong action: decide it in the terminal (`nokker`)."; the text changes if it goes to the phone afterwards |
+| `session/cancel` | `POST /v1/threads/{id}/cancel`, answer `stopReason: "cancelled"` |
+| `/cost`, `/diff [hash]`, `/plan`, `/checkpoints` | announced commands (`available_commands_update`), without a model turn (`GET /v1/local/cost`, `POST /v1/local/tools/call`); `/plan` → `plan` update |
 
-Une demande ACP dure jusqu'au bout de ses suites : sur le noyau, une carte rend la main au modèle (« en attente
-d'approbation ») ; la décision répond tout de suite (`202`, `continuation: running|queued`) et le noyau range l'outil
-puis un tour de suite dans la file du fil, derrière le tour qui a posé la carte (un refus ne lance rien :
-`200`, `continuation: none`). L'appel approuvé se ferme sur le `tool.result` de l'exécuteur (même `call_id`, avec
-`approval_id`) : sa vraie sortie. `session/prompt` ne répond qu'une fois plus aucune carte ouverte, aucune décision en
-vol, aucun outil approuvé sans résultat ni tour de suite en cours. Ligne de coût sous chaque tour (`_12,4 k jetons · 0,03 €_`, coupée par `NOKKER_ACP_COST_LINE=0`) et coût du
-tour dans `_meta.nokker.cost` de la réponse. Les serveurs MCP proposés par l'éditeur sont ignorés (les connecteurs vivent
-dans le noyau).
+An ACP request lasts until all its follow-ups are done: on the core, a card hands control back to the model ("waiting for
+approval"); the decision answers immediately (`202`, `continuation: running|queued`) and the core queues the tool, then a
+follow-up turn, on the thread, behind the turn that raised the card (a rejection starts nothing: `200`,
+`continuation: none`). The approved call closes on the executor's `tool.result` (same `call_id`, with `approval_id`): its
+real output. `session/prompt` only answers once no card is open, no decision is in flight, and no approved tool is
+waiting for its result or follow-up turn. A cost line under each turn (`_12.4k tokens · €0.03_`, turned off with
+`NOKKER_ACP_COST_LINE=0`) and the turn's cost in `_meta.nokker.cost` of the answer. MCP servers offered by the editor are
+ignored (connectors live in the core).
 
-**Zed** (`agent: open settings` → External Agents → Add Custom Agent, ou directement dans `settings.json`) :
+**Zed** (`agent: open settings` → External Agents → Add Custom Agent, or directly in `settings.json`):
 
 ```json
 {
@@ -168,35 +169,37 @@ dans le noyau).
 }
 ```
 
-Puis « New Thread » → Nokker dans le panneau Agent. Chemin absolu si `nokker` n'est pas dans le `PATH` de Zed
-(`~/.nokker/bin/nokker` avec l'installeur) ; autre noyau : `"args": ["acp", "--server", "http://127.0.0.1:18742"]`.
-Journal du protocole côté Zed : `dev: open acp logs` ; côté Nokker : `nokker logs --component cli`.
+Then "New Thread" → Nokker in the Agent panel. Use an absolute path if `nokker` is not in Zed's `PATH`
+(`~/.nokker/bin/nokker` with the installer); another core: `"args": ["acp", "--server", "http://127.0.0.1:18742"]`.
+Protocol log on the Zed side: `dev: open acp logs`; on the Nokker side: `nokker logs --component cli`.
 
-## Connexion
+## Sign-in
 
-1. Serveur local (127.0.0.1/localhost) et jeton local présent (à `token_path` de lokkal.json, sinon `~/.config/nokker/local-token`) : le jeton est présenté en
-   `Authorization: Bearer` (aucun enrôlement ; vérifié par un appel, sinon repli sur 2).
-2. Sinon, flux d'appareil : clé P-256 (trousseau ou fichier 0600), enrôlement avec `user` déclaré
-   (`$NOKKER_USER`, sinon l'utilisateur du système). Si l'appareil est `pending`, le **code** s'affiche et la CLI
-   attend la confirmation (sur l'hôte, ou `/confirm <TOTP>` / `NOKKER_TOTP` en `-p`), puis ouvre la session de 12 h.
+1. Local server (127.0.0.1/localhost) and a local token present (at `token_path` in lokkal.json, otherwise
+   `~/.config/nokker/local-token`): the token is sent as `Authorization: Bearer` (no enrolment; checked by a call,
+   otherwise falls back to 2).
+2. Otherwise, device flow: P-256 key (keychain or 0600 file), enrolment with a declared `user` (`$NOKKER_USER`, otherwise
+   the system user). If the device is `pending`, the **code** is shown and the CLI waits for the confirmation (on the
+   host, or `/confirm <TOTP>` / `NOKKER_TOTP` with `-p`), then opens the 12 h session.
 
-## Variables et fichiers
+## Variables and files
 
-| Nom | Rôle |
+| Name | Role |
 |---|---|
-| `NOKKER_SERVER_URL` | serveur (défaut `http://127.0.0.1:8742` ; le mock de dev tourne sur 4310) |
-| `NOKKER_CONFIG_DIR_OVERRIDE` | remplace `~/.config/nokker` (tests, isolation) |
-| `NOKKER_USER` | utilisateur déclaré à l'enrôlement d'appareil |
-| `NOKKER_TOTP` | confirme l'appareil tout de suite en mode `-p` |
-| `token_path` (lokkal.json) | jeton local écrit par le noyau (0600), ex. `~/.nokker/state/local-token` ; à défaut `~/.config/nokker/local-token` |
-| `settings.json` (dossier d'état du noyau) | `{"permissions": {"mode", "allow", "ask", "deny"}}` ; « Toujours » y ajoute une règle `allow` (avec le compose : `~/.nokker/state/settings.json`) |
-| `~/.config/nokker/lokkal.json` (Windows : `%USERPROFILE%\.config\nokker`, Linux/macOS : `$XDG_CONFIG_HOME/nokker` si défini) | écrit en 0600 par install.sh (schéma ci-dessous ; `install_dir`, et `wsl_distro` sous Windows) |
-| `~/.config/nokker/cli.log` | journal du client (`nokker logs --component cli`) |
+| `NOKKER_SERVER_URL` | server (default `http://127.0.0.1:8742`; the dev mock runs on 4310) |
+| `NOKKER_LANG` | `en` or `fr`; takes precedence over the system locale (`--lang` takes precedence over it) |
+| `NOKKER_CONFIG_DIR_OVERRIDE` | replaces `~/.config/nokker` (tests, isolation) |
+| `NOKKER_USER` | user declared at device enrolment |
+| `NOKKER_TOTP` | confirms the device immediately in `-p` mode |
+| `token_path` (lokkal.json) | local token written by the core (0600), e.g. `~/.nokker/state/local-token`; otherwise `~/.config/nokker/local-token` |
+| `settings.json` (core state folder) | `{"permissions": {"mode", "allow", "ask", "deny"}}`; "Always" adds an `allow` rule to it (with the compose: `~/.nokker/state/settings.json`) |
+| `~/.config/nokker/lokkal.json` (Windows: `%USERPROFILE%\.config\nokker`, Linux/macOS: `$XDG_CONFIG_HOME/nokker` if set) | written as 0600 by install.sh (schema below; `install_dir`, and `wsl_distro` on Windows) |
+| `~/.config/nokker/cli.log` | client log (`nokker logs --component cli`) |
 
 ### lokkal.json
 
-Le dossier de config est le même sur les 3 OS (celui de l'installeur). Repli en LECTURE sur les anciens emplacements (macOS
-`~/Library/Application Support/nokker`, Windows `%APPDATA%\nokker`) ; `doctor` avertit s'il y trouve un fichier.
+The config folder is the same on all 3 OSes (the installer's). Old locations are still READ as a fallback (macOS
+`~/Library/Application Support/nokker`, Windows `%APPDATA%\nokker`); `doctor` warns if it finds a file there.
 
 ```json
 {"compose": "/abs/docker-compose.yml", "project": "nokker", "version": "0.1.0", "core_service": "core",
@@ -204,78 +207,81 @@ Le dossier de config est le même sur les 3 OS (celui de l'installeur). Repli en
  "token_path": "/abs/.nokker/state/local-token", "env_file": "/abs/.nokker/.env", "install_dir": "/abs/.nokker"}
 ```
 
-Lokkal.json a 9 clés : les 8 ci-dessus (obligatoires ; compose, token_path, env_file absolus) plus `install_dir` (chemin de `~/.nokker`, toujours écrit par install.sh, requis sous WSL), et `wsl_distro` en option (Windows). Une clé manquante donne un message clair
-(`doctor`, `logs`, `update`). Le port de l'API n'est pas fixe (`NOKKER_API_PORT`) : install.sh écrit le vrai dans
-`api_url`. `doctor` contrôle aussi `GET <web_url>/healthz`. `logs` = `docker compose -p <project> -f <compose> logs <core_service>`.
+lokkal.json has 9 keys: the 8 above (required; compose, token_path, env_file absolute) plus `install_dir` (path of
+`~/.nokker`, always written by install.sh, required under WSL), and the optional `wsl_distro` (Windows). A missing key
+gives a clear message (`doctor`, `logs`, `update`). The API port is not fixed (`NOKKER_API_PORT`): install.sh writes the
+real one into `api_url`. `doctor` also checks `GET <web_url>/healthz`. `logs` = `docker compose -p <project> -f <compose>
+logs <core_service>`.
 
 ### Windows (WSL 2)
 
-Lokkal tourne dans WSL 2 ; `nokker.exe` est dans `%LOCALAPPDATA%\Nokker\bin`, `lokkal.json` dans
-`%USERPROFILE%\.config\nokker\`. Avec `"wsl_distro": "<distro>"` : `compose`, `env_file` et `install_dir` sont des
-chemins Linux, `token_path` un chemin UNC (`\\wsl.localhost\<distro>\home\…\local-token`) lu tel quel, et
-`update`, `logs` et le contrôle docker de `doctor` passent par `wsl.exe -d <distro> -- …`
-(`update` = `wsl.exe -d <distro> -- sh <install_dir>/install.sh --update`). `api_url`/`web_url` en 127.0.0.1 marchent
-tels quels. Ailleurs, `install_dir` (`~/.nokker`) est aussi écrit : `<install_dir>/install.sh --update` est préféré.
+Lokkal runs in WSL 2; `nokker.exe` is in `%LOCALAPPDATA%\Nokker\bin`, `lokkal.json` in `%USERPROFILE%\.config\nokker\`.
+With `"wsl_distro": "<distro>"`: `compose`, `env_file` and `install_dir` are Linux paths, `token_path` is a UNC path
+(`\\wsl.localhost\<distro>\home\…\local-token`) read as is, and `update`, `logs` and the docker check of `doctor` go
+through `wsl.exe -d <distro> -- …` (`update` = `wsl.exe -d <distro> -- sh <install_dir>/install.sh --update`).
+`api_url`/`web_url` on 127.0.0.1 work as is. Elsewhere, `install_dir` (`~/.nokker`) is also written:
+`<install_dir>/install.sh --update` is preferred.
 
 ### update
 
-`nokker update` : `install.sh --update` s'il est à côté du compose (ou `~/.nokker/install.sh`), sinon réécrit
-`NOKKER_VERSION=<cible>` dans `env_file` puis `docker compose -p … pull && up -d`, attend `/healthz`. Il finit par
-remplacer le binaire par `nokker-<os>-<arch>` de la release `lokkal-v<version>` : `.sha256` (sortie `sha256sum`)
-OBLIGATOIRE, `cosign verify-blob --bundle` en plus si `cosign` est installé (échec = pas de remplacement) ; écrit à côté
-puis `rename` atomique (Windows : `nokker.exe.new`). Sans réseau, `--check` le dit et sort normalement.
+`nokker update`: `install.sh --update` if it sits next to the compose (or `~/.nokker/install.sh`), otherwise it rewrites
+`NOKKER_VERSION=<target>` in `env_file`, then runs `docker compose -p … pull && up -d` and waits for `/healthz`. It ends by
+replacing the binary with `nokker-<os>-<arch>` from the `lokkal-v<version>` release: `.sha256` (`sha256sum` output)
+REQUIRED, plus `cosign verify-blob --bundle` if `cosign` is installed (failure = no replacement); written next to it, then
+an atomic `rename` (Windows: `nokker.exe.new`). Without a network, `--check` says so and exits normally.
 
-Règles : `outil` ou `outil(motif)`, motif fnmatch sensible à la casse comparé à la commande entière (`terminal`) ou
-au chemin normalisé (`write_file`, `read_file`, `patch`). Ordre du noyau : deny, plan, ask, allow, mode.
+Rules: `tool` or `tool(pattern)`, a case-sensitive fnmatch pattern compared with the whole command (`terminal`) or with the
+normalised path (`write_file`, `read_file`, `patch`). Core order: deny, plan, ask, allow, mode.
 
-## Binaire autonome
+## Standalone binary
 
 ```
 pnpm -C apps/cli build:bin                 # dist/nokker-{linux-x64,linux-arm64,darwin-x64,darwin-arm64,windows-x64.exe,windows-arm64.exe} + .sha256
 bash apps/cli/scripts/build-bin.sh linux-x64
 ```
 
-`bun build --compile` (bun ≥ 1.4, `$BUN` ou `~/.bun/bin/bun`) via `scripts/build-bin.ts` : `react-devtools-core`
-(import statique d'Ink, inutile hors DEV) est remplacé par un module vide ; la version est figée à la compilation
-(`$NOKKER_RELEASE_VERSION`, sinon package.json). install.sh le pose dans `~/.nokker/bin/nokker`.
+`bun build --compile` (bun ≥ 1.4, `$BUN` or `~/.bun/bin/bun`) via `scripts/build-bin.ts`: `react-devtools-core` (a static
+import of Ink, useless outside DEV) is replaced by an empty module; the version is fixed at compile time
+(`$NOKKER_RELEASE_VERSION`, otherwise package.json). install.sh puts it in `~/.nokker/bin/nokker`.
 
-## Développer
+## Development
 
 ```
-pnpm -C packages/mock-server dev       # MOCK_PORT=4320 NOKKER_CONFIG_DIR_OVERRIDE=/tmp/cfg pour ne rien écraser
+pnpm -C packages/mock-server dev       # MOCK_PORT=4320 NOKKER_CONFIG_DIR_OVERRIDE=/tmp/cfg to overwrite nothing
 pnpm -C apps/cli start -- --server http://127.0.0.1:4320
 pnpm -C apps/cli typecheck && pnpm -C apps/cli test
 ```
 
-Mock : `MOCK_LOCAL_ROOTS` (racines séparées par `:`, défaut tout accepter), `MOCK_MIN_CLIENT_VERSION`,
-`MOCK_DEVICE_PENDING=1` (appareils `pending` jusqu'au TOTP `000000`), `MOCK_PROJECT_MEMORY=0` (outil `memory` éteint, comme
-le drapeau du noyau), `MOCK_PROJECT_SKILLS=1` (skills du dépôt lus, empreinte calculée comme le noyau, confiance dans
-`settings.json`). Dans une session locale, « corrige le test X » déclenche read_file → search_files → patch → pytest →
-`rm -rf build` (carte) ; « rm -rf / » déclenche une carte hardline ; « sous-agent » déclenche un sous-agent de premier
-plan, « en arrière-plan » / « background » deux sous-agents de fond (`delegate_status`, annulation du fil).
+Mock: `MOCK_LOCAL_ROOTS` (roots separated by `:`, accepts everything by default), `MOCK_MIN_CLIENT_VERSION`,
+`MOCK_DEVICE_PENDING=1` (devices stay `pending` until TOTP `000000`), `MOCK_PROJECT_MEMORY=0` (`memory` tool off, like the
+core flag), `MOCK_PROJECT_SKILLS=1` (repository skills read, fingerprint computed like the core, trust stored in
+`settings.json`). In a local session, "fix the test X" (or the French "corrige le test X") triggers read_file →
+search_files → patch → pytest → `rm -rf build` (card); "rm -rf /" triggers a hardline card; "sub-agent" (or "sous-agent")
+triggers a foreground sub-agent, "background" (or "en arrière-plan") two background sub-agents (`delegate_status`,
+cancelling the thread).
 
-### Limites (routes du noyau manquantes)
+### Limits (missing core routes)
 
-- Arrêter UN sous-agent de fond : `delegate_cancel` n'est pas dans la liste blanche de `POST /v1/local/tools/call` (403),
-  et `POST /v1/threads/{id}/cancel` ne reconnaît pas un fil `<parent>/sa-<id>` (l'id contient un `/`). La CLI essaie
-  `delegate_cancel`, puis propose `/agents cancel all`.
-- État de confiance des skills d'une session reprise : donné seulement par la réponse d'ouverture. Rouvrir le fil
-  (`POST /v1/local/sessions {cwd, resume}`, accepté par le noyau du 25.10) le rendrait, mais remplace la source de code du
-  fil (bac à sable) : la CLI ne le fait pas et l'affiche « inconnu ».
+- Stopping ONE background sub-agent: `delegate_cancel` is not in the allow-list of `POST /v1/local/tools/call` (403), and
+  `POST /v1/threads/{id}/cancel` does not recognise a `<parent>/sa-<id>` thread (the id contains a `/`). The CLI tries
+  `delegate_cancel`, then suggests `/agents cancel all`.
+- Trust state of the skills of a resumed session: only given by the response that opens it. Reopening the thread
+  (`POST /v1/local/sessions {cwd, resume}`, accepted by the core of 25.10) would return it, but replaces the thread's code
+  source (sandbox): the CLI does not do it and shows it as "unknown".
 
-### Pilote pty de mesure (`test/pty_drive.py`)
+### Measuring pty driver (`test/pty_drive.py`)
 
-Mode pas à pas (`pty_drive.py '<json>'`, voir l'en-tête) et mode scénario, qui joue une tâche de bout en bout sans jamais
-rejouer une décision :
+Step-by-step mode (`pty_drive.py '<json>'`, see the header) and scenario mode, which plays a task end to end without ever
+replaying a decision:
 
 ```
-python3 apps/cli/test/pty_drive.py --task "corrige le test add" --server http://127.0.0.1:4320 \
-  --cwd /work/projet --config-dir /tmp/cfg --max-decisions 3 --decide 1
+python3 apps/cli/test/pty_drive.py --task "fix the test add" --server http://127.0.0.1:4320 \
+  --cwd /work/project --config-dir /tmp/cfg --max-decisions 3 --decide 1
 # -> {"cards":[{"t":3.1,"tool":"terminal","command":"pytest -q …"}],"turns_user":1,"duration_s":9.4,"final_text":"…","bounded":false,"error":null}
 ```
 
-Les cartes sont détectées UNIQUEMENT par `GET /v1/local/approvals` (nouvel id = une décision, jamais deux pour le même id) ;
-le rendu de la carte est attendu sur le delta d'écran depuis la détection, jamais sur le tampon cumulé ; au-delà de
-`--max-decisions` il s'arrête (`bounded: true`) sans décider ; il termine quand plus aucune carte n'attend et que l'écran est
-muet depuis `--idle` s (12). `--decide` est la touche envoyée (1 ou 2 : l'ordre dépend de la carte, cf. commandes de test).
-`turns_user` et `final_text` sont lus par `GET /v1/threads/{id}`. Ne jamais l'appeler contre le vrai noyau sans borne.
+Cards are detected ONLY through `GET /v1/local/approvals` (a new id = one decision, never two for the same id); the card's
+rendering is awaited on the screen delta since the detection, never on the cumulative buffer; beyond `--max-decisions` it
+stops (`bounded: true`) without deciding; it ends when no card is waiting any more and the screen has been silent for
+`--idle` s (12). `--decide` is the key sent (1 or 2: the order depends on the card, see test commands). `turns_user` and
+`final_text` are read from `GET /v1/threads/{id}`. Never point it at the real core without a bound.

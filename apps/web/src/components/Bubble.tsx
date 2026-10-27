@@ -2,7 +2,8 @@ import React, { useLayoutEffect, useRef } from "react";
 import type { Bubble as BubbleT, Thread, TransferMode } from "@nokker-apps/sdk";
 import { bubbleTheme } from "@nokker-apps/brand";
 import { Icon } from "../icons.js";
-import { BubbleBody, statusLabel, useNow } from "../bubbles/kinds.js";
+import { BubbleBody, bubbleLabel, statusLabel, useNow } from "../bubbles/kinds.js";
+import { tr } from "../i18n/index.js";
 import { useStore } from "../context.js";
 import { SharePopover } from "./SharePopover.js";
 import { SendToMenu } from "./SendToMenu.js";
@@ -77,7 +78,7 @@ export function Bubble(p: BubbleProps): React.ReactElement {
   const fromTitle = readOnly ? p.threads.find((t) => t.id === b.thread_id)?.title : null;
 
   return (
-    <article ref={ref} className={cls} style={style} aria-label={`Bulle ${theme.label} : ${b.title}, ${statusLabel(b, now)}`} data-bubble-id={b.id} onPointerDownCapture={p.onActivate}>
+    <article ref={ref} className={cls} style={style} aria-label={tr("Bubble {0}: {1}, {2}", bubbleLabel(b.kind), b.title, statusLabel(b, now))} data-bubble-id={b.id} onPointerDownCapture={p.onActivate}>
       <div className={`bubble-head ${p.draggable ? "grab" : ""}`} onPointerDown={p.draggable ? p.onGripDown : undefined}>
       <div className="bubble-bar">
         {p.draggable ? (
@@ -87,11 +88,11 @@ export function Bubble(p: BubbleProps): React.ReactElement {
         ) : null}
         <span className="kind-chip">
           <Icon name={theme.icon} size={14} />
-          {theme.label}
+          {bubbleLabel(b.kind)}
         </span>
         <span className={`bubble-status ${working ? "live" : ""}`}>{statusLabel(b, now)}</span>
         <div className="bubble-tools" onPointerDown={(e) => e.stopPropagation()}>
-          <button type="button" className="tool" onClick={p.onToggle} aria-label={p.collapsed ? "Déployer la bulle" : "Réduire la bulle"} aria-expanded={!p.collapsed}>
+          <button type="button" className="tool" onClick={p.onToggle} aria-label={p.collapsed ? tr("Expand the bubble") : tr("Collapse the bubble")} aria-expanded={!p.collapsed}>
             <Icon name={p.collapsed ? "chevronUp" : "chevronDown"} size={15} stroke={2} />
           </button>
           {!readOnly && b.kind !== "notify" ? (
@@ -100,7 +101,7 @@ export function Bubble(p: BubbleProps): React.ReactElement {
                 type="button"
                 className={`tool ${p.popover === "share" ? "active" : ""}`}
                 onClick={() => p.onPopover(p.popover === "share" ? null : "share")}
-                aria-label="Partager la bulle"
+                aria-label={tr("Share the bubble")}
                 aria-expanded={p.popover === "share"}
                 aria-haspopup="dialog"
               >
@@ -110,7 +111,7 @@ export function Bubble(p: BubbleProps): React.ReactElement {
                 type="button"
                 className={`tool ${p.popover === "send" ? "active" : ""}`}
                 onClick={() => p.onPopover(p.popover === "send" ? null : "send")}
-                aria-label="Envoyer la bulle vers une autre session"
+                aria-label={tr("Send the bubble to another session")}
                 aria-expanded={p.popover === "send"}
                 aria-haspopup="dialog"
               >
@@ -118,12 +119,12 @@ export function Bubble(p: BubbleProps): React.ReactElement {
               </button>
             </>
           ) : null}
-          <button type="button" className="tool" onClick={p.onClose} aria-label={readOnly ? "Masquer la bulle partagée" : "Fermer la bulle"}>
+          <button type="button" className="tool" onClick={p.onClose} aria-label={readOnly ? tr("Hide the shared bubble") : tr("Close the bubble")}>
             <Icon name="close" size={14} stroke={2} />
           </button>
         </div>
       </div>
-      <h3 className="bubble-title">{b.kind === "notify" ? `${b.title} t'écrit` : b.title}</h3>
+      <h3 className="bubble-title">{b.kind === "notify" ? tr("{0} is writing to you", b.title) : b.title}</h3>
       </div>
 
       {p.popover === "share" ? (
@@ -135,15 +136,17 @@ export function Bubble(p: BubbleProps): React.ReactElement {
 
       {sharedMembers.length || sharedThreads.length || fromTitle || b.origin ? (
         <div className="bubble-foot">
-          {fromTitle ? <span className="eyebrow">Partagée depuis {fromTitle} · lecture seule</span> : null}
+          {fromTitle ? <span className="eyebrow">{tr("Shared from {0} · read-only", fromTitle)}</span> : null}
           {b.origin && !fromTitle ? (
             <span className="eyebrow">
-              {b.origin.mode === "copy" ? "Copiée" : "Venue"} de {p.threads.find((t) => t.id === b.origin!.thread_id)?.title ?? "une autre session"}
+              {b.origin.mode === "copy"
+                ? tr("Copied from {0}", p.threads.find((t) => t.id === b.origin!.thread_id)?.title ?? tr("another session"))
+                : tr("Came from {0}", p.threads.find((t) => t.id === b.origin!.thread_id)?.title ?? tr("another session"))}
             </span>
           ) : null}
-          {sharedMembers.length || sharedThreads.length ? <span className="eyebrow">Partagée</span> : null}
+          {sharedMembers.length || sharedThreads.length ? <span className="eyebrow">{tr("Shared")}</span> : null}
           {sharedMembers.map((m) => (
-            <span key={m.id} className="avatar-sm" role="img" aria-label={`Partagée avec ${m.name}`} title={m.name} style={{ background: m.color }}>
+            <span key={m.id} className="avatar-sm" role="img" aria-label={tr("Shared with {0}", m.name)} title={m.name} style={{ background: m.color }}>
               {m.initials}
             </span>
           ))}

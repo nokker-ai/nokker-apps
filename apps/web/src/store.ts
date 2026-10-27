@@ -24,11 +24,13 @@ import type { SignaturePrefs } from "@nokker-apps/brand";
 import { SERVER_URL, createClient } from "./api.js";
 import { t } from "./onboarding/i18n.js";
 import { uiLang } from "./components/ConnectorsTab.js";
-import { isMockServer, restoreLogin, type AuthResult } from "./auth.js";
+import { DeviceNotApprovedError, forgetDevice, isMockServer, restoreLogin, type AuthResult } from "./auth.js";
 import { knock, loadSignaturePrefs, saveSignaturePrefs } from "./sound.js";
 import { readJson, writeJson } from "./viewState.js";
+import { shellLang, tr } from "./i18n/index.js";
 import { loadAgents, loadMembers, loadOpenNotifications, type Member } from "./extensions.js";
 import { applyChatChunk, parseTurnId } from "@nokker-apps/sdk";
+import { cwdByThread, mergeLocalSessions } from "./lokkal/sessions.js";
 
 export interface Toast {
   id: number;
@@ -37,8 +39,9 @@ export interface Toast {
 }
 
 /** `booting` : reprise de session ; `signed-out` : aucun appareil reconnu (écran de connexion) ; `error` : serveur
- * injoignable (réessayer) ; `ready` : connecté. */
-export type Access = "booting" | "signed-out" | "error" | "ready";
+ * injoignable (réessayer) ; `device-refused` : appareil rangé mais refusé par le noyau (en attente, retiré : voir
+ * `deviceStatus`) ; `ready` : connecté. */
+export type Access = "booting" | "signed-out" | "error" | "device-refused" | "ready";
 
 export interface NokkerStore {
   client: NokkerClient;
@@ -47,6 +50,10 @@ export interface NokkerStore {
   access: Access;
   /** Relance la reprise de session (après une connexion par code, ou pour réessayer après une erreur). */
   retryAccess(): void;
+  /** `device-refused` : statut de l'appareil donné par le noyau (`pending`, `revoked`…). */
+  deviceStatus: string | null;
+  /** Oublie l'appareil rangé (refusé) et repart de l'écran de connexion. */
+  forgetDeviceAndRetry(): void;
   mock: boolean;
   authMode: AuthResult["mode"] | null;
   /** Lokkal local (jeton local) : décision d'une carte d'une session locale (`/v1/local/approvals/{id}/decide`). */
@@ -99,6 +106,14 @@ export interface NokkerStore {
   /** Événements des sessions de code (§7.28 : `subagent.*`, `skill.untrusted`) pour l'onglet Code ; rend le désabonnement. */
   onCodeEvent(fn: (e: NokkerEvent) => void): () => void;
   createThread(title: string): Promise<void>;
+  /** Web servi par Lokkal (auth `local` ou `gateway`) : `thread_id` → dossier des sessions de code ; `{}` ailleurs. */
+  codeSessions: Record<string, string>;
+  /** Racines où une session de code peut s'ouvrir ; `null` hors Lokkal (pas de « + session de code »). */
+  localRoots: string[] | null;
+  /** Ouvre une session de code sur `cwd` puis bascule sur son fil ; lève l'erreur du noyau (403 : hors racine). */
+  createCodeSession(cwd: string): Promise<void>;
+  /** Fil demandé par l'URL (`#/t/<id>`) et introuvable : rien n'est envoyé ailleurs, l'écran le dit. */
+  missingThread: string | null;
   deleteThread(id: string): Promise<void>;
   /** `images` : `data:` des images jointes (X7) ; le message part alors en parties texte + image. */
   send(text: string, images?: string[]): Promise<void>;
@@ -134,14 +149,22 @@ function parseHash(): { thread?: string; bubble?: string } {
 
 export function useNokker(): NokkerStore {
   const client = useMemo(() => createClient(), []);
-  const [status, setStatus] = useState("connexion…");
+  const [status, setStatus] = useState(() => tr("connecting…"));
   const [ready, setReady] = useState(false);
   const [access, setAccess] = useState<Access>("booting");
+  const [deviceStatus, setDeviceStatus] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [mock, setMock] = useState(false);
   const [auth, setAuth] = useState<AuthResult | null>(null);
   const [threads, setThreads] = useState<Thread[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
+  const [codeSessions, setCodeSessions] = useState<Record<string, string>>({});
+  const [localRoots, setLocalRoots] = useState<string[] | null>(null);
+  const [missingThread, setMissingThread] = useState<string | null>(null);
+  const codeSessionsRef = useRef<Record<string, string>>({});
+  codeSessionsRef.current = codeSessions;
+  /** Auth `local` ou `gateway` : le web parle à une machine Lokkal (sessions de code possibles). */
+  const lokkalRef = useRef<{ user: string } | null>(null);
   const [messages, setMessages] = useState<ThreadMessage[]>([]);
   const [streaming, setStreaming] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -159,7 +182,7 @@ export function useNokker(): NokkerStore {
     async (threadId: string | null) => {
       try {
         const t = await client.getLocalCost(threadId ?? undefined);
-        setCostTotals({ session: t.session ? formatCostLine(t.session) : null, day: formatCostLine(t.day) });
+        setCostTotals({ session: t.session ? formatCostLine(t.session, shellLang()) : null, day: formatCostLine(t.day, shellLang()) });
       } catch {
         setCostTotals(null);
       }
@@ -202,7 +225,20 @@ export function useNokker(): NokkerStore {
 
   const loadThread = useCallback(
     async (id: string, withBubbles: boolean) => {
-      const view = await client.getThread(id);
+      let view: Awaited<ReturnType<NokkerClient["getThread"]>>;
+      try {
+        view = await client.getThread(id);
+      } catch (err) {
+        // Session de code sans tour : le hub ne la connaît pas encore, la conversation est vide.
+        if (err instanceof NokkerApiError && err.status === 404 && codeSessionsRef.current[id]) {
+          if (currentRef.current === id) {
+            setMessages([]);
+            setLive(null);
+          }
+          return;
+        }
+        throw err;
+      }
       if (currentRef.current !== id) return;
       setMessages(view.messages);
       // Réponse reçue par événement mais pas encore servie par l'historique : on la garde affichée.
@@ -214,7 +250,8 @@ export function useNokker(): NokkerStore {
         deltas.current.delete(id);
         setLive(null);
       }
-      setThreads((list) => sortThreads(list.map((t) => (t.id === id ? view.thread : t))));
+      // Fil ouvert par un lien et absent de la liste : il y entre.
+      setThreads((list) => sortThreads(list.some((t) => t.id === id) ? list.map((t) => (t.id === id ? view.thread : t)) : [...list, view.thread]));
       if (withBubbles) {
         // Les notify sans fil suivent l'utilisateur d'un fil à l'autre.
         setBubbles((cur) => [...cur.filter((b) => b.thread_id === null && !b.closed_at), ...view.bubbles]);
@@ -288,8 +325,8 @@ export function useNokker(): NokkerStore {
         case "attachment.skipped":
           toast(
             e.count === 1
-              ? "Le modèle de ce tour ne lit pas les images : la tienne a été remplacée par une note."
-              : `Le modèle de ce tour ne lit pas les images : les ${e.count} ont été remplacées par une note.`,
+              ? tr("This turn's model cannot read images: yours was replaced by a note.")
+              : tr("This turn's model cannot read images: the {0} images were replaced by a note.", e.count),
             "error",
           );
           return;
@@ -307,10 +344,10 @@ export function useNokker(): NokkerStore {
           return;
         case "memory.noted":
           // X1 : la mémoire du projet (ou de l'utilisateur) vient d'apprendre quelque chose : visible, jamais muet.
-          toast(`Noté en mémoire${e.scope === "user" ? " (pour toi)" : ""} : ${e.title}`, "ok");
+          toast(e.scope === "user" ? tr("Saved to memory (for you): {0}", e.title) : tr("Saved to memory: {0}", e.title), "ok");
           return;
         case "memory.forgotten":
-          toast(`Oublié : ${e.name}`, "ok");
+          toast(tr("Forgotten: {0}", e.name), "ok");
           return;
         case "agent.updated":
           setAgents((a) => (a.some((x) => x.id === e.agent.id) ? a.map((x) => (x.id === e.agent.id ? e.agent : x)) : [...a, e.agent]));
@@ -335,7 +372,7 @@ export function useNokker(): NokkerStore {
           }
           return;
         case "turn.cost":
-          setTurnCosts((c) => ({ ...c, [e.turn_id]: formatCostLine(e) }));
+          setTurnCosts((c) => ({ ...c, [e.turn_id]: formatCostLine(e, shellLang()) }));
           if (e.thread_id === currentRef.current) void refreshCost(e.thread_id);
           return;
         case "turn.done":
@@ -370,13 +407,36 @@ export function useNokker(): NokkerStore {
         if (cancelled) return;
         setAuth(a);
         let list = sortThreads(await client.listThreads());
+        lokkalRef.current = a.mode === "local" || a.mode === "gateway" ? { user: a.user } : null;
+        if (lokkalRef.current) {
+          // Sessions de code : celles sans tour ne sont pas encore des fils du hub ; racines pour le « + ».
+          try {
+            const { sessions, roots } = await client.listLocalSessionsAndRoots();
+            setCodeSessions(cwdByThread(sessions));
+            codeSessionsRef.current = cwdByThread(sessions);
+            setLocalRoots(roots);
+            list = sortThreads(mergeLocalSessions(list, sessions, a.user, new Date().toISOString()));
+          } catch {
+            setLocalRoots([]);
+          }
+        }
         if (list.length === 0) {
           // Premier passage (vrai noyau, aucun fil) : sans fil courant, la saisie n'avait nulle part où envoyer.
-          list = [await client.createThread("Général")];
+          list = [await client.createThread(tr("General"))];
         }
+        // Lien direct `#/t/<id>` : CE fil, chargé s'il manque à la liste ; introuvable, aucun autre fil n'est pris à
+        // sa place (un message partirait au mauvais endroit).
+        const linked = parseHash().thread;
+        let first = list.find((t) => t.id === (linked ?? readJson<string | null>("currentThread", null))) ?? null;
+        if (!first && linked) {
+          try {
+            first = (await client.getThread(linked)).thread;
+            list = sortThreads([...list, first]);
+          } catch {
+            setMissingThread(linked);
+          }
+        } else if (!first) first = list[0] ?? null;
         setThreads(list);
-        const wanted = parseHash().thread ?? readJson<string | null>("currentThread", null);
-        const first = list.find((t) => t.id === wanted) ?? list[0] ?? null;
         if (first) {
           currentRef.current = first.id;
           setCurrentId(first.id);
@@ -390,18 +450,31 @@ export function useNokker(): NokkerStore {
         sub = client.subscribeEvents({
           onEvent,
           onReconnected: () => {
-            setStatus("connecté");
-            void client.listThreads().then((l) => setThreads(sortThreads(l)));
+            setStatus(tr("connected"));
+            void client.listThreads().then(async (l) => {
+              let merged = l;
+              if (lokkalRef.current) {
+                const { sessions } = await client.listLocalSessionsAndRoots().catch(() => ({ sessions: [] }));
+                if (sessions.length) setCodeSessions(cwdByThread(sessions));
+                merged = mergeLocalSessions(l, sessions, lokkalRef.current.user, new Date().toISOString());
+              }
+              setThreads(sortThreads(merged));
+            });
             if (currentRef.current) void loadThread(currentRef.current, true);
           },
-          onError: () => setStatus("reconnexion…"),
+          onError: () => setStatus(tr("reconnecting…")),
         });
-        setStatus("connecté");
+        setStatus(tr("connected"));
         setAccess("ready");
         setReady(true);
       } catch (err) {
         if (cancelled) return;
-        setStatus(`échec de connexion : ${errText(err)}`);
+        if (err instanceof DeviceNotApprovedError) {
+          setDeviceStatus(err.deviceStatus);
+          setAccess("device-refused");
+          return;
+        }
+        setStatus(tr("connection failed: {0}", errText(err)));
         setAccess("error");
       }
     })();
@@ -412,12 +485,19 @@ export function useNokker(): NokkerStore {
   }, [client, loadThread, onEvent, attempt]);
 
   const retryAccess = useCallback(() => setAttempt((n) => n + 1), []);
+  const forgetDeviceAndRetry = useCallback(() => {
+    void forgetDevice().then(() => {
+      setDeviceStatus(null);
+      setAttempt((n) => n + 1);
+    });
+  }, []);
 
   const selectThread = useCallback(
     (id: string) => {
       if (id === currentRef.current) return;
       currentRef.current = id;
       setCurrentId(id);
+      setMissingThread(null);
       setMessages([]);
       setStreaming(null);
       setLive(null);
@@ -429,10 +509,28 @@ export function useNokker(): NokkerStore {
       } catch {
         /* pas d'historique (aperçu) */
       }
-      void loadThread(id, true).catch((err) => toast(errText(err), "error"));
+      void loadThread(id, true).catch((err) => {
+        // Fil introuvable (lien, fil supprimé) : on ne reste sur aucun fil plutôt que d'en garder un autre.
+        if (err instanceof NokkerApiError && (err.status === 404 || err.status === 403) && currentRef.current === id) {
+          currentRef.current = null;
+          setCurrentId(null);
+          setMissingThread(id);
+        } else toast(errText(err), "error");
+      });
     },
     [loadThread, toast],
   );
+
+  // Lien `#/t/<id>` suivi pendant que l'app est ouverte (autre onglet, notification) : on va sur CE fil.
+  useEffect(() => {
+    if (!ready) return;
+    const onHash = (): void => {
+      const id = parseHash().thread;
+      if (id && id !== currentRef.current) selectThread(id);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, [ready, selectThread]);
 
   const refreshThreads = useCallback(async () => setThreads(sortThreads(await client.listThreads())), [client]);
 
@@ -446,6 +544,18 @@ export function useNokker(): NokkerStore {
       }
     },
     [client, dropThread, toast],
+  );
+
+  const createCodeSession = useCallback(
+    async (cwd: string) => {
+      const s = await client.createLocalSession({ cwd });
+      setCodeSessions((c) => ({ ...c, [s.thread_id]: s.cwd }));
+      codeSessionsRef.current = { ...codeSessionsRef.current, [s.thread_id]: s.cwd };
+      const user = lokkalRef.current?.user ?? "";
+      setThreads((l) => sortThreads(mergeLocalSessions(l, [{ thread_id: s.thread_id, cwd: s.cwd, title: null }], user, new Date().toISOString())));
+      selectThread(s.thread_id);
+    },
+    [client, selectThread],
   );
 
   const createThread = useCallback(
@@ -467,7 +577,7 @@ export function useNokker(): NokkerStore {
       if (!id || (!text.trim() && images.length === 0)) return;
       setSending(true);
       sendingRef.current = true;
-      const shown = images.length ? `${text}${text ? "\n\n" : ""}_${images.length === 1 ? "1 image jointe" : `${images.length} images jointes`}_` : text;
+      const shown = images.length ? `${text}${text ? "\n\n" : ""}_${images.length === 1 ? tr("1 image attached") : tr("{0} images attached", images.length)}_` : text;
       setMessages((m) => [...m, { index: (m.at(-1)?.index ?? -1) + 1, role: "user", content: shown }]);
       setStreaming("");
       try {
@@ -514,7 +624,7 @@ export function useNokker(): NokkerStore {
       guard(async () => {
         await client.transferBubble(b.id, to, mode);
         const title = threads.find((t) => t.id === to)?.title ?? to;
-        toast(mode === "copy" ? `Copie de « ${b.title} » envoyée à ${title}.` : `« ${b.title} » déplacée vers ${title}.`, "ok");
+        toast(mode === "copy" ? tr("Copy of “{0}” sent to {1}.", b.title, title) : tr("“{0}” moved to {1}.", b.title, title), "ok");
       }),
     [client, guard, threads, toast],
   );
@@ -527,7 +637,7 @@ export function useNokker(): NokkerStore {
         if (b.kind === "agent_draft" && actionId === "activate") setFlying((s) => new Set(s).add(b.id));
         const res = await client.bubbleAction(b.id, actionId);
         // Une action d'une bulle non-notify devient un tour du fil (202) : ses effets arrivent par les événements.
-        if ("accepted" in res && b.kind !== "agent_draft") toast(`Action « ${b.actions.find((a) => a.id === actionId)?.label ?? actionId} » confiée à Nina.`, "ok");
+        if ("accepted" in res && b.kind !== "agent_draft") toast(tr("Action “{0}” handed to Nina.", b.actions.find((a) => a.id === actionId)?.label ?? actionId), "ok");
       }),
     [client, guard, toast],
   );
@@ -546,7 +656,7 @@ export function useNokker(): NokkerStore {
     async (approval: Approval, decision: "approve" | "reject", scope: "once" | "session" = "once") => {
       const r = await client.decideLocalApproval(approval.id, { decision, scope } as Parameters<typeof client.decideLocalApproval>[1]);
       // 202 : une suite tourne (continuation) ; refus : rien ne tourne après.
-      if (decision === "approve" && (r as { continuation?: string }).continuation === "queued") toast("Approuvé : l'action passera après le tour en cours.", "ok");
+      if (decision === "approve" && (r as { continuation?: string }).continuation === "queued") toast(tr("Approved: the action will run after the current turn."), "ok");
     },
     [client, toast],
   );
@@ -562,14 +672,14 @@ export function useNokker(): NokkerStore {
           delete next[threadId];
           return next;
         });
-        toast("Hooks du dépôt approuvés pour ce dossier.", "ok");
+        toast(tr("Repository hooks approved for this folder."), "ok");
       } catch (err) {
         const st = err instanceof NokkerApiError ? err.status : 0;
         toast(
           st === 409
-            ? "Le fichier des hooks a changé depuis l'ouverture : rouvre la session pour relire ce qu'il contient."
+            ? tr("The hooks file changed since the session opened: reopen the session to read it again.")
             : st === 403
-              ? "La confiance se donne seulement sur la machine elle-même."
+              ? tr("Trust can only be given on the machine itself.")
               : errText(err),
           "error",
         );
@@ -587,13 +697,13 @@ export function useNokker(): NokkerStore {
       if (totp !== undefined) {
         if (approval.strength === "strong") throw new Error("Niveau strong : signature d'appareil obligatoire, jamais de TOTP.");
         const totpUser = auth?.user;
-        if (!totpUser) throw new Error("Session sans identité : reconnecte-toi.");
+        if (!totpUser) throw new Error(tr("Session without an identity: sign in again."));
         // Le défi reste obligatoire même sur ce chemin (anti-rejeu/anti-falsification, APPROVALS.md §2/§3.5).
         const { challenge } = await client.requestChallenge(approval.id);
         await client.decideApproval(approval.id, { decision, challenge, totp, totp_user: totpUser });
         return;
       }
-      if (!auth?.signDecision) throw new Error("Aucun appareil enrôlé sur ce navigateur : utilise le code TOTP.");
+      if (!auth?.signDecision) throw new Error(tr("No device enrolled in this browser: use the TOTP code."));
       const { challenge } = await client.requestChallenge(approval.id);
       const proof = await auth.signDecision(challenge, decision);
       try {
@@ -634,6 +744,8 @@ export function useNokker(): NokkerStore {
     ready,
     access,
     retryAccess,
+    deviceStatus,
+    forgetDeviceAndRetry,
     mock,
     authMode: auth?.mode ?? null,
     signDecision: auth?.signDecision ?? null,
@@ -669,6 +781,10 @@ export function useNokker(): NokkerStore {
     refreshThreads,
     onCodeEvent,
     createThread,
+    codeSessions,
+    localRoots,
+    createCodeSession,
+    missingThread,
     deleteThread,
     send,
     closeBubble,

@@ -282,6 +282,13 @@ export class NokkerClient {
     return this.request<LocalSession>("/v1/local/sessions", { method: "POST", body: JSON.stringify(req) });
   }
 
+  /** Sessions ouvertes ET racines où une session peut s'ouvrir (`roots`, noyau 0bb77d3 ; absent avant : `[]`). Le web
+   * servi par Lokkal (local ou passerelle) s'en sert pour son « + session de code ». */
+  async listLocalSessionsAndRoots(): Promise<{ sessions: LocalSessionSummary[]; roots: string[] }> {
+    const r = await this.request<LocalSessionSummary[] | { sessions?: LocalSessionSummary[]; roots?: string[] }>("/v1/local/sessions");
+    return Array.isArray(r) ? { sessions: r, roots: [] } : { sessions: r.sessions ?? [], roots: r.roots ?? [] };
+  }
+
   /** Le noyau répond `{"sessions": [...]}` ; un tableau nu (anciens mocks) est accepté aussi. */
   async listLocalSessions(): Promise<LocalSessionSummary[]> {
     const r = await this.request<LocalSessionSummary[] | { sessions?: LocalSessionSummary[] }>("/v1/local/sessions");

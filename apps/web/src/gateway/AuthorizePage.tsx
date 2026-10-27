@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from "react";
 import { BRAND } from "@nokker-apps/brand";
 import { NokkerApiError } from "@nokker-apps/sdk";
+import { trIn } from "../i18n/index.js";
 import { useNokker } from "../store.js";
 import { Welcome } from "../welcome/Welcome.js";
 import { uiLang } from "../components/ConnectorsTab.js";
@@ -53,31 +54,29 @@ export function AuthorizePage(): React.ReactElement {
           <img className="only-dark" src="/brand/nokker-emblem-dark.svg" alt="" width={56} height={56} />
           <span className="ob-brand">{BRAND.productName}</span>
         </header>
-        <h1 id="gw-title" className="ob-title">{L === "en" ? "Open your machine" : "Ouvrir ta machine"}</h1>
+        <h1 id="gw-title" className="ob-title">{trIn(L, "Open your machine")}</h1>
         {phase.kind === "working" ? (
           <p className="ob-status" role="status">
-            {L === "en" ? `Signing you in to ${req!.host}…` : `Connexion à ${req!.host}…`}
+            {trIn(L, "Signing you in to {0}…", req!.host)}
           </p>
         ) : null}
         {phase.kind === "bad" ? (
           <p className="ob-error" role="alert">
-            {L === "en" ? "This sign-in link is invalid. Open your machine's address again." : "Ce lien de connexion n'est pas valide. Rouvre l'adresse de ta machine."}
+            {trIn(L, "This sign-in link is invalid. Open your machine's address again.")}
           </p>
         ) : null}
         {phase.kind === "foreign" ? (
           <p className="ob-error" role="alert">
-            {L === "en"
-              ? `${phase.host} is not linked to this account. Sign in with the account that linked it, or link it from Lokkal.`
-              : `${phase.host} n'est pas liée à ce compte. Connecte-toi avec le compte qui l'a liée, ou lie-la depuis Lokkal.`}
+            {trIn(L, "{0} is not linked to this account. Sign in with the account that linked it, or link it from Lokkal.", phase.host)}
           </p>
         ) : null}
         {phase.kind === "failed" ? (
           <p className="ob-error" role="alert">
-            {L === "en" ? "Sign-in did not go through. Try again in a moment." : "La connexion n'a pas abouti. Réessaie dans un instant."}
+            {trIn(L, "Sign-in did not go through. Try again in a moment.")}
           </p>
         ) : null}
         {phase.kind !== "working" && cancel ? (
-          <a className="ob-btn" href={cancel}>{L === "en" ? "Back to the machine" : "Retour à la machine"}</a>
+          <a className="ob-btn" href={cancel}>{trIn(L, "Back to the machine")}</a>
         ) : null}
       </main>
     </div>

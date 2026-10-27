@@ -68,9 +68,9 @@ describe("parseArgs", () => {
   });
 
   it("argument ou drapeau inconnu : erreur d'usage (jamais la TUI)", () => {
-    expect(parseArgs(["status"]).error).toBe("argument inconnu : status (nokker --help)");
-    expect(parseArgs(["--bogus"]).error).toContain("argument inconnu : --bogus");
-    expect(parseArgs(["doctor", "logs"]).error).toContain("argument inconnu : logs");
+    expect(parseArgs(["status"]).error).toBe("unknown argument: status (nokker --help)");
+    expect(parseArgs(["--bogus"]).error).toContain("unknown argument: --bogus");
+    expect(parseArgs(["doctor", "logs"]).error).toContain("unknown argument: logs");
     expect(parseArgs(["-p", "status", "--json"]).error).toBeNull();
   });
 });

@@ -21,14 +21,14 @@ export function proposeHandoff(
   spec: { kind: "repo" | "host" | "connector" | "mcp"; name: string; task: string; machine: string; online: boolean },
 ): Bubble {
   const now = Date.now() / 1000;
-  const kindLabel = { repo: "dépôt", host: "hôte", connector: "connecteur", mcp: "MCP" }[spec.kind];
+  const kindLabel = { repo: "repository", host: "host", connector: "connector", mcp: "MCP" }[spec.kind];
   return createBubble(state, threadId, {
     kind: "handoff",
-    title: `Relais vers « ${spec.machine} » — ${kindLabel} « ${spec.name} »`,
+    title: `Handoff to “${spec.machine}” — ${kindLabel} “${spec.name}”`,
     status: "idle",
     actions: [
-      { id: "accept", label: "Passer le relais", primary: true },
-      { id: "refuse", label: "Non" },
+      { id: "accept", label: "Hand off", primary: true },
+      { id: "refuse", label: "No" },
     ],
     state: {
       handoff_id: hexId("ho"), state: "proposed", need: { kind: spec.kind, name: spec.name },
@@ -57,7 +57,7 @@ export function decideHandoff(state: MockState, b: Bubble, actionId: string): { 
       set(state, b, "accepted");
       state.later(600, () => set(state, getBubble(state, b.id), "running", { lokkal_thread: hexId("th") }));
       state.later(3000, () =>
-        set(state, getBubble(state, b.id), "done", { reply: "(démo) C'est fait sur la machine : les tests passent, le correctif est sur une branche locale." }),
+        set(state, getBubble(state, b.id), "done", { reply: "(demo) Done on the machine: the tests pass, the fix is on a local branch." }),
       );
     }
   }

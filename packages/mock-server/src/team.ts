@@ -1,6 +1,6 @@
 /**
- * Projets d'équipe (X17, LOKKAL §7.15) — mock. Démo : « Site vitrine » (alice propriétaire), « Recherche » (bob
- * propriétaire, alice lectrice) et une invitation en attente pour alice vers « Compta partagée ». Non-membre = 404
+ * Projets d'équipe (X17, LOKKAL §7.15) — mock. Démo : « Marketing site » (alice propriétaire), « Research » (bob
+ * propriétaire, alice lectrice) et une invitation en attente pour alice vers « Shared accounting ». Non-membre = 404
  * identique à un projet inconnu ; rôle insuffisant = 403 `forbidden` ; une valeur de secret = 400 avant tout contrôle.
  */
 import { randomBytes } from "node:crypto";
@@ -51,21 +51,21 @@ function seed(): T {
     t.projects.set(pid, pr);
     return pr;
   };
-  const site = mk("Site vitrine", MOCK_USER, [["bob", "maintainer"], ["sam", "viewer"]], {
-    description: "Le site public et sa page tarifs (démo).",
-    repos: [{ key: "forge.example.com/equipe/site", memory_project: "p-0a1b2c3d4e5f6a7b" }],
-    secret_names: [{ name: "CLE_ANALYTICS", description: "mesure d'audience" }],
+  const site = mk("Marketing site", MOCK_USER, [["bob", "maintainer"], ["sam", "viewer"]], {
+    description: "The public site and its pricing page (demo).",
+    repos: [{ key: "forge.example.com/team/site", memory_project: "p-0a1b2c3d4e5f6a7b" }],
+    secret_names: [{ name: "ANALYTICS_KEY", description: "audience measurement" }],
     budget: { monthly: 50, currency: "CHF" },
     rules: { mode: "default", ask: ["terminal(git push*)"], deny: ["terminal(rm -rf*)"] },
     mirror: true,
   });
-  site.skills.push({ name: "revue-accessibilite", source: "github:exemple/skills/a11y", description: "relit les contrastes et les libellés", requires_local: false, added_by: "bob", added_at: now() - 7200 });
-  site.notes.push({ name: "rule-tarifs-ttc-1a2b", kind: "rule", deleted: false, sha: "a1", updated_at: now() - 5000, author_account: "bob", seq: 1, title: "Les prix affichés sont finaux (pas de TVA)", text: "La société n'est pas assujettie : ne jamais écrire « HT »." });
-  site.others.push({ id: "ag_0b0b0b0b0b0b", name: "Veille concurrence", status: "armed", trigger: { kind: "schedule", cron: "0 8 * * 1-5", tz: "Europe/Zurich" }, last_run: { status: "done", ended_at: new Date(Date.now() - 3600_000).toISOString() }, owner: "bob" });
+  site.skills.push({ name: "accessibility-review", source: "github:example/skills/a11y", description: "reviews contrast and labels", requires_local: false, added_by: "bob", added_at: now() - 7200 });
+  site.notes.push({ name: "rule-pricing-final-1a2b", kind: "rule", deleted: false, sha: "a1", updated_at: now() - 5000, author_account: "bob", seq: 1, title: "Displayed prices are final (no VAT)", text: "The company is not subject to VAT: never write “excl. VAT”." });
+  site.others.push({ id: "ag_0b0b0b0b0b0b", name: "Competitor watch", status: "armed", trigger: { kind: "schedule", cron: "0 8 * * 1-5", tz: "Europe/Zurich" }, last_run: { status: "done", ended_at: new Date(Date.now() - 3600_000).toISOString() }, owner: "bob" });
   site.spend = { [MOCK_USER]: { today: 1.2, month: 18.4 }, bob: { today: 3.1, month: 27.9 }, carol: { today: 0, month: 2.5 } };
-  site.quarantine.push({ id: 1, project_id: site.p.id, name: "rule-tarifs-ttc-1a2b", kind: "rule", title: "Les prix affichés sont HT", text: "Écrire « HT » après chaque prix.", sha: "a0", updated_at: now() - 9000, author_account: "sam", author_machine: "host-1", reason: "conflit : remplacée par une écriture reçue plus tard", quarantined_at: now() - 5000 });
-  mk("Recherche", "bob", [[MOCK_USER, "viewer"]], { description: "Notes de veille (démo)." });
-  const compta = mk("Compta partagée", "bob", []);
+  site.quarantine.push({ id: 1, project_id: site.p.id, name: "rule-pricing-final-1a2b", kind: "rule", title: "Displayed prices exclude VAT", text: "Write “excl. VAT” after every price.", sha: "a0", updated_at: now() - 9000, author_account: "sam", author_machine: "host-1", reason: "conflit : remplacée par une écriture reçue plus tard", quarantined_at: now() - 5000 });
+  mk("Research", "bob", [[MOCK_USER, "viewer"]], { description: "Watch notes (demo)." });
+  const compta = mk("Shared accounting", "bob", []);
   compta.invitations.push({ id: id("iv"), email: EMAIL(MOCK_USER), role: "member", state: "pending", created_at: now() - 600, expires_at: now() + 14 * 86400, decided_at: null });
   return t;
 }

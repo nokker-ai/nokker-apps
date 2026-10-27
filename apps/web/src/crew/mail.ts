@@ -5,6 +5,7 @@
  * 5fe8785) ; un noyau plus ancien n'a que le message, reconnu alors à son texte.
  */
 import { NokkerApiError, type AgentMailWatch } from "@nokker-apps/sdk";
+import { trIn } from "../i18n/index.js";
 
 export type Lang = "fr" | "en";
 
@@ -190,7 +191,7 @@ export function checkMailFilter(text: string): FilterCheck {
       else if (key === "in" || key === "label") return { ok: false, key: "f_folder", vars: { k: key } };
       else return { ok: false, key: "f_key", vars: { k: key } };
     } else {
-      const bad = value(t, "mot");
+      const bad = value(t, ""); // terme libre : son nom (« word » / « mot ») est dit à l'affichage, par `filterReason`
       if (bad) return bad;
     }
   }
@@ -198,11 +199,16 @@ export function checkMailFilter(text: string): FilterCheck {
 }
 
 export function filterReason(lang: Lang, c: Extract<FilterCheck, { ok: false }>): string {
-  return m(lang, c.key, c.vars);
+  // `k` vide : un terme libre, nommé dans la langue de l'écran.
+  const vars = c.vars && c.vars.k === "" ? { ...c.vars, k: trIn(lang, "word") } : c.vars;
+  return m(lang, c.key, vars);
 }
 
+// texte du noyau, comparé tel quel
 const NO_TRIGGER = "pas disponible (aucune relève du courrier";
+// texte du noyau, comparé tel quel
 const NO_MAILBOX = "aucune boîte mail reliée";
+// texte du noyau, comparé tel quel
 const FILTER_PREFIX = "trigger.event mail:<filtre> : ";
 
 /** Refus du noyau sur un déclencheur mail, traduit ; null si ce n'en est pas un (l'appelant garde son texte). Le `code`

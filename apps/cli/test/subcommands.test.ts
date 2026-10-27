@@ -64,14 +64,14 @@ describe("doctor", () => {
     const { checks, code } = await runDoctor({ serverUrl: mock.url, fix: false, run: noDocker, candidates: [] });
     const byName = Object.fromEntries(checks.map((c) => [c.name, c]));
     expect(byName["docker"]!.status).toBe("ko");
-    expect(byName["docker"]!.detail).toContain("pas installé");
-    expect(byName["serveur"]!.status).toBe("ok");
-    expect(byName["serveur"]!.detail).toContain("MOCK");
-    expect(byName["authentification"]!.status).toBe("ok"); // jeton local écrit par le mock dans `dir`
-    expect(byName["version client"]!.status).toBe("ko"); // minimale 9.0.0 annoncée
+    expect(byName["docker"]!.detail).toContain("is not installed");
+    expect(byName["server"]!.status).toBe("ok");
+    expect(byName["server"]!.detail).toContain("MOCK");
+    expect(byName["authentication"]!.status).toBe("ok"); // jeton local écrit par le mock dans `dir`
+    expect(byName["client version"]!.status).toBe("ko"); // minimale 9.0.0 annoncée
     expect(byName["git"]!.status).toBe("ok");
-    expect(byName["mémoire"]).toMatchObject({ status: "ok" });
-    expect(byName["mémoire"]!.detail).toBe("directe, 12 note(s), plongements 768 dim en 14 ms, dernier rappel 230 ms");
+    expect(byName["memory"]).toMatchObject({ status: "ok" });
+    expect(byName["memory"]!.detail).toBe("direct, 12 note(s), embeddings 768 dim in 14 ms, last recall 230 ms");
     expect(code).toBe(1);
     expect(formatChecks(checks)).toContain("✗ docker");
   });
@@ -79,7 +79,7 @@ describe("doctor", () => {
   it("mémoire : avertissement en mcp/off, échec avec la raison du noyau si ok est faux", async () => {
     const keepMem = mock.state.memory;
     const memLine = async () =>
-      (await runDoctor({ serverUrl: mock.url, fix: false, run: noDocker, candidates: [] })).checks.find((c) => c.name === "mémoire")!;
+      (await runDoctor({ serverUrl: mock.url, fix: false, run: noDocker, candidates: [] })).checks.find((c) => c.name === "memory")!;
     try {
       mock.state.memory = { mode: "off", ok: null };
       expect((await memLine()).status).toBe("warn");
@@ -98,11 +98,11 @@ describe("doctor", () => {
     const { compose } = await writeLokkal();
     const calls: string[][] = [];
     const { checks } = await runDoctor({ serverUrl: "http://127.0.0.1:1", fix: true, run: recording(calls), candidates: [] });
-    const srv = checks.find((c) => c.name === "serveur")!;
+    const srv = checks.find((c) => c.name === "server")!;
     expect(srv.status).toBe("ko");
-    expect(checks.find((c) => c.name === "compose Lokkal")!.status).toBe("ok");
+    expect(checks.find((c) => c.name === "Lokkal compose")!.status).toBe("ok");
     expect(calls.some((c) => c.join(" ") === `docker compose -p nokker -f ${compose} up -d`)).toBe(true);
-    expect(checks.some((c) => c.name === "réparation" && c.status === "ok")).toBe(true);
+    expect(checks.some((c) => c.name === "repair" && c.status === "ok")).toBe(true);
   });
 });
 
@@ -122,7 +122,7 @@ describe("logs", () => {
     let err = "";
     const code = await runLogs({ follow: false, lines: 10, since: null, component: "core", run: noDocker, err: (t) => (err += t) });
     expect(code).toBe(1);
-    expect(err).toContain("aucun Lokkal installé");
+    expect(err).toContain("no Lokkal installed");
     expect(err).toContain("--component cli");
   });
 
@@ -131,7 +131,7 @@ describe("logs", () => {
     let err = "";
     const code = await runLogs({ follow: false, lines: 10, since: null, component: "core", run: noDocker, err: (t) => (err += t) });
     expect(code).toBe(1);
-    expect(err).toContain("clé(s) manquante(s)");
+    expect(err).toContain("missing or empty key(s)");
     expect(err).toContain("core_service");
     expect(err).toContain("token_path");
   });
@@ -141,7 +141,7 @@ describe("logs", () => {
     let err = "";
     const code = await runLogs({ follow: false, lines: 10, since: null, component: "core", run: noDocker, err: (t) => (err += t) });
     expect(code).toBe(1);
-    expect(err).toContain("docker n'est pas installé");
+    expect(err).toContain("docker is not installed");
   });
 
   it("noyau avec docker : docker compose -p <project> -f <compose> logs <core_service>", async () => {
@@ -167,7 +167,7 @@ describe("lokkal.json et serveur", () => {
   it("validation : chemins absolus et clés obligatoires", async () => {
     const { validateLokkal } = await import("../src/lokkal.js");
     expect("config" in validateLokkal({ compose: "/a", project: "p", version: "1", core_service: "core", api_url: "u", web_url: "w", token_path: "/t", env_file: "/e" })).toBe(true);
-    expect(validateLokkal({ compose: "rel/x.yml", project: "p", version: "1", core_service: "core", api_url: "u", web_url: "w", token_path: "/t", env_file: "/e" })).toMatchObject({ error: expect.stringContaining("non absolu") });
+    expect(validateLokkal({ compose: "rel/x.yml", project: "p", version: "1", core_service: "core", api_url: "u", web_url: "w", token_path: "/t", env_file: "/e" })).toMatchObject({ error: expect.stringContaining("non-absolute") });
     expect(validateLokkal([])).toMatchObject({ error: expect.any(String) });
   });
 
@@ -197,15 +197,15 @@ describe("lokkal.json et serveur", () => {
     const seen: string[] = [];
     const ok = await runDoctor({ serverUrl: mock.url, fix: false, run: noDocker, candidates: [], http: async (u) => (seen.push(u), { status: 200 }) });
     expect(seen).toEqual(["http://127.0.0.1:7420/healthz"]);
-    expect(ok.checks.find((c) => c.name === "interface web")!.status).toBe("ok");
+    expect(ok.checks.find((c) => c.name === "web interface")!.status).toBe("ok");
     const ko = await runDoctor({ serverUrl: mock.url, fix: false, run: noDocker, candidates: [], http: async () => ({ status: 503 }) });
-    expect(ko.checks.find((c) => c.name === "interface web")!.detail).toContain("503");
+    expect(ko.checks.find((c) => c.name === "web interface")!.detail).toContain("503");
     await rm(join(dir, "lokkal.json"));
   });
 
   it("doctor dit d'où vient le serveur", async () => {
     const { checks } = await runDoctor({ serverUrl: "http://127.0.0.1:1", serverSource: "default", fix: false, run: noDocker, candidates: [] });
-    expect(checks.find((c) => c.name === "serveur")!.detail).toContain("(défaut)");
+    expect(checks.find((c) => c.name === "server")!.detail).toContain("(default)");
   });
 });
 
@@ -222,7 +222,7 @@ describe("Windows + WSL 2 et install_dir", () => {
     const ok = validateLokkal(wsl);
     expect("config" in ok && ok.config.wsl_distro).toBe("Ubuntu");
     expect(validateLokkal({ ...wsl, install_dir: undefined })).toMatchObject({ error: expect.stringContaining("install_dir") });
-    expect(validateLokkal({ ...wsl, compose: "C:\\Users\\nina\\compose.yml" })).toMatchObject({ error: expect.stringContaining("chemins Linux") });
+    expect(validateLokkal({ ...wsl, compose: "C:\\Users\\nina\\compose.yml" })).toMatchObject({ error: expect.stringContaining("Linux paths") });
     await writeFile(join(dir, "lokkal.json"), JSON.stringify(wsl));
     expect(resolveTokenPath()).toBe(UNC); // lu tel quel par fs depuis Windows
     await rm(join(dir, "lokkal.json"));
@@ -238,7 +238,7 @@ describe("Windows + WSL 2 et install_dir", () => {
     const dcalls: string[][] = [];
     const d = await runDoctor({ serverUrl: mock.url, fix: false, run: recording(dcalls), candidates: [], http: async () => ({ status: 200 }) });
     expect(dcalls[0]!.join(" ")).toBe("wsl.exe -d Ubuntu -- docker info --format {{.ServerVersion}}");
-    expect(d.checks.find((c) => c.name === "docker")!.detail).toContain("dans WSL (Ubuntu)");
+    expect(d.checks.find((c) => c.name === "docker")!.detail).toContain("in WSL (Ubuntu)");
 
     const ucalls: string[][] = [];
     const code = await runUpdate({
@@ -277,7 +277,7 @@ describe("update", () => {
     let err = "";
     const code = await runUpdate({ serverUrl: mock.url, check: false, run: noDocker, http: releases([]), out: () => {}, err: (t) => (err += t) });
     expect(code).toBe(1);
-    expect(err).toContain("aucun Lokkal installé");
+    expect(err).toContain("no Lokkal installed");
   });
 
   it("--check compare la version installée à la dernière release lokkal-v* (ignore les autres tags et préversions)", async () => {
@@ -286,9 +286,9 @@ describe("update", () => {
     const http = releases([{ tag_name: "cli-v9.9.9" }, { tag_name: "lokkal-v0.3.0-rc1", prerelease: true }, { tag_name: "lokkal-v0.2.0" }, { tag_name: "lokkal-v0.1.0" }]);
     const code = await runUpdate({ serverUrl: mock.url, check: true, run: noDocker, http, out: (t) => (out += t), err: () => {} });
     expect(code).toBe(0);
-    expect(out).toContain("Installé : 0.1.0");
-    expect(out).toContain("Dernière release : 0.2.0");
-    expect(out).toContain("mise à jour disponible");
+    expect(out).toContain("Installed: 0.1.0");
+    expect(out).toContain("Latest release: 0.2.0");
+    expect(out).toContain("update available");
   });
 
   it("--check tolère l'absence de réseau", async () => {
@@ -296,7 +296,7 @@ describe("update", () => {
     let out = "";
     const code = await runUpdate({ serverUrl: mock.url, check: true, run: noDocker, http: noNetwork, out: (t) => (out += t), err: () => {} });
     expect(code).toBe(0);
-    expect(out).toContain("GitHub injoignable");
+    expect(out).toContain("GitHub unreachable");
   });
 
   it("sans docker : explique proprement", async () => {
@@ -304,7 +304,7 @@ describe("update", () => {
     let err = "";
     const code = await runUpdate({ serverUrl: mock.url, check: false, run: noDocker, http: releases([{ tag_name: "lokkal-v0.2.0" }]), out: () => {}, err: (t) => (err += t) });
     expect(code).toBe(1);
-    expect(err).toContain("docker n'est pas installé");
+    expect(err).toContain("docker is not installed");
   });
 
   it("sans install.sh : réécrit NOKKER_VERSION dans env_file puis pull + up -d (-p project -f compose)", async () => {
@@ -354,8 +354,8 @@ describe("update", () => {
     const code = await runUpdate({ serverUrl: mock.url, check: false, run: noCosign, http, out: (t) => (out += t), err: () => {}, selfPath: self, platform: linux });
     expect(code).toBe(0);
     expect((await readFile(self)).length).toBe(1_200_000);
-    expect(out).toContain("sha256 vérifié");
-    expect(out).not.toContain("cosign vérifiés");
+    expect(out).toContain("sha256 verified");
+    expect(out).not.toContain("cosign verified");
   });
 
   it("sha256 absent de la release : refus (obligatoire), client intact", async () => {
@@ -378,7 +378,7 @@ describe("update", () => {
     const http = releases([{ tag_name: "lokkal-v0.2.0" }], { "nokker-linux-x64": body, "nokker-linux-x64.sha256": Buffer.from("0".repeat(64)) });
     const code = await runUpdate({ serverUrl: mock.url, check: false, run: noCosign, http, out: () => {}, err: (t) => (err += t), selfPath: self, platform: linux });
     expect(code).toBe(1);
-    expect(err).toContain("sha256 incorrecte");
+    expect(err).toContain("Wrong sha256 checksum");
     expect(await readFile(self, "utf-8")).toBe("ancien");
   });
 
@@ -392,13 +392,13 @@ describe("update", () => {
     const okRun: Runner = async (cmd, args) => (calls.push([cmd, ...args]), { code: 0, stdout: "", stderr: "" });
     expect(await runUpdate({ serverUrl: mock.url, check: false, run: okRun, http: releases([{ tag_name: "lokkal-v0.2.0" }], assets), out: (t) => (out += t), err: () => {}, selfPath: self, platform: linux })).toBe(0);
     expect(calls.some((c) => c[0] === "cosign" && c[1] === "verify-blob" && c.includes("--bundle"))).toBe(true);
-    expect(out).toContain("sha256 + cosign vérifiés");
+    expect(out).toContain("sha256 + cosign verified");
 
     await writeFile(self, "ancien");
     let err = "";
     const koRun: Runner = async (cmd, args) => (cmd === "cosign" && args[0] === "verify-blob" ? { code: 1, stdout: "", stderr: "signature invalide\n" } : { code: 0, stdout: "", stderr: "" });
     expect(await runUpdate({ serverUrl: mock.url, check: false, run: koRun, http: releases([{ tag_name: "lokkal-v0.2.0" }], assets), out: () => {}, err: (t) => (err += t), selfPath: self, platform: linux })).toBe(1);
-    expect(err).toContain("Vérification cosign échouée");
+    expect(err).toContain("cosign verification failed");
     expect(await readFile(self, "utf-8")).toBe("ancien");
   });
 

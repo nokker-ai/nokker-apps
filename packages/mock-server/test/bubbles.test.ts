@@ -61,7 +61,7 @@ afterEach(async () => {
 describe("fils (§1)", () => {
   it("liste les fils de démo triés par updated_at desc, crée et renomme un fil", async () => {
     const threads = await client.listThreads();
-    expect(threads.map((t) => t.title)).toEqual(["Général", "Infra", "Compta", "Recrutement"]);
+    expect(threads.map((t) => t.title)).toEqual(["General", "Infra", "Accounting", "Recruiting"]);
     expect(threads[0]!.id).toMatch(/^th_[0-9a-f]{12}$/);
     const t = await client.createThread("Perso");
     expect((await client.listThreads())[0]!.id).toBe(t.id);
@@ -97,9 +97,9 @@ describe("transfert (§3)", () => {
     const infraView = await client.getThread(infra);
     expect(infraView.bubbles.some((b) => b.id === created.id)).toBe(true);
     // Contexte : dans la boîte du fil, consommé au PROCHAIN tour (§8) — le mock le cite dans sa réponse.
-    expect(mock.state.threads.get(infra)!.box[0]).toMatch(/^\[Bulle reçue de « Général » — monitor « Disque host-1 »\]/);
+    expect(mock.state.threads.get(infra)!.box[0]).toMatch(/^\[Bulle reçue de « General » — monitor « Disque host-1 »\]/);
     expect(mock.state.threads.get(general)!.box[0]).toContain("[Bulle envoyée vers « Infra »");
-    expect(await say(infra, "tu as vu ?")).toContain("Bulle reçue de « Général »");
+    expect(await say(infra, "tu as vu ?")).toContain("Bulle reçue de « General »");
     expect(mock.state.threads.get(infra)!.box).toHaveLength(0);
     const t = await ev.waitFor((e) => e.type === "bubble.transferred");
     expect(t).toMatchObject({ bubble_id: created.id, new_bubble_id: created.id, from_thread: general, to_thread: infra, mode: "move" });
@@ -147,7 +147,7 @@ describe("transfert (§3)", () => {
     await say(general, "disque");
     const created = await ev.waitFor<{ type: "bubble.created"; bubble: Bubble }>((e) => e.type === "bubble.created" && e.bubble.kind === "monitor");
     const reply = await say(general, "envoie la bulle disque à Infra");
-    expect(reply).toContain("déplacée vers Infra");
+    expect(reply).toContain("moved to Infra");
     expect((await client.getBubble(created.bubble.id)).thread_id).toBe(infra);
     expect(await say(infra, "tu as vu ?")).toContain("Bulle reçue");
     ev.close();
@@ -201,7 +201,7 @@ describe("bulles vivantes et événements (§2, §6)", () => {
     await ev.waitFor((e) => e.type === "approval.requested");
     await ev.waitFor((e) => e.type === "bubble.created" && e.bubble.kind === "approval");
     const view = await client.getThread(general);
-    expect(view.messages.some((m) => m.role === "user" && m.content.startsWith("[Action « Proposer une purge » demandée sur la bulle"))).toBe(true);
+    expect(view.messages.some((m) => m.role === "user" && m.content.startsWith("[Action « Propose a purge » demandée sur la bulle"))).toBe(true);
     await expect(client.bubbleAction(done.bubble.id, "nope")).rejects.toMatchObject({ status: 404 });
     ev.close();
   });
@@ -232,10 +232,10 @@ describe("bulles vivantes et événements (§2, §6)", () => {
     await expect(client.bubbleAction(ready.bubble.id, "autre")).rejects.toMatchObject({ status: 404 }); // seule activate
     const res = await client.bubbleAction(ready.bubble.id, "activate");
     if (!("activated" in res)) throw new Error("activate doit répondre {activated, agent} (§9.4)");
-    expect(res.agent).toMatchObject({ name: "Relanceur factures", status: "armed", created_by: "alice" });
+    expect(res.agent).toMatchObject({ name: "Invoice chaser", status: "armed", created_by: "alice" });
     await ev.waitFor((e) => e.type === "bubble.closed" && e.bubble_id === ready.bubble.id);
     const created = await ev.waitFor<{ type: "agent.created"; agent: { name: string } }>((e) => e.type === "agent.created");
-    expect(created.agent.name).toBe("Relanceur factures");
+    expect(created.agent.name).toBe("Invoice chaser");
     expect((await client.listAgents()).length).toBe(before + 1);
     ev.close();
   });
@@ -284,10 +284,10 @@ describe("sessions qui se parlent (§4)", () => {
     await ev.waitFor((e) => e.type === "session.message" && e.to_thread === compta);
     const n = await ev.waitFor<{ type: "bubble.created"; bubble: Bubble }>((e) => e.type === "bubble.created" && e.bubble.kind === "notify");
     expect(n.bubble.thread_id).toBeNull();
-    expect(n.bubble.shared_with.members.sort()).toEqual(["alice", "bob"]); // membres de Compta
+    expect(n.bubble.shared_with.members.sort()).toEqual(["alice", "bob"]); // membres de Accounting
     if (n.bubble.kind !== "notify") throw new Error("kind");
     expect(n.bubble.state).toMatchObject({ from_thread: general, to_thread: compta, actions: [] });
-    expect(mock.state.threads.get(compta)!.box).toEqual(["[Message de la session « Général »] Le loyer est payé ?"]);
+    expect(mock.state.threads.get(compta)!.box).toEqual(["[Message de la session « General »] Le loyer est payé ?"]);
     const goto = await client.bubbleAction(n.bubble.id, "goto");
     expect(goto).toEqual({ closed: true, goto: general });
     await ev.waitFor((e) => e.type === "bubble.closed" && e.bubble_id === n.bubble.id);
@@ -306,10 +306,10 @@ describe("sessions qui se parlent (§4)", () => {
     expect(ev.events.some((e) => e.type === "thread.updated" && e.thread.id === compta && e.thread.working)).toBe(true);
     const delta = ev.events.filter((e) => e.type === "turn.delta" && e.thread_id === compta);
     expect(delta).toHaveLength(1); // delta UNIQUE par tour
-    expect(mock.state.threads.get(general)!.box[0]).toMatch(/^\[Réponse de la session « Compta »\]/);
+    expect(mock.state.threads.get(general)!.box[0]).toMatch(/^\[Réponse de la session « Accounting »\]/);
     const view = await client.getThread(compta);
     expect(view.messages.at(-2)).toMatchObject({ role: "user", channel: "session" });
-    expect(view.messages.at(-2)!.content).toContain("[Message de la session « Général »] Le loyer");
+    expect(view.messages.at(-2)!.content).toContain("[Message de la session « General »] Le loyer");
     ev.close();
   });
 
@@ -331,7 +331,7 @@ describe("sessions qui se parlent (§4)", () => {
   it("démo : Compta notifie après la première connexion SSE ; l'action ferme la notify", async () => {
     const ev = collect(client);
     const n = await ev.waitFor<{ type: "bubble.created"; bubble: Bubble }>(
-      (e) => e.type === "bubble.created" && e.bubble.kind === "notify" && e.bubble.title === "Compta",
+      (e) => e.type === "bubble.created" && e.bubble.kind === "notify" && e.bubble.title === "Accounting",
     );
     const res = await client.bubbleAction(n.bubble.id, "prepare");
     expect(res).toEqual({ closed: true, goto: null });
@@ -421,7 +421,7 @@ describe("relais web → Lokkal (X21, LOKKAL §7.16)", () => {
     await new Promise((res) => setTimeout(res, 200));
     const done = await client.getBubble(b.id);
     expect(done.status).toBe("done");
-    expect((done.state as { reply: string }).reply).toMatch(/^\(démo\)/);
+    expect((done.state as { reply: string }).reply).toMatch(/^\(demo\)/);
   });
 
   it("machine éteinte : accepté → waiting, « Annuler » = refuse", async () => {
@@ -434,5 +434,77 @@ describe("relais web → Lokkal (X21, LOKKAL §7.16)", () => {
     expect(((await client.getBubble(b.id)).state as { state: string }).state).toBe("waiting");
     await client.bubbleAction(b.id, "refuse");
     expect(((await client.getBubble(b.id)).state as { state: string }).state).toBe("refused");
+  });
+});
+
+describe("déclencheurs en anglais (le mock parle anglais, les demandes des deux langues sont comprises)", () => {
+  it("disk, search, timer, run the backup, show the video", async () => {
+    const ev = collect(client);
+    const { general } = mock.demo!;
+    expect(await say(general, "disk")).toBe("Checking host-1's disk (demo) — the cyan bubble breathes while the measurement runs.");
+    await ev.waitFor((e) => e.type === "bubble.created" && e.bubble.kind === "monitor" && e.bubble.title === "Disk host-1 /");
+    expect(await say(general, "search how to free up docker space")).toBe("Searching “how to free up docker space” — sources arrive in the violet bubble, with their preview.");
+    const found = await ev.waitFor<{ type: "bubble.created"; bubble: Bubble }>((e) => e.type === "bubble.created" && e.bubble.kind === "search");
+    expect(found.bubble.title).toBe("How to free up docker space");
+    if (found.bubble.kind !== "search") throw new Error("kind");
+    expect(found.bubble.state.results.map((r) => r.title)).toContain("Clean up unused Docker objects");
+    expect(await say(general, "timer 5 min")).toBe("5 min timer set.");
+    await ev.waitFor((e) => e.type === "bubble.created" && e.bubble.kind === "timer" && e.bubble.title === "Timer 5 min");
+    expect(await say(general, "run the backup")).toBe("Running the backup on host-1 (demo); the log tail scrolls in the blue bubble.");
+    await ev.waitFor((e) => e.type === "bubble.created" && e.bubble.kind === "script" && e.bubble.title === "Backup host-1 (on demand)");
+    expect(await say(general, "show the video")).toBe("Here is the teaser preview (demo).");
+    await ev.waitFor((e) => e.type === "bubble.created" && e.bubble.kind === "media" && e.bubble.title === "Nokker teaser (42 s)");
+    expect(await say(general, "send the report to the client")).toMatch(/^I'm preparing the action, but I need your approval/);
+    ev.close();
+  });
+
+  it("« send the disk bubble to Infra » déplace la bulle, « copy bubble disk to Infra » la copie", async () => {
+    const { general, infra } = mock.demo!;
+    const ev = collect(client);
+    await say(general, "disk");
+    const created = await ev.waitFor<{ type: "bubble.created"; bubble: Bubble }>((e) => e.type === "bubble.created" && e.bubble.kind === "monitor");
+    expect(await say(general, "copy bubble disk to Infra")).toBe("Copy of “Disk host-1 /” sent to Infra: it is in its context now.");
+    expect((await client.getBubble(created.bubble.id)).thread_id).toBe(general);
+    expect(await say(general, "send the disk bubble to Infra")).toBe("Bubble “Disk host-1 /” moved to Infra: it leaves this thread and enters its context.");
+    expect((await client.getBubble(created.bubble.id)).thread_id).toBe(infra);
+    expect(await say(general, "send the nothing bubble to Infra")).toBe("I can't find an open “nothing” bubble here.");
+    ev.close();
+  });
+
+  it("« create an agent that chases invoices » : carte « Invoice chaser », activation", async () => {
+    const ev = collect(client);
+    expect(await say(mock.demo!.general, "create an agent that chases invoices")).toBe("I'm preparing the agent card; check it, then activate it and it will move to Crew.");
+    const ready = await ev.waitFor<{ type: "bubble.updated"; bubble: Bubble }>((e) => e.type === "bubble.updated" && e.bubble.kind === "agent_draft" && e.bubble.state.fill === 1);
+    expect(ready.bubble.title).toBe("New agent: Invoice chaser");
+    const res = await client.bubbleAction(ready.bubble.id, "activate");
+    if (!("activated" in res)) throw new Error("activate doit répondre {activated, agent}");
+    expect(res.agent).toMatchObject({ name: "Invoice chaser", status: "armed" });
+    ev.close();
+  });
+
+  it("« tell Accounting that … » écrit à une autre session ; « create a page about … » crée la page", async () => {
+    const ev = collect(client);
+    const { general, compta } = mock.demo!;
+    expect(await say(general, "tell Accounting that the rent is paid")).toBe("Message passed on to the Accounting session.");
+    await ev.waitFor((e) => e.type === "session.message" && e.to_thread === compta);
+    expect(mock.state.threads.get(compta)!.box).toEqual(["[Message de la session « General »] the rent is paid"]);
+    expect(await say(general, "create a page about autumn pricing")).toBe("I'm preparing the page “Autumn pricing” (autumn-pricing.html): it shows in the bubble, private until you publish it.");
+    const page = await ev.waitFor<{ type: "bubble.created"; bubble: Bubble }>((e) => e.type === "bubble.created" && e.bubble.kind === "artifact");
+    expect(page.bubble.title).toBe("Autumn pricing");
+    expect(await say(general, "update the page")).toBe("I'm updating “Autumn pricing”: the bubble refreshes by itself.");
+    ev.close();
+  });
+
+  it("« hand off to workshop for repo site: … » propose le relais, un portable ou laptop est hors ligne", async () => {
+    const thread = (await client.createThread("Handoff EN")).id;
+    expect(await say(thread, "hand off to workshop for repo site: fix the failing test")).toBe(
+      "This work needs the “site” repository, which lives on “Workshop”. I suggest handing it off: nothing leaves without your approval.",
+    );
+    const b = (await client.listBubbles(thread)).find((x) => x.kind === "handoff")!;
+    expect(b.title).toBe("Handoff to “Workshop” — repository “site”");
+    expect(b.state).toMatchObject({ state: "proposed", online: true, need: { kind: "repo", name: "site" }, machine_name: "Workshop", task: "fix the failing test" });
+    const thread2 = (await client.createThread("Handoff EN 2")).id;
+    await say(thread2, "hand off to laptop for repo api");
+    expect(((await client.listBubbles(thread2)).find((x) => x.kind === "handoff")!.state as { online: boolean }).online).toBe(false);
   });
 });

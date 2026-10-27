@@ -44,10 +44,10 @@ function effectOf(name: LocalToolName, args: Record<string, unknown>): LocalTool
 }
 
 export const MOCK_SKILLS: Array<SkillInfo & { body: string }> = [
-  { name: "git-bisect", category: "dev", description: "Trouver le commit fautif par bissection.", source: "builtin", body: "# git-bisect\n\nTrouver le commit qui a cassé un test.\n\n1. `git bisect start`\n2. Marquer `good` et `bad`\n3. Lancer le test à chaque étape\n\n- Toujours finir par `git bisect reset`\n" },
-  { name: "pytest-debug", category: "dev", description: "Diagnostiquer un test pytest qui échoue.", source: "builtin", body: "# pytest-debug\n\nLire l'échec **avant** de modifier.\n\n- `pytest -x -q <fichier>`\n- `pytest --pdb` pour entrer dans le débogueur\n\n```bash\npytest -q tests/test_app.py\n```\n" },
-  { name: "release-notes", category: "docs", description: "Rédiger des notes de version depuis les commits.", source: "user", body: "# release-notes\n\nRegrouper les commits par type (`feat`, `fix`) et résumer en une phrase chacun.\n" },
-  { name: "sql-explain", category: "data", description: "Lire un plan EXPLAIN et proposer un index.", source: "user", body: "# sql-explain\n\n1. `EXPLAIN (ANALYZE, BUFFERS)`\n2. Repérer les `Seq Scan` coûteux\n3. Proposer un index ciblé\n" },
+  { name: "git-bisect", category: "dev", description: "Find the faulty commit by bisection.", source: "builtin", body: "# git-bisect\n\nFind the commit that broke a test.\n\n1. `git bisect start`\n2. Mark `good` and `bad`\n3. Run the test at each step\n\n- Always finish with `git bisect reset`\n" },
+  { name: "pytest-debug", category: "dev", description: "Diagnose a failing pytest test.", source: "builtin", body: "# pytest-debug\n\nRead the failure **before** changing anything.\n\n- `pytest -x -q <file>`\n- `pytest --pdb` to drop into the debugger\n\n```bash\npytest -q tests/test_app.py\n```\n" },
+  { name: "release-notes", category: "docs", description: "Write release notes from the commits.", source: "user", body: "# release-notes\n\nGroup the commits by type (`feat`, `fix`) and summarise each in one sentence.\n" },
+  { name: "sql-explain", category: "data", description: "Read an EXPLAIN plan and suggest an index.", source: "user", body: "# sql-explain\n\n1. `EXPLAIN (ANALYZE, BUFFERS)`\n2. Spot the costly `Seq Scan`s\n3. Suggest a targeted index\n" },
 ];
 
 interface ThreadTools {
@@ -73,11 +73,11 @@ function toolsFor(state: MockState, threadId: string): ThreadTools {
       return { hash, short_hash: hash.slice(0, 8), timestamp: new Date(now - ago * 60_000).toISOString(), reason, files_changed: files, insertions: files * 3, deletions: files };
     };
     t = {
-      checkpoints: [mk(3, 2, "avant patch src/app.py", 1), mk(2, 25, "avant pytest", 3), mk(1, 90, "début de session", 0)],
+      checkpoints: [mk(3, 2, "before patch src/app.py", 1), mk(2, 25, "before pytest", 3), mk(1, 90, "session start", 0)],
       todos: [
-        { id: "1", content: "Lire le test qui échoue", status: "completed" },
-        { id: "2", content: "Corriger add() dans src/app.py", status: "in_progress" },
-        { id: "3", content: "Relancer pytest", status: "pending" },
+        { id: "1", content: "Read the failing test", status: "completed" },
+        { id: "2", content: "Fix add() in src/app.py", status: "in_progress" },
+        { id: "3", content: "Re-run pytest", status: "pending" },
       ],
       snapshots: new Map(),
       lastTurn: null,
@@ -205,7 +205,7 @@ function diffText(cp: CheckpointInfo): string {
     `-    return a - b`,
     `+    return a + b`,
     ` `,
-    `# depuis le point ${cp.short_hash} (${cp.reason})`,
+    `# since checkpoint ${cp.short_hash} (${cp.reason})`,
   ].join("\n");
 }
 
@@ -230,7 +230,7 @@ function execute(state: MockState, threadId: string, name: LocalToolName, args: 
     }
     case "checkpoint_create": {
       const hash = randomId("x").replace(/[^0-9a-f]/g, "").padEnd(40, "0").slice(0, 40);
-      const cp: CheckpointInfo = { hash, short_hash: hash.slice(0, 8), timestamp: new Date().toISOString(), reason: String(args.reason ?? "manuel"), files_changed: 0 };
+      const cp: CheckpointInfo = { hash, short_hash: hash.slice(0, 8), timestamp: new Date().toISOString(), reason: String(args.reason ?? "manual"), files_changed: 0 };
       t.checkpoints.unshift(cp);
       const link = { thread_id: threadId, turn_index: nextTurn(state, threadId), tool: "checkpoint_create" };
       t.links.set(hash, link);

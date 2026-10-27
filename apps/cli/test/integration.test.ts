@@ -47,7 +47,7 @@ describe("CLI ↔ mock-server", () => {
     });
 
     expect(chunks.length).toBeGreaterThan(1); // vraiment streamé, pas un seul bloc
-    expect(reply).toContain("approbation");
+    expect(reply).toContain("approval");
 
     const pending = await session.listApprovals("pending");
     expect(pending).toHaveLength(1);

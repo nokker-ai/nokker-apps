@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import type { Bubble, Thread } from "@nokker-apps/sdk";
 import { Icon } from "../icons.js";
 import { useStore } from "../context.js";
+import { tr } from "../i18n/index.js";
 
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -64,8 +65,8 @@ export function SharePopover({
   const toggle = (list: string[], v: string): string[] => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
 
   return (
-    <div className="popover share-pop" role="dialog" aria-label={`Partager la bulle ${bubble.title}`} ref={ref} onPointerDown={(e) => e.stopPropagation()}>
-      <span className="eyebrow">Membres</span>
+    <div className="popover share-pop" role="dialog" aria-label={tr("Share the bubble {0}", bubble.title)} ref={ref} onPointerDown={(e) => e.stopPropagation()}>
+      <span className="eyebrow">{tr("Members")}</span>
       <div className="pick-list">
         {members.map((m) => {
           const on = sh.members.includes(m.id);
@@ -80,7 +81,7 @@ export function SharePopover({
           );
         })}
       </div>
-      <span className="eyebrow sep">Sessions</span>
+      <span className="eyebrow sep">{tr("Sessions")}</span>
       <div className="pick-list">
         {threads
           .filter((t) => t.id !== bubble.thread_id)
@@ -104,7 +105,7 @@ export function SharePopover({
         }}
       >
         <Icon name="link" />
-        {copied === "ok" ? "Lien copié" : copied === "ko" ? "Copie impossible" : "Copier le lien"}
+        {copied === "ok" ? tr("Link copied") : copied === "ko" ? tr("Copy failed") : tr("Copy link")}
       </button>
     </div>
   );

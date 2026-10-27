@@ -15,7 +15,7 @@ import {
 } from "../src/localtools.js";
 import { setLang } from "../src/i18n/index.js";
 
-afterEach(() => setLang("fr"));
+afterEach(() => setLang("en"));
 
 const SHA = "ab".repeat(32);
 
@@ -42,12 +42,12 @@ describe("/agents", () => {
   it("annulé : interrupted / cancelled ; repris après sa carte ; anciens mocks (status ok)", () => {
     let m = applySubagentEvent(new Map(), { type: "subagent.started", child_id: "c2", goal: "g" }, 0);
     m = applySubagentEvent(m, { type: "subagent.finished", child_id: "c2", status: "interrupted", exit_reason: "cancelled", commits: 0, dirty: true, kept: true, background: true }, 5000);
-    expect(formatSubagents(m, 9000)).toMatch(/c2 {2}interrompu +\(arrière-plan\) .* — cancelled, 0 commit\(s\), arbre modifié/);
+    expect(formatSubagents(m, 9000)).toMatch(/c2 {2}interrupted +\(background\) .* — cancelled, 0 commit\(s\), tree modified/);
     m = applySubagentEvent(m, { type: "subagent.finished", child_id: "c2", status: "completed", exit_reason: "completed", resumed: true }, 6000);
-    expect(formatSubagents(m, 9000)).toContain("repris après sa carte");
+    expect(formatSubagents(m, 9000)).toContain("resumed after its card");
     const old = applySubagentEvent(new Map(), { type: "subagent.finished", child_id: "c3", status: "ok" }, 0);
     expect(old.get("c3")!.status).toBe("completed");
-    expect(formatSubagents(new Map(), 0, "(note)")).toBe("Aucun sous-agent sur ce fil.\n(note)");
+    expect(formatSubagents(new Map(), 0, "(note)")).toBe("No sub-agents on this thread.\n(note)");
   });
 });
 
@@ -57,14 +57,14 @@ describe("/checkpoints et redémarrage", () => {
     const linked = { hash: "a".repeat(40), short_hash: "aaaaaaaa", timestamp: "2026-10-25T10:00:00+00:00", reason: "avant patch", files_changed: 1, thread_id: "th_1", turn_index: 2, tool: "patch" };
     const old = { ...linked, hash: "b".repeat(40), short_hash: "bbbbbbbb", thread_id: undefined, turn_index: undefined, tool: undefined };
     const out = formatCheckpoints([linked, old]).split("\n");
-    expect(out[1]).toMatch(/aaaaaaaa .*\(1 fichier\)  · tour 3$/);
-    expect(out[2]).toMatch(/bbbbbbbb .*\(1 fichier\)$/);
+    expect(out[1]).toMatch(/aaaaaaaa .*\(1 file\)  · turn 3$/);
+    expect(out[2]).toMatch(/bbbbbbbb .*\(1 file\)$/);
   });
   it("enfant relu après redémarrage : interrupted / restart", () => {
     let m = applySubagentEvent(new Map(), { type: "subagent.started", child_id: "c9", goal: "g", background: true }, 0);
     m = mergeSubagentViews(m, [{ child_id: "c9", thread_id: "th_p/sa-c9", task_index: 0, goal: "g", elapsed_s: 3, status: "interrupted", exit_reason: "restart", worktree: { path: "/w", branch: "nokker/sa-c9", kept: true } }]);
-    expect(formatSubagents(m)).toContain("interrompu");
-    expect(formatSubagents(m)).toContain("le noyau a redémarré : worktree conservé, non inspecté");
+    expect(formatSubagents(m)).toContain("interrupted");
+    expect(formatSubagents(m)).toContain("the core restarted: worktree kept, not inspected");
   });
 });
 

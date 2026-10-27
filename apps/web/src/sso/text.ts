@@ -1,5 +1,6 @@
 /** Textes du SSO (connexion : FR/EN comme l'accueil ; réglages et équipe : FR comme l'onglet Équipe). */
 import type { SsoRole } from "@nokker-apps/sdk";
+import { tr } from "../i18n/index.js";
 
 type L = "fr" | "en";
 const T: Record<string, Record<L, string>> = {
@@ -50,59 +51,69 @@ export function ssoText(lang: string, key: string): string {
   return row[lang === "en" ? "en" : "fr"];
 }
 
-export const SSO_ROLE_LABEL: Record<SsoRole, string> = { maintainer: "mainteneur", member: "membre", viewer: "lecture" };
+export function ssoRoleLabel(role: SsoRole): string {
+  return { maintainer: tr("maintainer"), member: tr("member"), viewer: tr("read-only") }[role];
+}
 
 /** Âges proposés pour « SSO obligatoire » (bornes du noyau : 300 s … 7 j ; défaut 12 h). */
-export const MAX_AGE_CHOICES: { s: number; label: string }[] = [
-  { s: 3600, label: "1 h" },
-  { s: 4 * 3600, label: "4 h" },
-  { s: 12 * 3600, label: "12 h (défaut)" },
-  { s: 86400, label: "24 h" },
-  { s: 3 * 86400, label: "3 jours" },
-  { s: 7 * 86400, label: "7 jours" },
-];
+export function maxAgeChoices(): { s: number; label: string }[] {
+  return [
+    { s: 3600, label: "1 h" },
+    { s: 4 * 3600, label: "4 h" },
+    { s: 12 * 3600, label: tr("12 h (default)") },
+    { s: 86400, label: "24 h" },
+    { s: 3 * 86400, label: tr("3 days") },
+    { s: 7 * 86400, label: tr("7 days") },
+  ];
+}
 
 export function maxAgeLabel(s: number): string {
-  const hit = MAX_AGE_CHOICES.find((c) => c.s === s);
+  const hit = maxAgeChoices().find((c) => c.s === s);
   if (hit) return hit.label;
   return s % 3600 === 0 ? `${s / 3600} h` : `${Math.round(s / 60)} min`;
 }
 
-/** Journal (`sso_audit`) en clair. */
-export const AUDIT_LABEL: Record<string, string> = {
-  connection_created: "connexion créée",
-  connection_changed: "connexion modifiée",
-  connection_deleted: "connexion supprimée",
-  client_secret_set: "secret du client posé",
-  domain_added: "domaine ajouté",
-  domain_verified: "domaine prouvé",
-  domain_removed: "domaine retiré",
-  binding_set: "lien projet posé",
-  binding_removed: "lien projet retiré",
-  login_ok: "connexion réussie",
-  login_refused: "connexion refusée",
-  account_created: "compte créé",
-  account_linked: "compte relié",
-  member_added: "membre ajouté",
-  role_changed: "rôle changé",
-  role_removed: "rôle retiré",
-  member_limit: "plafond de membres atteint",
-  idp_unavailable: "fournisseur injoignable",
-};
+/** Journal (`sso_audit`) en clair ; le code brut si l'événement est inconnu. */
+export function auditLabel(kind: string): string {
+  switch (kind) {
+    case "connection_created": return tr("connection created");
+    case "connection_changed": return tr("connection changed");
+    case "connection_deleted": return tr("connection deleted");
+    case "client_secret_set": return tr("client secret set");
+    case "domain_added": return tr("domain added");
+    case "domain_verified": return tr("domain verified");
+    case "domain_removed": return tr("domain removed");
+    case "binding_set": return tr("project link set");
+    case "binding_removed": return tr("project link removed");
+    case "login_ok": return tr("sign-in succeeded");
+    case "login_refused": return tr("sign-in refused");
+    case "account_created": return tr("account created");
+    case "account_linked": return tr("account linked");
+    case "member_added": return tr("member added");
+    case "role_changed": return tr("role changed");
+    case "role_removed": return tr("role removed");
+    case "member_limit": return tr("member limit reached");
+    case "idp_unavailable": return tr("provider unreachable");
+    default: return kind;
+  }
+}
 
-/** Erreurs des réglages (propriétaire), en clair. */
-export const SETTINGS_ERROR: Record<string, string> = {
-  secret_value_refused: "Une valeur de secret ne passe que par « Poser la valeur » (écriture seule).",
-  bad_issuer: "Issuer : une URL https, sans requête ni identifiants.",
-  bad_name: "Nom du secret : lettres, chiffres, « _ », « . », « - » (64 au plus).",
-  bad_value: "Le secret : 4096 caractères au plus, sans espace autour.",
-  bad_domain: "Domaine illisible (ex. example.com).",
-  bad_role: "Rôle : mainteneur, membre ou lecture.",
-  owner_not_mappable: "Le rôle propriétaire ne s'obtient jamais par le SSO.",
-  not_verified: "L'enregistrement TXT n'est pas (encore) visible : vérifie sa valeur, puis réessaie dans quelques minutes.",
-  domain_claimed: "Ce domaine est déjà prouvé par une autre connexion SSO.",
-  dns_unavailable: "La vérification DNS est indisponible pour le moment.",
-  too_many: "Plafond atteint (5 connexions, 20 domaines, 100 correspondances).",
-  forbidden: "Seul le propriétaire du projet règle son SSO.",
-  rate: "Trop d'écritures d'un coup : réessaie dans une minute.",
-};
+/** Erreurs des réglages (propriétaire), en clair ; `undefined` si le code est inconnu. */
+export function settingsError(code: string): string | undefined {
+  switch (code) {
+    case "secret_value_refused": return tr("A secret value only goes through “Set the value” (write-only).");
+    case "bad_issuer": return tr("Issuer: an https URL, with no query or credentials.");
+    case "bad_name": return tr("Secret name: letters, digits, “_”, “.”, “-” (64 at most).");
+    case "bad_value": return tr("The secret: 4096 characters at most, no surrounding spaces.");
+    case "bad_domain": return tr("Unreadable domain (e.g. example.com).");
+    case "bad_role": return tr("Role: maintainer, member or read-only.");
+    case "owner_not_mappable": return tr("The owner role is never obtained through SSO.");
+    case "not_verified": return tr("The TXT record is not (yet) visible: check its value, then try again in a few minutes.");
+    case "domain_claimed": return tr("This domain is already proven by another SSO connection.");
+    case "dns_unavailable": return tr("DNS verification is unavailable for now.");
+    case "too_many": return tr("Limit reached (5 connections, 20 domains, 100 mappings).");
+    case "forbidden": return tr("Only the project owner manages its SSO.");
+    case "rate": return tr("Too many writes at once: try again in a minute.");
+    default: return undefined;
+  }
+}

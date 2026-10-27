@@ -2,7 +2,7 @@
  * Miroir de la machine (LOKKAL §7.23) — mock, jeton local seulement : `GET /v1/local/mirror`, `POST …/resync|resume`,
  * pages gardées en ligne (`GET|PUT /v1/local/mirror/pages…`), choix des projets mémoire (`GET|PUT …/projects…`).
  * Démo : miroir actif, canal `pages` en échec (réessai dans 40 s), une page au-dessus du plafond, une page `local`
- * (409 `local_page`), le projet mémoire du « Site vitrine » relié à son projet d'équipe.
+ * (409 `local_page`), le projet mémoire du « Marketing site » relié à son projet d'équipe.
  * Réglage : `POST /v1/dev/local-mirror-mock {enabled?, paused?, healthy?}`.
  */
 import { randomBytes } from "node:crypto";
@@ -46,10 +46,10 @@ function seed(): M {
     pending: { turns: 3, notes: 0, team_notes: 1, pages: 1 },
     resync: { requested: false, last_at: null },
     pages: [
-      { page_id: pid(), title: "Rapport hebdo (démo)", version: 3, size: 48_200, mirror: true, local: false },
-      { page_id: pid(), title: "Tableau des coûts (démo)", version: 1, size: 61 * 1024 * 1024, mirror: true, local: false },
-      { page_id: pid(), title: "Notes de réunion (démo)", version: 2, size: 12_400, mirror: false, local: false },
-      { page_id: pid(), title: "Brouillon privé (démo)", version: 1, size: 3_100, mirror: false, local: true },
+      { page_id: pid(), title: "Weekly report (demo)", version: 3, size: 48_200, mirror: true, local: false },
+      { page_id: pid(), title: "Cost table (demo)", version: 1, size: 61 * 1024 * 1024, mirror: true, local: false },
+      { page_id: pid(), title: "Meeting notes (demo)", version: 2, size: 12_400, mirror: false, local: false },
+      { page_id: pid(), title: "Private draft (demo)", version: 1, size: 3_100, mirror: false, local: true },
     ],
     projects: [
       { project: "p-0a1b2c3d4e5f6a7b", label: "site", mirror: true },
@@ -92,7 +92,7 @@ function status(m: M): LocalMirrorStatus {
     channels,
     resync: { ...m.resync },
     pages_space: { used: m.used, quota: QUOTA },
-    team: { projects: { "pj_demo|p-0a1b2c3d4e5f6a7b": { cursor: 4, notes: 1, name: "Site vitrine" } }, errors: {} },
+    team: { projects: { "pj_demo|p-0a1b2c3d4e5f6a7b": { cursor: 4, notes: 1, name: "Marketing site" } }, errors: {} },
   };
 }
 

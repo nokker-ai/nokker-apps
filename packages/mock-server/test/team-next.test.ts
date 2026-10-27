@@ -26,7 +26,7 @@ const ops = (b: unknown) => fetch(`${mock.url}/v1/dev/ops-mock`, { method: "POST
 
 describe("budget, agents des membres, journal (§7.27)", () => {
   it("budget : fenêtres, une ligne par membre (anciens compris) pour l'owner, plafond posé et journalisé", async () => {
-    const s = await byName("Site vitrine");
+    const s = await byName("Marketing site");
     const v = await c.getProjectBudget(s.id);
     expect(v).toMatchObject({ counted: true, tz: "Europe/Zurich", month: { cap: 50, state: "warning" }, today: { state: "none" } });
     expect(v.members?.find((m) => m.former)).toMatchObject({ email: null });
@@ -35,13 +35,13 @@ describe("budget, agents des membres, journal (§7.27)", () => {
     expect((await c.getProjectBudget(s.id)).today).toMatchObject({ cap: 4, state: "over" });
     await c.deleteProjectBudget(s.id);
     expect((await c.getProjectAudit(s.id)).events.map((e) => e.event)).toEqual(["budget_removed", "budget_set"]);
-    const r = await byName("Recherche"); // lectrice : sa ligne seulement, pas de journal
+    const r = await byName("Research"); // lectrice : sa ligne seulement, pas de journal
     expect((await c.getProjectBudget(r.id)).members?.every((m) => m.you)).toBe(true);
     expect((await fail(c.getProjectAudit(r.id))).status).toBe(403);
   });
 
   it("agents : ceux des autres réduits, désarmer celui d'un autre (owner) est journalisé", async () => {
-    const s = await byName("Site vitrine");
+    const s = await byName("Marketing site");
     const { agents } = await c.listProjectAgents(s.id);
     const other = agents.find((a) => !a.mine)!;
     expect(Object.keys(other).sort()).toEqual(["can_disarm", "id", "last_run", "mine", "name", "owner", "status", "trigger"]);
@@ -52,7 +52,7 @@ describe("budget, agents des membres, journal (§7.27)", () => {
   });
 
   it("quarantaine : remettre une version, la courante y part, la ligne reste marquée", async () => {
-    const s = await byName("Site vitrine");
+    const s = await byName("Marketing site");
     const q = (await c.listProjectQuarantine(s.id)).quarantine[0]!;
     const r = await c.restoreQuarantinedNote(s.id, q.id);
     expect(r.note).toMatchObject({ name: q.name, sha: q.sha });

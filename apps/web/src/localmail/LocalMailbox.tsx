@@ -6,36 +6,52 @@
  */
 import React, { useCallback, useEffect, useState } from "react";
 import { NokkerApiError, type LocalMailCard, type MailSettings, type NokkerClient } from "@nokker-apps/sdk";
+import { shellLang, tr } from "../i18n/index.js";
 import "./localmail.css";
 
 type Toast = (text: string, tone?: "ok" | "error") => void;
 
-const CODE_TEXT: Record<string, string> = {
-  auth_failed: "Identifiants refusés par le serveur de mail : vérifie l'adresse, l'utilisateur et le secret choisi.",
-  unreachable: "Serveur de mail injoignable depuis cette machine.",
-  tls_failed: "La connexion chiffrée au serveur de mail a échoué.",
-  protocol_error: "Le serveur de mail a répondu de façon inattendue.",
-  port_not_allowed: "Port refusé : IMAP 993 ou 143, SMTP 465 ou 587.",
-  host_blocked: "Cet hôte n'est pas joignable par Nokker (adresse privée ou réservée).",
-  not_configured: "Aucune boîte reliée.",
-  key_missing: "Le coffre de la machine est indisponible ou scellé.",
-};
+/** Texte en clair d'un code d'erreur des connecteurs (dans la langue de l'interface, lu à l'appel). */
+function codeText(code: string): string | undefined {
+  switch (code) {
+    case "auth_failed":
+      return tr("Credentials refused by the mail server: check the address, the user and the chosen secret.");
+    case "unreachable":
+      return tr("Mail server unreachable from this machine.");
+    case "tls_failed":
+      return tr("The encrypted connection to the mail server failed.");
+    case "protocol_error":
+      return tr("The mail server answered unexpectedly.");
+    case "port_not_allowed":
+      return tr("Port refused: IMAP 993 or 143, SMTP 465 or 587.");
+    case "host_blocked":
+      return tr("This host is not reachable by Nokker (private or reserved address).");
+    case "not_configured":
+      return tr("No mailbox linked.");
+    case "key_missing":
+      return tr("The machine's vault is unavailable or sealed.");
+    default:
+      return undefined;
+  }
+}
 
 /** Message d'une erreur des connecteurs (`{error: <code>, message}`) : celui du noyau tel quel, sinon le code en clair. */
 export function mailError(e: unknown): string {
   if (e instanceof NokkerApiError) {
     const b = e.body as { error?: string | { message?: string }; message?: string } | undefined;
-    if (e.status === 403) return "La boîte mail de la machine se règle sur la machine seulement, jamais par la passerelle.";
+    if (e.status === 403) return tr("The machine's mailbox is set up on the machine only, never through the gateway.");
     if (typeof b?.message === "string" && b.message) return b.message;
     const code = typeof b?.error === "string" ? b.error : undefined;
-    if (code && CODE_TEXT[code]) return CODE_TEXT[code];
+    const known = code ? codeText(code) : undefined;
+    if (known) return known;
     if (typeof b?.error === "object" && b.error?.message) return b.error.message;
-    return `refus de la machine (${e.status})`;
+    return tr("machine refused ({0})", e.status);
   }
-  return "la machine ne répond pas";
+  return tr("the machine is not responding");
 }
 
-const PRESET_LABEL: Record<string, string> = { gmail: "Gmail", icloud: "iCloud", infomaniak: "Infomaniak", fastmail: "Fastmail", custom: "Autre serveur (IMAP/SMTP)" };
+const PRESET_LABEL: Record<string, string> = { gmail: "Gmail", icloud: "iCloud", infomaniak: "Infomaniak", fastmail: "Fastmail" };
+const presetLabel = (p: string): string | undefined => (p === "custom" ? tr("Other server (IMAP/SMTP)") : PRESET_LABEL[p]);
 
 export function LocalMailbox({ client, toast }: { client: NokkerClient; toast: Toast }): React.ReactElement | null {
   const [card, setCard] = useState<LocalMailCard | null>(null);
@@ -72,12 +88,12 @@ export function LocalMailbox({ client, toast }: { client: NokkerClient; toast: T
   if (!card)
     return error ? (
       <div className="machine-section local-mail">
-        <h2>Boîte mail de la machine</h2>
+        <h2>{tr("The machine's mailbox")}</h2>
         <p className="error" role="alert">
           {error}
         </p>
         <button type="button" className="btn" onClick={() => (setError(null), void load())}>
-          Réessayer
+          {tr("Retry")}
         </button>
       </div>
     ) : null;
@@ -98,7 +114,7 @@ export function LocalMailbox({ client, toast }: { client: NokkerClient; toast: T
       const c = await client.putLocalMail({ settings, secret: get("secret") });
       setCard(c);
       setOpen(false);
-      toast(c.message ? `Boîte reliée : ${c.message}.` : "Boîte reliée.", "ok");
+      toast(c.message ? tr("Mailbox linked: {0}.", c.message) : tr("Mailbox linked."), "ok");
     } catch (er) {
       setError(mailError(er));
     } finally {
@@ -110,8 +126,8 @@ export function LocalMailbox({ client, toast }: { client: NokkerClient; toast: T
     setError(null);
     try {
       const r = await client.testLocalMail();
-      if (r.ok) toast(`Boîte vérifiée : ${r.message}.`, "ok");
-      else setError((r.code && CODE_TEXT[r.code]) || r.message);
+      if (r.ok) toast(tr("Mailbox verified: {0}.", r.message), "ok");
+      else setError((r.code && codeText(r.code)) || r.message);
       await load();
     } catch (er) {
       setError(mailError(er));
@@ -124,7 +140,7 @@ export function LocalMailbox({ client, toast }: { client: NokkerClient; toast: T
     setConfirm(false);
     try {
       await client.deleteLocalMail();
-      toast("Boîte retirée de la machine. Si une boîte est reliée sur nokker.ai, ses outils reprennent la main.", "ok");
+      toast(tr("Mailbox removed from the machine. If a mailbox is linked on nokker.ai, its tools take over again."), "ok");
       await load();
     } catch (er) {
       setError(mailError(er));
@@ -135,32 +151,33 @@ export function LocalMailbox({ client, toast }: { client: NokkerClient; toast: T
 
   return (
     <div className="machine-section local-mail">
-      <h2>Boîte mail de la machine</h2>
+      <h2>{tr("The machine's mailbox")}</h2>
       <p className="fine">
-        Une boîte reliée ici reste sur la machine : ses messages ne passent jamais par nokker.ai, et les tours qui la lisent ne partent pas au miroir. Envoyer ou mettre à la corbeille demande toujours ton
-        accord (carte forte). Si une boîte est aussi reliée sur nokker.ai, c'est celle de la machine que tes sessions utilisent.
+        {tr(
+          "A mailbox linked here stays on the machine: its messages never go through nokker.ai, and turns that read it do not go to the mirror. Sending or moving to trash always needs your approval (strong card). If a mailbox is also linked on nokker.ai, your sessions use the machine's.",
+        )}
       </p>
       {linked ? (
         <div className="local-mail-card">
           <p>
-            <strong>{String(s.address ?? "")}</strong> <span className={`chip ${card.state === "ok" ? "role-member" : ""}`}>{card.state === "ok" ? "vérifiée" : "pas encore vérifiée"}</span> <span className="chip">reste sur la machine</span>
+            <strong>{String(s.address ?? "")}</strong> <span className={`chip ${card.state === "ok" ? "role-member" : ""}`}>{card.state === "ok" ? tr("verified") : tr("not verified yet")}</span> <span className="chip">{tr("stays on the machine")}</span>
           </p>
           <p className="fine">
-            {PRESET_LABEL[String(s.preset)] ?? String(s.preset ?? "")} · IMAP <code>{String(s.imap_host ?? "")}</code> · SMTP <code>{String(s.smtp_host ?? "")}</code>
+            {presetLabel(String(s.preset)) ?? String(s.preset ?? "")} · IMAP <code>{String(s.imap_host ?? "")}</code> · SMTP <code>{String(s.smtp_host ?? "")}</code>
             {s.username && s.username !== s.address ? (
               <>
                 {" "}
-                · utilisateur <code>{String(s.username)}</code>
+                · {tr("user")} <code>{String(s.username)}</code>
               </>
             ) : null}
           </p>
           <p className="fine">
-            Mot de passe : secret <code>{card.secret ?? "—"}</code> du coffre
-            {card.last_ok_at ? ` · dernier test réussi le ${new Date(card.last_ok_at).toLocaleString("fr-CH")}` : ""}
+            {tr("Password: vault secret")} <code>{card.secret ?? "—"}</code>
+            {card.last_ok_at ? tr(" · last successful test on {0}", new Date(card.last_ok_at).toLocaleString(shellLang() === "fr" ? "fr-CH" : "en-GB")) : ""}
           </p>
         </div>
       ) : (
-        <p className="fine">Aucune boîte reliée à la machine.</p>
+        <p className="fine">{tr("No mailbox linked to the machine.")}</p>
       )}
       {error ? (
         <p className="error" role="alert">
@@ -170,25 +187,25 @@ export function LocalMailbox({ client, toast }: { client: NokkerClient; toast: T
       {!open ? (
         <span className="team-row-actions">
           <button type="button" className="btn" disabled={busy !== null} onClick={() => (setOpen(true), setError(null), setPreset(String(s.preset ?? presets[0] ?? "gmail")), void load())}>
-            {linked ? "Modifier" : "Relier une boîte"}
+            {linked ? tr("Edit") : tr("Link a mailbox")}
           </button>
           {linked ? (
             <>
               <button type="button" className="btn btn-ghost" disabled={busy !== null} onClick={() => void test()}>
-                {busy === "test" ? "Test…" : "Tester"}
+                {busy === "test" ? tr("Testing…") : tr("Test")}
               </button>
               {confirm ? (
                 <>
                   <button type="button" className="btn btn-danger" disabled={busy !== null} onClick={() => void remove()}>
-                    Oui, retirer
+                    {tr("Yes, remove")}
                   </button>
                   <button type="button" className="btn btn-ghost" onClick={() => setConfirm(false)}>
-                    Annuler
+                    {tr("Cancel")}
                   </button>
                 </>
               ) : (
                 <button type="button" className="btn btn-ghost" disabled={busy !== null} onClick={() => setConfirm(true)}>
-                  Retirer
+                  {tr("Remove")}
                 </button>
               )}
             </>
@@ -196,43 +213,43 @@ export function LocalMailbox({ client, toast }: { client: NokkerClient; toast: T
         </span>
       ) : (
         <form className="secret-form local-mail-form" autoComplete="off" onSubmit={(e) => void save(e)}>
-          <label htmlFor="lm-preset">Fournisseur</label>
+          <label htmlFor="lm-preset">{tr("Provider")}</label>
           <select id="lm-preset" value={preset} onChange={(e) => setPreset(e.target.value)}>
             {[...presets, "custom"].map((p) => (
               <option key={p} value={p}>
-                {PRESET_LABEL[p] ?? p}
+                {presetLabel(p) ?? p}
               </option>
             ))}
           </select>
-          <label htmlFor="lm-address">Adresse</label>
+          <label htmlFor="lm-address">{tr("Address")}</label>
           <input id="lm-address" name="address" type="email" required autoCapitalize="none" spellCheck={false} defaultValue={linked ? String(s.address ?? "") : ""} />
-          <label htmlFor="lm-user">Utilisateur</label>
-          <input id="lm-user" name="username" autoCapitalize="none" spellCheck={false} placeholder="l'adresse, par défaut" defaultValue={linked && s.username !== s.address ? String(s.username ?? "") : ""} />
+          <label htmlFor="lm-user">{tr("User")}</label>
+          <input id="lm-user" name="username" autoCapitalize="none" spellCheck={false} placeholder={tr("the address, by default")} defaultValue={linked && s.username !== s.address ? String(s.username ?? "") : ""} />
           {preset === "custom" ? (
             <>
-              <label htmlFor="lm-imap">Serveur IMAP</label>
+              <label htmlFor="lm-imap">{tr("IMAP server")}</label>
               <input id="lm-imap" name="imap_host" required autoCapitalize="none" spellCheck={false} defaultValue={linked ? String(s.imap_host ?? "") : ""} />
-              <label htmlFor="lm-imap-port">Port IMAP</label>
+              <label htmlFor="lm-imap-port">{tr("IMAP port")}</label>
               <select id="lm-imap-port" name="imap_port" defaultValue="993">
                 <option value="993">993 (TLS)</option>
                 <option value="143">143 (STARTTLS)</option>
               </select>
-              <label htmlFor="lm-smtp">Serveur SMTP</label>
+              <label htmlFor="lm-smtp">{tr("SMTP server")}</label>
               <input id="lm-smtp" name="smtp_host" required autoCapitalize="none" spellCheck={false} defaultValue={linked ? String(s.smtp_host ?? "") : ""} />
-              <label htmlFor="lm-smtp-port">Port SMTP</label>
+              <label htmlFor="lm-smtp-port">{tr("SMTP port")}</label>
               <select id="lm-smtp-port" name="smtp_port" defaultValue="587">
                 <option value="465">465 (TLS)</option>
                 <option value="587">587 (STARTTLS)</option>
               </select>
             </>
           ) : null}
-          <label htmlFor="lm-secret">Mot de passe (secret du coffre)</label>
+          <label htmlFor="lm-secret">{tr("Password (vault secret)")}</label>
           {names === null ? (
-            <input id="lm-secret" name="secret" required autoCapitalize="none" spellCheck={false} placeholder="NOM du secret" aria-describedby="lm-secret-tip" />
+            <input id="lm-secret" name="secret" required autoCapitalize="none" spellCheck={false} placeholder={tr("secret NAME")} aria-describedby="lm-secret-tip" />
           ) : names.length ? (
             <select id="lm-secret" name="secret" required defaultValue={card.secret ?? ""} aria-describedby="lm-secret-tip">
               <option value="" disabled>
-                choisir un nom…
+                {tr("choose a name…")}
               </option>
               {names.map((n) => (
                 <option key={n} value={n}>
@@ -242,18 +259,19 @@ export function LocalMailbox({ client, toast }: { client: NokkerClient; toast: T
             </select>
           ) : (
             <p id="lm-secret" className="fine">
-              Le coffre est vide.
+              {tr("The vault is empty.")}
             </p>
           )}
           <p id="lm-secret-tip" className="fine local-mail-tip">
-            Le mot de passe ne s'écrit jamais ici : range-le d'abord dans le coffre ci-dessus (ou <code>nokker secret set NOM</code>), puis choisis son nom. Pour Gmail et iCloud, un mot de passe d'application.
+            {tr("The password is never typed here: store it first in the vault above (or")} <code>nokker secret set NAME</code>
+            {tr("), then choose its name. For Gmail and iCloud, an app password.")}
           </p>
           <span className="team-row-actions local-mail-actions">
             <button type="submit" className="btn btn-brass" disabled={busy !== null || names?.length === 0}>
-              {busy === "save" ? "Test de la boîte…" : "Tester et relier"}
+              {busy === "save" ? tr("Testing the mailbox…") : tr("Test and link")}
             </button>
             <button type="button" className="btn btn-ghost" onClick={() => (setOpen(false), setError(null))}>
-              Annuler
+              {tr("Cancel")}
             </button>
           </span>
         </form>

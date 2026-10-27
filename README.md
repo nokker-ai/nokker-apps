@@ -15,9 +15,11 @@ pnpm install
 
 ```sh
 pnpm --filter @nokker-apps/mock-server dev
-# écoute sur http://127.0.0.1:4310 — scénario de démo des bulles (valeurs « démo ») : « disque », « cherche … »,
-# « timer 5 min », « lance le backup », « montre la vidéo », « crée un agent qui … », « envoie / copie la bulle X à
-# <session> », « demande à Compta de … » ; Compta notifie ~12 s après la première connexion SSE.
+# écoute sur http://127.0.0.1:4310 — scénario de démo des bulles (valeurs « demo », contenu en anglais), demandes en
+# français ou en anglais : « disque » / "disk", « cherche … » / "search …", "timer 5 min", « lance le backup » /
+# "run the backup", « montre la vidéo » / "show the video", « crée un agent qui … » / "create an agent that …",
+# « envoie / copie la bulle X à <session> » / "send / copy the X bubble to <session>", « demande à Accounting de … » /
+# "ask Accounting to …" ; Accounting notifie ~12 s après la première connexion SSE.
 ```
 
 ### CLI (terminal)

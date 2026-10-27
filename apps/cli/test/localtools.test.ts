@@ -34,8 +34,8 @@ describe("points de retour", () => {
     const out = formatCheckpoints(cps);
     expect(out).toContain("aa110000");
     expect(out).toContain("avant patch");
-    expect(out).toContain("(1 fichier)");
-    expect(out).toContain("(0 fichier)");
+    expect(out).toContain("(1 file)");
+    expect(out).toContain("(0 file)");
     expect(resolveCheckpoint(cps, null)).toBe(cps[0]);
     expect(resolveCheckpoint(cps, "2")).toBe(cps[1]);
     expect(resolveCheckpoint(cps, "bb22")).toBe(cps[1]);
@@ -46,9 +46,9 @@ describe("points de retour", () => {
   });
   it("résumé de restauration", () => {
     const t = formatRestore({ success: true, restored_files: ["a.py"], skipped_user_edits: ["b.md"] }, "aa110000");
-    expect(t).toContain("1 fichier(s) restauré(s)");
-    expect(t).toContain("restauré  a.py");
-    expect(t).toContain("conservé  b.md");
+    expect(t).toContain("1 file(s) restored");
+    expect(t).toContain("restored  a.py");
+    expect(t).toContain("kept  b.md");
     expect(formatRestore({ success: false, restored_files: [], skipped_user_edits: [], error: "boum" }, "x")).toContain("boum");
   });
 });
@@ -75,14 +75,14 @@ describe("skills, plan, sous-agents", () => {
   it("sous-agents : état, dernier outil, durée, but tronqué", () => {
     let m = applySubagentEvent(new Map(), { type: "subagent.started", child_id: "sa1", goal: "x".repeat(60) }, 1000);
     m = applySubagentEvent(m, { type: "subagent.progress", child_id: "sa1", tool: "patch" }, 2000);
-    expect(formatSubagents(m, 5000)).toContain("en cours");
+    expect(formatSubagents(m, 5000)).toContain("running");
     m = applySubagentEvent(m, { type: "subagent.finished", child_id: "sa1", status: "ok" }, 8000);
     const t = formatSubagents(m, 99999);
-    expect(t).toContain("terminé");
-    expect(t).toContain("dernier outil : patch");
+    expect(t).toContain("done");
+    expect(t).toContain("last tool: patch");
     expect(t).toContain("7 s");
     expect(t).toContain("…");
-    expect(formatSubagents(new Map())).toContain("Aucun sous-agent");
+    expect(formatSubagents(new Map())).toContain("No sub-agents");
   });
 });
 

@@ -79,8 +79,8 @@ describe("Lokkal — réglage des modèles", () => {
   it("la vue BYOK porte model, ok et has_key, jamais la clé ni une liste de modèles", async () => {
     // Construite à l'exécution : une fausse clé écrite telle quelle ressemble à une vraie pour les scanners.
     const fake = ["sk", "secret-unique-42"].join("-");
-    const s = await c.putLocalModels({ default: "byok:exemple", byok: [{ name: "exemple", base_url: "http://api.exemple.test", model: "modele-grand", ok: true, api_key: fake }] });
-    expect(s.models.byok).toEqual([{ name: "exemple", base_url: "http://api.exemple.test", model: "modele-grand", ok: true, has_key: true }]);
+    const s = await c.putLocalModels({ default: "byok:exemple", byok: [{ name: "exemple", base_url: "http://api.exemple.test", model: "large-model", ok: true, api_key: fake }] });
+    expect(s.models.byok).toEqual([{ name: "exemple", base_url: "http://api.exemple.test", model: "large-model", ok: true, has_key: true }]);
     expect(JSON.stringify(s)).not.toContain(fake);
   });
 

@@ -193,7 +193,7 @@ export async function handleAccount(
           args_sha256: argsSha256(args),
           effect: "destructive",
           rule: "effect:destructive",
-          reason: "Suppression définitive du compte et de toutes ses données (démo).",
+          reason: "Permanent deletion of the account and all its data (demo).",
           advice: null,
           strength: "strong",
           status: "pending",

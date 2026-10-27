@@ -12,6 +12,7 @@ import { IncidentsTab } from "./components/IncidentsTab.js";
 import { PlanTab } from "./components/PlanTab.js";
 import { AccountTab, DeletingScreen } from "./components/AccountTab.js";
 import { ConnectorsTab, uiLang } from "./components/ConnectorsTab.js";
+import { tr } from "./i18n/index.js";
 import { t } from "./onboarding/i18n.js";
 import { SoundToggle } from "./components/SoundToggle.js";
 import { readJson, writeJson } from "./viewState.js";
@@ -172,7 +173,7 @@ export function App(): React.ReactElement {
     <StoreContext.Provider value={store}>
       <div className={`app ${narrow ? "narrow" : ""}`}>
         <a href="#nk-composer" className="skip">
-          Aller au message
+          {tr("Skip to message")}
         </a>
         <Drawer
           threads={store.threads}
@@ -185,10 +186,16 @@ export function App(): React.ReactElement {
           }}
           onCreate={(t) => void store.createThread(t)}
           onDelete={(id) => void store.deleteThread(id)}
+          codeSessions={store.codeSessions}
+          roots={store.localRoots}
+          onCreateCode={store.localRoots !== null ? async (cwd) => {
+            await store.createCodeSession(cwd);
+            setTab("chat");
+          } : undefined}
         />
         <main className="main">
           <header className="topbar">
-            <nav className="tabs-main" aria-label="Onglets">
+            <nav className="tabs-main" aria-label={tr("Tabs")}>
               <button type="button" className={`tab-main ${tab === "chat" ? "on" : ""}`} aria-current={tab === "chat" ? "page" : undefined} onClick={() => setTab("chat")}>
                 Chat
               </button>
@@ -205,7 +212,7 @@ export function App(): React.ReactElement {
                 <button type="button" className={`tab-main ${tab === "incidents" ? "on" : ""}`} aria-current={tab === "incidents" ? "page" : undefined} onClick={() => setTab("incidents")}>
                   Incidents
                   {liveIncidents ? (
-                    <span className="tab-count" aria-label={`${liveIncidents} incident(s) vivant(s)`}>
+                    <span className="tab-count" aria-label={tr("{0} live incident(s)", liveIncidents)}>
                       {liveIncidents}
                     </span>
                   ) : null}
@@ -218,9 +225,9 @@ export function App(): React.ReactElement {
               ) : null}
               {teamInvites !== null ? (
                 <button type="button" className={`tab-main ${tab === "team" ? "on" : ""}`} aria-current={tab === "team" ? "page" : undefined} onClick={() => setTab("team")}>
-                  Équipe
+                  {tr("Team")}
                   {teamInvites ? (
-                    <span className="tab-count" aria-label={`${teamInvites} invitation(s)`}>
+                    <span className="tab-count" aria-label={tr("{0} invitation(s)", teamInvites)}>
                       {teamInvites}
                     </span>
                   ) : null}
@@ -230,7 +237,7 @@ export function App(): React.ReactElement {
                 <button type="button" className={`tab-main ${tab === "household" ? "on" : ""}`} aria-current={tab === "household" ? "page" : undefined} onClick={() => setTab("household")}>
                   {hhText(uiLang(), "tab")}
                   {householdInvites ? (
-                    <span className="tab-count" aria-label={`${householdInvites} invitation(s)`}>
+                    <span className="tab-count" aria-label={tr("{0} invitation(s)", householdInvites)}>
                       {householdInvites}
                     </span>
                   ) : null}
@@ -259,22 +266,27 @@ export function App(): React.ReactElement {
               ) : null}
             </nav>
             <div className="topbar-session">
-              <span className="fine">Session</span>
+              <span className="fine">{tr("Session")}</span>
               <span className="topbar-title">{store.current?.title ?? "—"}</span>
-              {store.current?.working ? <span className="live-label">travaille</span> : null}
+              {store.current && store.codeSessions[store.current.id] ? (
+                <span className="topbar-cwd mono" title={store.codeSessions[store.current.id]}>
+                  {store.codeSessions[store.current.id]}
+                </span>
+              ) : null}
+              {store.current?.working ? <span className="live-label">{tr("working")}</span> : null}
             </div>
-            {store.mock ? <span className="demo-badge">Démo · valeurs fictives</span> : null}
+            {store.mock ? <span className="demo-badge">{tr("Demo · fictitious values")}</span> : null}
             {tab === "chat" && !narrow && store.bubbles.length > 1 ? (
-              <button type="button" className="arrange-btn" onClick={() => setArrangeTick((n) => n + 1)} aria-label="Ranger les bulles">
+              <button type="button" className="arrange-btn" onClick={() => setArrangeTick((n) => n + 1)} aria-label={tr("Arrange the bubbles")}>
                 <Icon name="crew" size={16} />
-                Ranger
+                {tr("Arrange")}
               </button>
             ) : null}
             <SoundToggle prefs={store.signature} onChange={store.setSignature} />
             <button
               type="button"
               className="theme-toggle"
-              aria-label={theme === "dark" ? "Thème sombre — passer au clair" : "Thème clair — passer au sombre"}
+              aria-label={theme === "dark" ? tr("Dark theme — switch to light") : tr("Light theme — switch to dark")}
               aria-pressed={theme === "dark"}
               onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
             >
@@ -287,6 +299,11 @@ export function App(): React.ReactElement {
 
           {tab === "chat" ? (
             <div className="chat-area">
+              {store.missingThread ? (
+                <p className="missing-thread error" role="alert">
+                  {tr("Thread {0} cannot be found: nothing will be sent. Choose a session in the list.", store.missingThread)}
+                </p>
+              ) : null}
               {narrow ? <BubbleLayer inline onDropTarget={onDropTarget} /> : null}
               <Chat
                 title={store.current?.title ?? ""}

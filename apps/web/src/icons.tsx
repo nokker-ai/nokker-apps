@@ -3,7 +3,7 @@ import React from "react";
 type IconName =
   | "disk" | "search" | "bell" | "timer" | "terminal" | "play" | "page" | "image" | "bot" | "shield"
   | "chevronDown" | "chevronUp" | "share" | "close" | "send" | "plus" | "grip" | "arrowRight"
-  | "link" | "check" | "soundOn" | "soundOff" | "menu" | "chat" | "crew" | "goto" | "sun" | "moon";
+  | "link" | "check" | "soundOn" | "soundOff" | "menu" | "chat" | "crew" | "goto" | "sun" | "moon" | "folder";
 
 const P: Record<IconName, React.ReactNode> = {
   disk: (<><ellipse cx="12" cy="6" rx="8" ry="3" /><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6" /><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></>),
@@ -14,6 +14,7 @@ const P: Record<IconName, React.ReactNode> = {
   play: (<><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M10 9v6l5-3z" /></>),
   image: (<><rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="9" cy="10" r="2" /><path d="M21 17l-5-5-9 9" /></>),
   page: (<><path d="M6 3h8l4 4v14H6z" /><path d="M14 3v4h4M9 12h6M9 16h6" /></>),
+  folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
   bot: (<><rect x="4" y="8" width="16" height="12" rx="4" /><path d="M12 8V4M8 14h.01M16 14h.01M9 17h6" /></>),
   shield: (<><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z" /><path d="M9 12l2 2 4-4" /></>),
   chevronDown: <path d="M6 9l6 6 6-6" />,

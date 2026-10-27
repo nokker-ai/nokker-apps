@@ -1,7 +1,7 @@
 /** Rendu Ink de l'App contre le mock : skills du dépôt (carte de confiance, /skills), mémoire de projet (/memory, oubli
  * confirmé), sous-agents en arrière-plan (/agents, résultat, annulation), et l'anglais par défaut. */
 import React from "react";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { render } from "ink-testing-library";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -58,7 +58,9 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
   await rm(work, { recursive: true, force: true });
 });
-afterEach(() => setLang("fr"));
+// Ces scénarios vérifient le français : la langue est posée ici (la suite tourne en anglais) puis remise à l'anglais.
+beforeEach(() => setLang("fr"));
+afterEach(() => setLang("en"));
 
 describe("skills du dépôt", () => {
   it("carte de confiance à l'ouverture (racine, nombre, empreinte) ; o = POST trust, /skills montre la confiance et les skills", async () => {

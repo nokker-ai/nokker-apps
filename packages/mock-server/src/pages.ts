@@ -5,7 +5,8 @@
  * qui devient publique, servie par son id public seulement (`GET /v1/pages/public/{public_id}`), jamais par son
  * `page_id` sans preuve. Simplifications : pas de relais ni d'origine séparée (l'adresse publique est
  * `https://demo--pub.nokker.app/<id public>` pour l'affichage, et le mock la sert sous `/v1/pages/public/`), contenu
- * généré. Réglage : `POST /v1/dev/pages-mock {pages_public?, approve?, reject?}`.
+ * généré. Réglage : `POST /v1/dev/pages-mock {pages_public?, approve?, reject?, moderate?: {page_id, reason?}, restore?: page_id}`
+ * (`moderate` : retrait par l'opérateur, comme `nokker pages moderate` ; la page est dépubliée et garde l'exposé des motifs).
  */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Approval, Bubble } from "@nokker-apps/sdk";
@@ -32,7 +33,17 @@ export interface MockPage {
   versions: string[];
   /** Dernière écriture, en secondes epoch (comme `nokker/pages/store.py`). */
   updated_at: number;
+  /** Retirée par la modération (§7.26 point 6) et son exposé des motifs (DSA art. 17). */
+  moderated_at?: number | null;
+  moderation?: { at: number | null; reason: string | null; appeal: { fr: string; en: string } } | null;
 }
+
+/** Phrase fixe de nokker.ai pour contester (`nokker/cloud/moderation.py::APPEAL`). */
+const APPEAL = {
+  fr: "Pour contester ce retrait, répondez à moderation@nokker.ai en citant l'identifiant de la page.",
+  en: "To contest this removal, reply to moderation@nokker.ai quoting the page identifier.",
+};
+const MODERATED_MESSAGE = "page retirée par la modération de nokker.ai : la republier demande l'opérateur (nokker.ai/report)";
 
 /** `download` est dans la signature : on ne transforme pas un lien d'affichage en téléchargement (ni l'inverse). */
 function pageSig(id: string, exp: number, download: boolean): string {
@@ -53,16 +64,16 @@ export function verifyPageSignature(id: string, exp: string | null, sig: string 
 }
 
 function html(title: string, version: number): string {
-  return `<!doctype html><html lang="fr"><meta charset="utf-8"><title>${title}</title>
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><title>${title}</title>
 <style>body{font:16px system-ui;margin:0;display:grid;place-items:center;min-height:100vh;background:#14161a;color:#e8e6df}
 main{text-align:center}b{color:#C3E26B}</style>
-<main><h1>${title}</h1><p>Version <b>${version}</b> de la page (démo).</p>
+<main><h1>${title}</h1><p>Version <b>${version}</b> of the page (demo).</p>
 </main></html>`;
 }
 
 function stateOf(p: MockPage): Record<string, unknown> {
   const v = p.versions[p.versions.length - 1]!;
-  return { page_id: p.id, path: p.path, title: p.title, mime: "text/html", version: p.versions.length, size: Buffer.byteLength(v), public: p.public, public_version: p.public_version, public_index: p.public_index, locality: p.locality, updated_at: p.updated_at };
+  return { page_id: p.id, path: p.path, title: p.title, mime: "text/html", version: p.versions.length, size: Buffer.byteLength(v), public: p.public, public_version: p.public_version, public_index: p.public_index, locality: p.locality, updated_at: p.updated_at, moderated_at: p.moderated_at ?? null, ...(p.moderated_at || p.moderation === null ? { moderation: p.moderated_at ? (p.moderation ?? null) : null } : {}) };
 }
 
 /** `page_create` : une page par (fil, chemin) — le même chemin rend la même bulle. */
@@ -136,7 +147,7 @@ function requestPublish(state: MockState, p: MockPage, index: boolean): Approval
     args_sha256: createHash("sha256").update(JSON.stringify(args)).digest("hex"),
     effect: "external",
     rule: "pages:publish",
-    reason: `page_publish : ${p.path}`,
+    reason: `page_publish: ${p.path}`,
     advice: null,
     strength: "strong",
     status: "pending",
@@ -157,7 +168,7 @@ function requestPublish(state: MockState, p: MockPage, index: boolean): Approval
     p.public_version = version;
     p.public_index = index;
     changed(state, p);
-    return `page ${p.id} publique (version ${version})`;
+    return `page ${p.id} public (version ${version})`;
   });
   state.publish({ type: "approval.requested", approval });
   state.publish({ type: "approval.forwarded", approval_id: approval.id, thread_id: p.thread_id });
@@ -176,6 +187,21 @@ export async function handlePagePublication(state: MockState, user: string | nul
     for (const [k, d] of [["approve", "approve"], ["reject", "reject"]] as const) {
       const a = typeof b[k] === "string" ? state.approvals.get(b[k] as string) : undefined;
       if (a && a.status === "pending") finalizeDecision(state, a, d, "webauthn");
+    }
+    const mod = b.moderate as { page_id?: string; reason?: string } | undefined;
+    if (mod?.page_id) {
+      const p = getPage(state, mod.page_id);
+      const at = Date.now() / 1000;
+      unpublish(p);
+      p.moderated_at = at;
+      p.moderation = { at, reason: mod.reason ? String(mod.reason) : null, appeal: { ...APPEAL } };
+      changed(state, p);
+    }
+    if (typeof b.restore === "string") {
+      const p = getPage(state, b.restore);
+      p.moderated_at = null;
+      p.moderation = null;
+      changed(state, p);
     }
     return send(200, { pages_public: pagesPublicAllowed(state) }), true;
   }
@@ -208,6 +234,7 @@ export async function handlePagePublication(state: MockState, user: string | nul
     changed(state, p);
     return send(200, { page_id: p.id, locality: p.locality, public: p.public, purge: was && p.locality === "local" ? "done" : "none" }), true;
   }
+  if (p.moderated_at) return fail(send, 403, "page_moderated", MODERATED_MESSAGE);
   if (p.locality === "local") return fail(send, 409, "local_page", "page épinglée « local » : elle ne quitte pas la machine");
   if (!pagesPublicAllowed(state)) return fail(send, 403, "pages_public_not_allowed", "pages publiques réservées aux abonnés et comptes vérifiés");
   if ("index" in b && typeof b.index !== "boolean") return fail(send, 400, null, "index : booléen");

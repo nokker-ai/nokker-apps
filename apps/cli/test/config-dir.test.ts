@@ -81,7 +81,7 @@ describe("repli lecture sur les anciens emplacements", () => {
       const r = readLokkal();
       expect(r).toMatchObject({ status: "ok", legacyPath: f });
       const { checks } = await runDoctor({ serverUrl: "http://127.0.0.1:1", serverSource: "default", fix: false, run: async () => ({ code: 1, stdout: "", stderr: "", error: "ENOENT" }) } as never);
-      const w = checks.find((c) => c.name === "emplacement de config");
+      const w = checks.find((c) => c.name === "config location");
       expect(w).toMatchObject({ status: "warn" });
       expect(w!.detail).toContain(f);
     });

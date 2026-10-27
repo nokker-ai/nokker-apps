@@ -10,7 +10,9 @@
  * CLI (`apps/cli`), donc vérifiable côté serveur par le même code.
  */
 
-const RP_NAME = "Nokker (nom provisoire)";
+import { tr } from "./i18n/index.js";
+
+const rpName = (): string => tr("Nokker (provisional name)");
 
 /** base64url SANS padding — forme canonique attendue par le contrat pour `public_key_spki` et les
  * champs WebAuthn (APPROVALS.md §3.1/§3.4). */
@@ -40,13 +42,13 @@ export interface PasskeyRegistration {
 
 export async function registerPasskey(userLabel: string): Promise<PasskeyRegistration> {
   if (!window.PublicKeyCredential) {
-    throw new Error("WebAuthn indisponible dans ce navigateur — passkey impossible.");
+    throw new Error(tr("WebAuthn is unavailable in this browser — passkey not possible."));
   }
   const challenge = crypto.getRandomValues(new Uint8Array(32));
   const userId = crypto.getRandomValues(new Uint8Array(16));
   const credential = (await navigator.credentials.create({
     publicKey: {
-      rp: { name: RP_NAME },
+      rp: { name: rpName() },
       user: { id: userId, name: userLabel, displayName: userLabel },
       challenge,
       pubKeyCredParams: [{ type: "public-key", alg: -7 }], // ES256 (ECDSA P-256 SHA-256)
@@ -55,15 +57,12 @@ export async function registerPasskey(userLabel: string): Promise<PasskeyRegistr
       attestation: "none",
     },
   })) as PublicKeyCredential | null;
-  if (!credential) throw new Error("Enrôlement passkey annulé.");
+  if (!credential) throw new Error(tr("Passkey enrolment cancelled."));
 
   const response = credential.response as AuthenticatorAttestationResponse & { getPublicKey?: () => ArrayBuffer | null };
   const spki = response.getPublicKey?.();
   if (!spki) {
-    throw new Error(
-      "Ce navigateur ne rend pas la clé publique SPKI (getPublicKey) — Safari notamment. " +
-        "Utiliser Chrome/Edge/Firefox pour cette démo, ou implémenter le parsing CBOR (voir l'ADR).",
-    );
+    throw new Error(tr("This browser does not return the SPKI public key (getPublicKey) — Safari in particular. Use Chrome/Edge/Firefox for this demo, or implement CBOR parsing (see the ADR)."));
   }
   return { publicKeySpkiB64Url: toB64Url(spki), credentialIdB64Url: toB64Url(credential.rawId) };
 }
@@ -96,7 +95,7 @@ export async function signDecisionWithPasskey(
       timeout: 60_000,
     },
   })) as PublicKeyCredential | null;
-  if (!assertion) throw new Error("Signature passkey annulée.");
+  if (!assertion) throw new Error(tr("Passkey signature cancelled."));
 
   const response = assertion.response as AuthenticatorAssertionResponse;
   return {

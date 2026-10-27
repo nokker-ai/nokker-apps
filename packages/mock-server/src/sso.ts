@@ -7,7 +7,7 @@
  * Simplifications : la preuve DNS est simulée par le nom du domaine (`absent.…` → 409 `not_verified`, `pris.…` →
  * 409 `domain_claimed`, `dns-hs.…` → 503 `dns_unavailable`, le reste est prouvé) ; le compte connecté reste
  * `alice` (mock mono-utilisateur) ; groupes et refus viennent de l'identité choisie sur la page du fournisseur.
- * Démo (drapeau allumé) : une connexion d'alice prouvée sur example.com liée à « Site vitrine », et « Recherche »
+ * Démo (drapeau allumé) : une connexion d'alice prouvée sur example.com liée à « Marketing site », et « Research »
  * (projet de bob) en SSO obligatoire par une connexion de bob — alice le voit réduit tant qu'elle n'est pas passée
  * par le SSO.
  */
@@ -63,16 +63,16 @@ interface Persona {
   outcome?: "token_invalid" | "account_conflict" | "account_inactive";
 }
 const PERSONAS: Record<string, Persona> = {
-  ok: { label: "groupes equipe-site, lecteurs", verified: true, groups: ["equipe-site", "lecteurs"] },
-  sans_groupe: { label: "aucun groupe", verified: true, groups: [] },
-  non_verifie: { label: "adresse non vérifiée par le fournisseur", verified: false, groups: [] },
-  hors_domaine: { label: "adresse hors des domaines prouvés", foreign: true, verified: true, groups: [] },
-  conflit: { label: "compte déjà lié à une autre identité", verified: true, groups: [], outcome: "account_conflict" },
-  inactif: { label: "compte suspendu", verified: true, groups: [], outcome: "account_inactive" },
-  jeton: { label: "jeton d'identité invalide", verified: true, groups: [], outcome: "token_invalid" },
+  ok: { label: "groups site-team, readers", verified: true, groups: ["site-team", "readers"] },
+  sans_groupe: { label: "no group", verified: true, groups: [] },
+  non_verifie: { label: "address not verified by the provider", verified: false, groups: [] },
+  hors_domaine: { label: "address outside the proven domains", foreign: true, verified: true, groups: [] },
+  conflit: { label: "account already linked to another identity", verified: true, groups: [], outcome: "account_conflict" },
+  inactif: { label: "account suspended", verified: true, groups: [], outcome: "account_inactive" },
+  jeton: { label: "invalid identity token", verified: true, groups: [], outcome: "token_invalid" },
 };
 const emailOf = (p: Persona, c: Conn | undefined): string =>
-  p.foreign ? `${MOCK_USER}@autre.example` : `${MOCK_USER}@${c?.domains.find((d) => d.verified_at !== null)?.domain ?? "example.com"}`;
+  p.foreign ? `${MOCK_USER}@other.example` : `${MOCK_USER}@${c?.domains.find((d) => d.verified_at !== null)?.domain ?? "example.com"}`;
 
 interface S {
   conns: Map<string, Conn>;
@@ -141,24 +141,24 @@ function newConn(owner: string, f: { name: string; issuer: string; client_id: st
 /** Démo du drapeau allumé (appelé au premier accès aux projets). */
 export function ssoSeed(state: MockState, projects: { id: string; name: string; owner: string }[]): void {
   const s = sso(state);
-  const mine = newConn(MOCK_USER, { name: "Annuaire de l'équipe (démo)", issuer: "https://idp.example.com", client_id: "nokker-demo", secret_name: "SSO_DEMO_CLIENT" });
+  const mine = newConn(MOCK_USER, { name: "Team directory (demo)", issuer: "https://idp.example.com", client_id: "nokker-demo", secret_name: "SSO_DEMO_CLIENT" });
   mine.secret_set = true;
   mine.domains.push({ domain: "example.com", token: randomBytes(16).toString("hex"), verified_at: now() - 86400 });
   s.conns.set(mine.id, mine);
   log(s, mine.id, "connection_created", { account: MOCK_USER, detail: { issuer: mine.issuer, client_id: mine.client_id } });
   log(s, mine.id, "domain_verified", { account: MOCK_USER, detail: { domain: "example.com" } });
-  const site = projects.find((p) => p.name === "Site vitrine" && p.owner === MOCK_USER);
+  const site = projects.find((p) => p.name === "Marketing site" && p.owner === MOCK_USER);
   if (site) {
-    s.bindings.set(site.id, { project_id: site.id, connection: mine.id, mappings: [{ group: "leads", role: "maintainer" }, { group: "equipe-site", role: "member" }], required: false, max_age_s: DEFAULT_AGE, updated_at: iso(now() - 3600) });
+    s.bindings.set(site.id, { project_id: site.id, connection: mine.id, mappings: [{ group: "leads", role: "maintainer" }, { group: "site-team", role: "member" }], required: false, max_age_s: DEFAULT_AGE, updated_at: iso(now() - 3600) });
     log(s, mine.id, "binding_set", { account: MOCK_USER, project_id: site.id });
   }
-  const other = projects.find((p) => p.name === "Recherche" && p.owner !== MOCK_USER);
+  const other = projects.find((p) => p.name === "Research" && p.owner !== MOCK_USER);
   if (other) {
-    const theirs = newConn(other.owner, { name: "Annuaire de bob (démo)", issuer: "https://idp.example.net", client_id: "nokker-demo-2", secret_name: "SSO_DEMO_CLIENT_2" });
+    const theirs = newConn(other.owner, { name: "Bob's directory (demo)", issuer: "https://idp.example.net", client_id: "nokker-demo-2", secret_name: "SSO_DEMO_CLIENT_2" });
     theirs.secret_set = true;
     theirs.domains.push({ domain: "example.net", token: randomBytes(16).toString("hex"), verified_at: now() - 86400 });
     s.conns.set(theirs.id, theirs);
-    s.bindings.set(other.id, { project_id: other.id, connection: theirs.id, mappings: [{ group: "lecteurs", role: "viewer" }], required: true, max_age_s: DEFAULT_AGE, updated_at: iso(now() - 3600) });
+    s.bindings.set(other.id, { project_id: other.id, connection: theirs.id, mappings: [{ group: "readers", role: "viewer" }], required: true, max_age_s: DEFAULT_AGE, updated_at: iso(now() - 3600) });
   }
 }
 
@@ -322,8 +322,8 @@ function idpPage(s: S, url: URL, html: (status: number, body: string) => void): 
     s.codes.set(code, { state: st, persona: k });
     return `<li><a href="${link({ code })}">${emailOf(p, conn)} — ${p.label}</a></li>`;
   });
-  items.push(`<li><a href="${link({ error: "access_denied" })}">Refuser la connexion</a></li>`);
-  html(200, `<!doctype html><meta charset="utf-8"><title>Fournisseur d'identité (mock)</title><body style="font:16px system-ui;max-width:40rem;margin:3rem auto"><h1>Fournisseur d'identité simulé</h1><p>Choisis l'identité à renvoyer :</p><ul>${items.join("")}</ul></body>`);
+  items.push(`<li><a href="${link({ error: "access_denied" })}">Refuse the sign-in</a></li>`);
+  html(200, `<!doctype html><meta charset="utf-8"><title>Identity provider (mock)</title><body style="font:16px system-ui;max-width:40rem;margin:3rem auto"><h1>Simulated identity provider</h1><p>Pick the identity to return:</p><ul>${items.join("")}</ul></body>`);
 }
 
 /** Routes du propriétaire (session) : connexions, secret, domaines, journal, lien projet. */
