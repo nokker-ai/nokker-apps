@@ -59,9 +59,14 @@ const walkNames = (d: string): string[] => readdirSync(d).filter((f) => !f.endsW
 
 export default defineConfig({
   plugins: [react(), brandAssets(), swBuildId()],
+  // Pages and tabs load lazily: without this, the first lazy import makes Vite discover new dependencies, optimise them
+  // and reload the page (« Failed to fetch dynamically imported module »). Scanning every source up front makes the
+  // first visit deterministic.
+  optimizeDeps: { entries: ["index.html", "src/**/*.{ts,tsx}"] },
   server: {
     port: 5173,
     strictPort: true,
+    warmup: { clientFiles: ["./src/main.tsx", "./src/App.tsx"] },
     proxy: {
       "/v1": { target, changeOrigin: true },
       // Routes du relais de la passerelle (mock seulement : en vrai, le relais les sert lui-même).

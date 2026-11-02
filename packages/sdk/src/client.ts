@@ -27,11 +27,14 @@ import type {
   LocalApprovalResult,
   LocalSession,
   LocalSessionSummary,
+  ProjectSkillsStatus,
   SkillsTrustResult,
   Device,
   EnrollDeviceRequest,
   NokkerEvent,
   SessionToken,
+  KernelGoal,
+  SetKernelGoalRequest,
 } from "./types.js";
 import type {
   AcceptInvitationRequest,
@@ -58,6 +61,8 @@ import type {
   BillingStatus,
 } from "./account.js";
 import type { LocalProcess, LocalSecrets } from "./local-machine.js";
+import type { ImportReport, ImportSource } from "./importers.js";
+import type { ApprovalSuggestions, ImportedMemoryEntry, JournalEntry, LearnedSkill, LearnedSkillDetail, PendingNote, PendingStatus, SkillRevertResult } from "./learning.js";
 import type { PackDetail, PackInstallResult, PackRemoveResult, PackSummary } from "./packs.js";
 import type { PageLocalityResult, PublishPageResult, UnpublishPageResult } from "./pages.js";
 import type { LocalConnectorsListing, LocalMailCard, PutLocalMailRequest } from "./local-connectors.js";
@@ -103,6 +108,15 @@ import type {
 import type { Household, HouseholdApproval, HouseholdAttestation, HouseholdConsentRecord, HouseholdConsentText, HouseholdInvitation, HouseholdMember, HouseholdNote, HouseholdPolicy, HouseholdProfile, HouseholdQuarantined, ReceivedHouseholdInvitation } from "./household.js";
 import type { PatchThreadRequest } from "./bubbles.js";
 import type { CodeCredential, CodeSession, CodeSessionClosed, CodeSessionCreate, CodeSessionList, CodeSkillsTrusted, CodeToolName } from "./code-sessions.js";
+import type { PermissionMode } from "./permissions.js";
+import type { SessionModeState } from "./session-mode.js";
+import type { GlanceClaim, GlanceDevice, GlanceOffer, GlanceView } from "./glance.js";
+import type { HouseMessagesPage, HousePostResult, HouseView } from "./house.js";
+import type { PresenceView } from "./presence.js";
+import type { GuideAnswer, GuideTurn, GuideView } from "./guide.js";
+import type { FolderRun, FolderRunCreate, FolderRunSummary } from "./folder.js";
+import type { BudgetInput, BudgetLine, BudgetsView, MandateDetail, MandateVerification, PayCard } from "./payments.js";
+import type { ConsolidationOpUndo, ConsolidationReport, ConsolidationRun, ConsolidationRunUndo, ConsolidationSettings } from "./consolidation.js";
 import type {
   Agent,
   AgentRun,
@@ -126,11 +140,20 @@ import type {
   TransferResult,
 } from "./bubbles.js";
 
+/** `Retry-After` in seconds when the server sent the numeric form. */
+function retryAfterOf(res: ResponseLike): number | null {
+  const v = res.headers?.get("retry-after");
+  if (!v || !/^\d+$/.test(v.trim())) return null;
+  return Number(v.trim());
+}
+
 export class NokkerApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
     public readonly body: unknown,
+    /** `Retry-After` of a 429/503, in seconds (only the numeric form), `null` when absent. */
+    public readonly retryAfterS: number | null = null,
   ) {
     super(message);
     this.name = "NokkerApiError";
@@ -222,7 +245,7 @@ export class NokkerClient {
       }
     }
     if (!res.ok) {
-      throw new NokkerApiError(`${path} → ${res.status}`, res.status, parsed);
+      throw new NokkerApiError(`${path} → ${res.status}`, res.status, parsed, retryAfterOf(res));
     }
     return parsed as T;
   }
@@ -311,6 +334,15 @@ export class NokkerClient {
     });
   }
 
+  /** Permission mode of a local session (local token). */
+  async getLocalSessionMode(threadId: string): Promise<SessionModeState> {
+    return this.request<SessionModeState>(`/v1/local/sessions/${encodeURIComponent(threadId)}/mode`);
+  }
+  /** 400 outside `modes` or more permissive than the project rules; every client of the thread gets `session.mode`. */
+  async setLocalSessionMode(threadId: string, mode: PermissionMode): Promise<SessionModeState> {
+    return this.request<SessionModeState>(`/v1/local/sessions/${encodeURIComponent(threadId)}/mode`, { method: "PUT", body: JSON.stringify({ mode }) });
+  }
+
   /** `POST /v1/local/tools/call` (jeton local, fil de session locale) : 200 `{content, is_error}` ou 202 `{approval_id}` si
    * l'effet exige une carte (le résultat suit dans `tool.result`, `approval_id`). Un refus par règle ou mode plan est un 200
    * `is_error: true`. 403 : outil hors liste blanche ; 404 : fil non local ; 400 : `todo` avec des arguments ; 409 : tour en cours.
@@ -347,9 +379,34 @@ export class NokkerClient {
     });
   }
 
+  /** `GET /v1/local/sessions/{id}/skills` (LOKKAL.md §7.21.4) : état des skills du dépôt d'une session déjà ouverte (reprise), sans
+   * rouvrir la session. 404 : fil inconnu ou drapeau `local.project_skills` éteint. */
+  async getLocalSessionSkills(threadId: string): Promise<{ thread_id: string; skills: ProjectSkillsStatus }> {
+    return this.request<{ thread_id: string; skills: ProjectSkillsStatus }>(`/v1/local/sessions/${encodeURIComponent(threadId)}/skills`);
+  }
+
   /** `POST /v1/threads/{id}/cancel` (202) — arrête le tour en cours ; le flux se termine par `turn.done {cancelled: true}`. */
   async cancelTurn(threadId: string): Promise<CancelResult> {
     return this.request<CancelResult>(`/v1/threads/${encodeURIComponent(threadId)}/cancel`, { method: "POST" });
+  }
+
+  /** `GET /v1/threads/{id}/goal` → objectif courant (ou le dernier), `null` sans objectif. 404 : noyau sans objectifs
+   * (`goals_enabled` éteint ou noyau ancien). */
+  async getThreadGoal(threadId: string): Promise<KernelGoal | null> {
+    const r = await this.request<{ goal: KernelGoal | null }>(`/v1/threads/${encodeURIComponent(threadId)}/goal`);
+    return r?.goal ?? null;
+  }
+
+  /** `POST /v1/threads/{id}/goal` (201) — pose l'objectif du fil (en remplace un vivant). 400 : rubrique refusée. */
+  async setThreadGoal(threadId: string, req: SetKernelGoalRequest): Promise<KernelGoal> {
+    const r = await this.request<{ goal: KernelGoal }>(`/v1/threads/${encodeURIComponent(threadId)}/goal`, { method: "POST", body: JSON.stringify(req) });
+    return r.goal;
+  }
+
+  /** `POST /v1/threads/{id}/goal/stop` — 409 s'il n'y a pas d'objectif vivant. */
+  async stopThreadGoal(threadId: string): Promise<KernelGoal> {
+    const r = await this.request<{ goal: KernelGoal }>(`/v1/threads/${encodeURIComponent(threadId)}/goal/stop`, { method: "POST" });
+    return r.goal;
   }
 
   async listDevices(): Promise<Device[]> {
@@ -596,6 +653,78 @@ export class NokkerClient {
   /** Lien signé (1 h) vers l'aperçu du port d'un processus ; 404 sans port ou arrêté. À ouvrir en iframe sandbox. */
   async getProcessLink(id: string): Promise<{ url: string; expires_at: string | number; port: number }> {
     return this.request<{ url: string; expires_at: string | number; port: number }>(`/v1/local/processes/${encodeURIComponent(id)}/link`, { method: "POST" });
+  }
+
+  /** Import d'un autre agent, à blanc : ce qui serait repris, et ce qui ne le serait pas (avec la raison). */
+  async importScan(source: ImportSource, project?: string): Promise<ImportReport> {
+    return this.request<ImportReport>("/v1/local/import/scan", { method: "POST", body: JSON.stringify(project ? { source, project } : { source }) });
+  }
+
+  /** Écrit ce qui est prévu (jamais les serveurs MCP : ils s'ajoutent dans une session, sous carte forte). */
+  async importApply(source: ImportSource, project?: string): Promise<ImportReport> {
+    return this.request<ImportReport>("/v1/local/import/apply", { method: "POST", body: JSON.stringify(project ? { source, project } : { source }) });
+  }
+
+  /** Dernier rapport écrit par la commande lancée sur l'hôte ; 404 s'il n'y en a pas. */
+  async importLatestReport(source?: ImportSource): Promise<ImportReport> {
+    return this.request<ImportReport>(`/v1/local/import/report${source ? `?source=${encodeURIComponent(source)}` : ""}`);
+  }
+
+  // ── Apprentissage (docs/LEARNING.md) : 404 si le drapeau du noyau est éteint ──
+
+  async listPendingMemory(status: PendingStatus | "all" = "pending"): Promise<{ notes: PendingNote[] }> {
+    return this.request<{ notes: PendingNote[] }>(`/v1/memory/pending?status=${status}`);
+  }
+
+  /** Sans corps. 409 already_decided, 503 no_memory (la note reste en attente), 403 machine_only (par la passerelle). */
+  async decidePendingMemory(id: string, decision: "approve" | "reject"): Promise<{ note: PendingNote }> {
+    return this.request<{ note: PendingNote }>(`/v1/memory/pending/${encodeURIComponent(id)}/${decision}`, { method: "POST", body: "{}" });
+  }
+
+  /** Plus récent d'abord ; pas de curseur : plus d'entrées = un `limit` plus grand (1–1000). */
+  async getLearningJournal(limit = 200): Promise<{ entries: JournalEntry[] }> {
+    return this.request<{ entries: JournalEntry[] }>(`/v1/learning/journal?limit=${limit}`);
+  }
+
+  async listLearnedSkills(): Promise<{ skills: LearnedSkill[] }> {
+    return this.request<{ skills: LearnedSkill[] }>("/v1/learning/skills");
+  }
+
+  async getLearnedSkill(name: string, opts: { version?: number; diffFrom?: number } = {}): Promise<LearnedSkillDetail> {
+    const q = new URLSearchParams();
+    if (opts.version) q.set("version", String(opts.version));
+    if (opts.diffFrom) q.set("diff_from", String(opts.diffFrom));
+    const qs = q.toString();
+    return this.request<LearnedSkillDetail>(`/v1/learning/skills/${encodeURIComponent(name)}${qs ? `?${qs}` : ""}`);
+  }
+
+  /** Revient à `version` ; `0` désactive le skill. 409 unchanged, 422 scan_refused. */
+  async revertLearnedSkill(name: string, version: number): Promise<SkillRevertResult> {
+    return this.request<SkillRevertResult>(`/v1/learning/skills/${encodeURIComponent(name)}/revert`, { method: "POST", body: JSON.stringify({ version }) });
+  }
+
+  /** Mémoire importée (Codex) gardée comme données : jeton local seulement ; 404 drapeau éteint. */
+  async listImportedMemory(): Promise<{ entries: ImportedMemoryEntry[] }> {
+    return this.request<{ entries: ImportedMemoryEntry[] }>("/v1/local/import/memory");
+  }
+
+  /** Défait tout l'import de mémoire Codex, ou une entrée (`name`) : rien n'est détruit côté noyau. */
+  async undoImportedMemory(name?: string): Promise<{ undone: number }> {
+    return this.request<{ undone: number }>("/v1/local/import/undo", { method: "POST", body: JSON.stringify(name ? { source: "codex", what: "memory", name } : { source: "codex", what: "memory" }) });
+  }
+
+  /** « Retenir en note personnelle » : geste explicite, l'entrée devient une note de portée user. */
+  async promoteImportedMemory(name: string): Promise<{ note: { name: string; title: string; scope: "user" } }> {
+    return this.request<{ note: { name: string; title: string; scope: "user" } }>(`/v1/local/import/memory/${encodeURIComponent(name)}/promote`, { method: "POST", body: "{}" });
+  }
+
+  async listApprovalSuggestions(): Promise<ApprovalSuggestions> {
+    return this.request<ApprovalSuggestions>("/v1/approvals/suggestions");
+  }
+
+  /** Accepter : 409 no_rule_store hors Lokkal. Écarter : partout, la suggestion ne revient pas. */
+  async decideApprovalSuggestion(id: string, decision: "accept" | "dismiss"): Promise<{ id: string; state: "accepted" | "dismissed"; rule: string }> {
+    return this.request<{ id: string; state: "accepted" | "dismissed"; rule: string }>(`/v1/approvals/suggestions/${encodeURIComponent(id)}/${decision}`, { method: "POST", body: "{}" });
   }
 
   async listLocalSecrets(): Promise<LocalSecrets> {
@@ -1100,6 +1229,10 @@ export class NokkerClient {
   async callCodeSessionTool(id: string, name: CodeToolName, args: Record<string, unknown> = {}): Promise<LocalToolOutcome> {
     return this.request<LocalToolOutcome>(`/v1/code/sessions/${encodeURIComponent(id)}/tools/call`, { method: "POST", body: JSON.stringify({ name, arguments: args }) });
   }
+  /** Changes the permission mode of an open code session: 400 `bad_mode` outside `modes` or above the project rules. */
+  async setCodeSessionMode(id: string, mode: PermissionMode): Promise<SessionModeState> {
+    return this.request<SessionModeState>(`/v1/code/sessions/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ mode }) });
+  }
   async listCodeCredentials(): Promise<{ credentials: CodeCredential[] }> {
     return this.request<{ credentials: CodeCredential[] }>("/v1/code/credentials");
   }
@@ -1278,6 +1411,143 @@ export class NokkerClient {
 
   // -- Approbations -----------------------------------------------------------------
 
+  // -- Nightly memory consolidation (CONSOLIDATION.md §6): 404 when the flag is off ------------------------------------
+
+  // ---- Folder mode (FOLDER-MODE §6; local token only, gateway → 403 local_only; flag off → 404) ----
+  async listFolderRuns(): Promise<{ runs: FolderRunSummary[] }> {
+    return this.request<{ runs: FolderRunSummary[] }>("/v1/local/folder/runs");
+  }
+  /** 202: the run starts `planning`; read it again until it waits for approval. */
+  async createFolderRun(body: FolderRunCreate): Promise<FolderRun> {
+    return this.request<FolderRun>("/v1/local/folder/runs", { method: "POST", body: JSON.stringify(body) });
+  }
+  async getFolderRun(id: string): Promise<FolderRun> {
+    return this.request<FolderRun>(`/v1/local/folder/runs/${encodeURIComponent(id)}`);
+  }
+  /** An in-place run is approved only with `confirmInPlace` (400 `confirm_in_place` else). */
+  async decideFolderRun(id: string, decision: "approve" | "reject", confirmInPlace = false): Promise<FolderRun> {
+    return this.request<FolderRun>(`/v1/local/folder/runs/${encodeURIComponent(id)}/decide`, { method: "POST", body: JSON.stringify(confirmInPlace ? { decision, confirm_in_place: true } : { decision }) });
+  }
+  /** Back to the restore point; files changed since are conflicts, kept unless `force`. 409 `busy` while it runs. */
+  async undoFolderRun(id: string, force = false): Promise<FolderRun> {
+    return this.request<FolderRun>(`/v1/local/folder/runs/${encodeURIComponent(id)}/undo`, { method: "POST", body: JSON.stringify(force ? { force: true } : {}) });
+  }
+
+  // ---- Payments « à payer » + budgets (PAYMENTS §5; flag off → 404) ----
+  async getPaymentBudgets(): Promise<BudgetsView> {
+    return this.request<BudgetsView>("/v1/payments/budgets");
+  }
+  /** Payer only (403 `payer_only`); amounts in units; per purchase ≤ per day ≤ per month (400 `invalid`). */
+  async putPaymentBudget(account: string, body: BudgetInput): Promise<BudgetLine> {
+    return this.request<BudgetLine>(`/v1/payments/budgets/${encodeURIComponent(account)}`, { method: "PUT", body: JSON.stringify(body) });
+  }
+  /** Back to the default budget (the payer's default, or none for a member). */
+  async resetPaymentBudget(account: string): Promise<BudgetLine> {
+    return this.request<BudgetLine>(`/v1/payments/budgets/${encodeURIComponent(account)}`, { method: "DELETE" });
+  }
+  async listPayCards(member?: string): Promise<{ mandates: PayCard[] }> {
+    return this.request<{ mandates: PayCard[] }>(`/v1/payments/mandates${member ? `?member=${encodeURIComponent(member)}` : ""}`);
+  }
+  async getMandate(id: string, member?: string): Promise<MandateDetail> {
+    return this.request<MandateDetail>(`/v1/payments/mandates/${encodeURIComponent(id)}${member ? `?member=${encodeURIComponent(member)}` : ""}`);
+  }
+  async verifyMandate(id: string, member?: string): Promise<MandateVerification> {
+    return this.request<MandateVerification>(`/v1/payments/mandates/${encodeURIComponent(id)}/verify${member ? `?member=${encodeURIComponent(member)}` : ""}`);
+  }
+
+  async listConsolidationRuns(limit = 30): Promise<{ runs: ConsolidationRun[] }> {
+    return this.request<{ runs: ConsolidationRun[] }>(`/v1/memory/consolidation/runs?limit=${limit}`);
+  }
+  async getConsolidationRun(id: string): Promise<ConsolidationReport> {
+    return this.request<ConsolidationReport>(`/v1/memory/consolidation/runs/${encodeURIComponent(id)}`);
+  }
+  /** The whole night, last op first; idempotent; ops in conflict stay and are listed. */
+  async undoConsolidationRun(id: string): Promise<ConsolidationRunUndo> {
+    return this.request<ConsolidationRunUndo>(`/v1/memory/consolidation/runs/${encodeURIComponent(id)}/undo`, { method: "POST", body: "{}" });
+  }
+  /** 409 `conflict` when a touched note changed since (nothing written). */
+  async undoConsolidationOp(id: string): Promise<ConsolidationOpUndo> {
+    return this.request<ConsolidationOpUndo>(`/v1/memory/consolidation/ops/${encodeURIComponent(id)}/undo`, { method: "POST", body: "{}" });
+  }
+  /** Now, or as a preview (`dryRun`: nothing written). 409 `busy`; `{status: "already"}` when tonight is done. */
+  async runConsolidation(dryRun = false): Promise<ConsolidationReport | { status: "already"; night: string }> {
+    return this.request<ConsolidationReport | { status: "already"; night: string }>("/v1/memory/consolidation/run", { method: "POST", body: JSON.stringify({ dry_run: dryRun }) });
+  }
+  async getConsolidationSettings(): Promise<ConsolidationSettings> {
+    return this.request<ConsolidationSettings>("/v1/memory/consolidation/settings");
+  }
+  /** 400 `bad_schedule` for an unknown time zone or a cron that is not five fields. */
+  async putConsolidationSettings(body: { enabled?: boolean; tz?: string; cron?: string }): Promise<ConsolidationSettings> {
+    return this.request<ConsolidationSettings>("/v1/memory/consolidation/settings", { method: "PUT", body: JSON.stringify(body) });
+  }
+  async listConsolidationPins(): Promise<{ pins: string[] }> {
+    return this.request<{ pins: string[] }>("/v1/memory/consolidation/pins");
+  }
+  /** A pinned note is never touched by a consolidation. */
+  async pinConsolidationNote(name: string, pinned: boolean): Promise<{ name: string; pinned: boolean; pins: string[] }> {
+    return this.request<{ name: string; pinned: boolean; pins: string[] }>(`/v1/memory/consolidation/pins/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify({ pinned }) });
+  }
+
+  // -- « Who does what » (WHO-DOES-WHAT.md): 404 when the flag is off --------------------------------------------------
+
+  async getPresence(): Promise<PresenceView> {
+    return this.request<PresenceView>("/v1/presence");
+  }
+
+  // -- Le Guide (GUIDE.md): 404 when the flag is off ------------------------------------------------------------------
+
+  async getGuide(): Promise<GuideView> {
+    return this.request<GuideView>("/v1/guide");
+  }
+
+  async guideIntroSeen(): Promise<{ seen: true }> {
+    return this.request<{ seen: true }>("/v1/guide/intro", { method: "POST", body: "{}" });
+  }
+
+  async guideAsk(text: string, history: GuideTurn[] = []): Promise<GuideAnswer> {
+    return this.request<GuideAnswer>("/v1/guide/ask", { method: "POST", body: JSON.stringify({ text, ...(history.length ? { history } : {}) }) });
+  }
+
+  // -- « Maison » room (HOUSE-ROOM.md §6): 404 when the flags are off ------------------------------------------------
+
+  async getHouse(): Promise<HouseView> {
+    return this.request<HouseView>("/v1/house");
+  }
+  /** Without `after`: the latest; with `after`: what follows, in order; `before`: older ones. */
+  async listHouseMessages(q: { after?: number | string; before?: number | string; limit?: number } = {}): Promise<HouseMessagesPage> {
+    const p = new URLSearchParams();
+    if (q.after !== undefined) p.set("after", String(q.after));
+    if (q.before !== undefined) p.set("before", String(q.before));
+    if (q.limit !== undefined) p.set("limit", String(q.limit));
+    const qs = p.toString();
+    return this.request<HouseMessagesPage>(`/v1/house/messages${qs ? `?${qs}` : ""}`);
+  }
+  /** 202: the reply comes later as a `house.message` event. */
+  async postHouseMessage(text: string): Promise<HousePostResult> {
+    return this.request<HousePostResult>("/v1/house/messages", { method: "POST", body: JSON.stringify({ text }) });
+  }
+
+  // -- Glance view for display glasses (AMBIENT.md §6) --------------------------------------------------------------
+
+  /** From the phone (account session; Lokkal: local token): a code and a QR to pair glasses, 5 minutes. */
+  async pairGlance(name?: string): Promise<GlanceOffer> {
+    return this.request<GlanceOffer>("/v1/glance/pair", { method: "POST", body: JSON.stringify(name ? { name } : {}) });
+  }
+  /** From the glasses, without any session: the code (any case, dash or not) or the QR text → a read-only token. */
+  async claimGlance(code: string): Promise<GlanceClaim> {
+    return this.request<GlanceClaim>("/v1/glance/claim", { method: "POST", body: JSON.stringify({ code }) });
+  }
+  /** With a client whose token is the `nkg_…` glance token: the whole view in one read. */
+  async getGlance(): Promise<GlanceView> {
+    return this.request<GlanceView>("/v1/glance");
+  }
+  async listGlanceDevices(): Promise<{ devices: GlanceDevice[] }> {
+    return this.request<{ devices: GlanceDevice[] }>("/v1/glance/devices");
+  }
+  async revokeGlanceDevice(id: string): Promise<{ revoked: true }> {
+    return this.request<{ revoked: true }>(`/v1/glance/devices/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
   async listApprovals(status?: Approval["status"]): Promise<Approval[]> {
     const qs = status ? `?status=${encodeURIComponent(status)}` : "";
     return this.request<Approval[]>(`/v1/approvals${qs}`);
@@ -1342,7 +1612,7 @@ export class NokkerClient {
     messages: ChatMessage[],
     onChunk: (chunk: ChatCompletionChunk) => void,
     model = "nokker",
-    opts: { liveTokens?: boolean; signal?: AbortSignal; attachments?: ChatAttachment[] } = {},
+    opts: { liveTokens?: boolean; signal?: AbortSignal; attachments?: ChatAttachment[]; metadata?: Record<string, string> } = {},
   ): Promise<void> {
     const extra: Record<string, string> = { "X-Session-Id": threadId };
     if (opts.liveTokens !== false) extra["X-Nokker-Stream-Tokens"] = "1";
@@ -1350,7 +1620,9 @@ export class NokkerClient {
       method: "POST",
       headers: { ...this.headers(extra), "Content-Type": "application/json" },
       // Images du dernier message user (LOKKAL.md §7.6) : `attachments` à côté de `content`, jamais d'adresse http(s).
-      body: JSON.stringify({ model, messages, stream: true, ...(opts.attachments?.length ? { attachments: opts.attachments } : {}) }),
+      // `metadata` (ex. `cli_control`) : étiquette du tour, stockée par le noyau ; un noyau plus ancien l'ignore.
+      body: JSON.stringify({ model, messages, stream: true, ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
+        ...(opts.metadata && Object.keys(opts.metadata).length ? { metadata: opts.metadata } : {}) }),
       timeout: false, // un tour peut attendre une approbation plus de 5 min (délai d'inactivité par défaut de bun)
       ...(opts.signal ? { signal: opts.signal } : {}),
     });
@@ -1424,8 +1696,9 @@ function asAsyncIterable(body: NonNullable<ResponseLike["body"]>): AsyncIterable
 export const LOCAL_TOOL_CALL_PATH = "/v1/local/tools/call";
 
 /** Liste blanche des outils appelables par la route (tout autre nom : 403) : les 7 de base, plus `memory` (drapeau
- * `local.project_memory`) et `delegate_status` (serveur local, sous-agents en arrière-plan). `delegate_cancel` n'y est
- * pas (403 du noyau). */
+ * `local.project_memory`), `delegate_status` et `delegate_cancel` (serveur local, sous-agents en arrière-plan ;
+ * `delegate_cancel` accepté par le noyau depuis 03c3164 — un noyau plus ancien répond 403, d'où le repli de l'appelant),
+ * et `lsp_diagnostics` (drapeau `local.lsp.enabled`, sinon 403). */
 export const LOCAL_TOOL_NAMES: readonly LocalToolName[] = [
   "checkpoint_list",
   "checkpoint_diff",
@@ -1436,6 +1709,8 @@ export const LOCAL_TOOL_NAMES: readonly LocalToolName[] = [
   "todo",
   "memory",
   "delegate_status",
+  "delegate_cancel",
+  "lsp_diagnostics",
 ];
 
 /** Décode le `content` JSON d'un appel (null si ce n'est pas du JSON). */

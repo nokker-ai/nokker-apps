@@ -54,6 +54,31 @@ describe("choix d'une carte (partagés CLI / VS Code / ACP)", () => {
     expect(c.map((x) => x.id)).toEqual(["session", "once", "always", "always", "reject"]);
     expect(c[2]!.rule).toBe("terminal(pytest -q)");
   });
+  it("« Pour cette session » porte la règle exacte (le noyau répond 400 sans règle hors « une fois »)", () => {
+    const c = localChoices(base);
+    expect(c.find((x) => x.id === "session")!.scopeRule).toBe("terminal(pytest -q)");
+    expect(c.find((x) => x.id === "session")!.rule).toBeUndefined(); // jamais affichée dans le libellé
+    expect(localChoices({ ...base, suggested_rules: [] }).find((x) => x.id === "session")!.scopeRule).toBeUndefined();
+  });
+  it("libellés d'après suggested_rule_kinds (noyau du 01.11) ; sans eux, libellés d'avant", () => {
+    const term = localChoices({ ...base, suggested_rule_kinds: ["exact", "prefix"] });
+    expect(term.map((x) => [x.key, x.label, x.ruleKind])).toEqual([
+      ["1", "Cette commande exacte pour cette session", "exact"],
+      ["2", "Une fois", undefined],
+      ["3", "Toujours cette commande exacte", "exact"],
+      ["3b", "Toujours les commandes qui commencent par « pytest -q »", "prefix"],
+      ["4", "Refuser", undefined],
+    ]);
+    const file = localChoices({ tool_name: "write_file", arguments: { path: "src/a.py" }, strength: "standard", suggested_rules: ["write_file(src/a.py)", "write_file(src/**)"], suggested_rule_kinds: ["file", "dir"] });
+    expect(file.filter((x) => x.ruleKind).map((x) => x.label)).toEqual(["Ce fichier pour cette session", "Toujours ce fichier", "Toujours ce dossier"]);
+    // delegate : le noyau ne propose plus que la règle par outil — « cet outil », jamais « ce fichier ».
+    const del = localChoices({ tool_name: "delegate", arguments: { goal: "x" }, strength: "standard", suggested_rules: ["delegate"], suggested_rule_kinds: ["tool"] });
+    expect(del.map((x) => x.label)).toEqual(["Une fois", "Cet outil pour cette session", "Toujours cet outil", "Refuser"]);
+    expect(localChoices(base).find((x) => x.key === "3")!.label).toBe("Toujours cette commande");
+    // kind inconnu (noyau plus récent) : libellé d'avant.
+    const unknown = localChoices({ ...base, suggested_rule_kinds: ["glob" as never] }).find((x) => x.key === "3")!;
+    expect([unknown.label, unknown.ruleKind]).toEqual(["Toujours cette commande", undefined]);
+  });
   it("carte forte : jamais décidée depuis un éditeur ; le texte dit où elle attend", () => {
     expect(editorCannotDecide({ strength: "strong" })).toBe(true);
     expect(editorCannotDecide({ strength: "standard" })).toBe(false);

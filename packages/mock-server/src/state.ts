@@ -7,7 +7,7 @@ import type { MockPage } from "./pages.js";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { LocalMemoryStatus, PermissionSettings } from "@nokker-apps/sdk";
+import type { LocalMemoryStatus, PermissionMode, PermissionSettings } from "@nokker-apps/sdk";
 import type {
   Agent,
   Approval,
@@ -107,10 +107,34 @@ export interface MockStateOptions {
   /** Drapeau `local.project_skills` (§7.21) : clé `skills` à l'ouverture, `skill.untrusted`, `POST /v1/local/skills/trust`.
    * Défaut : éteint, comme le compose (`MOCK_PROJECT_SKILLS=1` l'allume). */
   projectSkills?: boolean;
+  /** Drapeau `local.lsp.enabled` (lot 13, LOKKAL-LSP.md) : `lsp.diagnostics` après une édition, outil `lsp_diagnostics`
+   * appelable par la route d'appel d'outil. Défaut : éteint, comme le noyau (`MOCK_LSP=1` l'allume). */
+  lsp?: boolean;
+  /** Scénario `/goal` de la CLI : nombre de vérifications répondues `GOAL: CONTINUE` avant `GOAL: DONE`, par fil
+   * (défaut 1). */
+  goalChecksBeforeDone?: number;
+  /** Drapeau `goals_enabled` du noyau (OUTCOMES-GOAL.md) : routes `/v1/threads/{id}/goal`, `goal_check` répondu par le
+   * correcteur. Défaut : éteint (404, comme un noyau sans drapeau) ; `MOCK_GOALS=1` l'allume. */
+  goals?: boolean;
   /** Drapeau `household` (X23, §7.29) et rôle de la démo : `off` (défaut), `payer`, `member`, `minor`, `none`. */
   household?: "off" | "payer" | "member" | "minor" | "none";
   /** Drapeau `code.enabled` (LOKKAL §7.28, sessions de code des comptes) : éteint par défaut, comme dans le noyau. */
   code?: boolean;
+  /** Flag `local.cast.enabled` (SCREEN-CAST §7). */
+  cast?: boolean;
+  /** Flag `show_me` (core docs/SHOW-ME.md): Nina points instead of clicking. */
+  showMe?: boolean;
+  /** Flag `guide` (core docs/GUIDE.md). */
+  guide?: boolean;
+  /** Flags `house_room` + `household` (HOUSE-ROOM §6). */
+  houseRoom?: boolean;
+  whoDoesWhat?: boolean;
+  /** Flag `memory_consolidation` (CONSOLIDATION §6). */
+  consolidation?: boolean;
+  /** Flag `payments` (PAYMENTS §5). */
+  payments?: boolean;
+  /** Flag `local.folder_mode` (FOLDER-MODE §6). */
+  folder?: boolean;
   /** Relève du courrier du Crew (déclencheur `mail:`) : `on` (défaut), `off` (NO_MAIL_TRIGGER), `nobox`. */
   crewMail?: "on" | "off" | "nobox";
 }
@@ -181,6 +205,13 @@ export class MockState {
   /** Mémoire de projet et skills du dépôt (drapeaux du noyau, modifiables : tests). */
   projectMemory: boolean;
   projectSkills: boolean;
+  lsp: boolean;
+  goalChecksBeforeDone: number;
+  /** Objectifs tenus par le « noyau » (drapeau `goals`), par fil. */
+  goals: boolean;
+  kernelGoals = new Map<string, import("./goals.js").MockKernelGoal>();
+  /** Notes du correcteur sous le seuil avant la note qui passe (défaut 1). */
+  goalGradesBeforePass = 1;
   readonly household: "off" | "payer" | "member" | "minor" | "none";
   private memTrusted: { root: string; sha256: string }[] = [];
   /** Délai du dépôt après la pose de la carte (ms, mis à l'échelle de `speed`). */
@@ -204,6 +235,8 @@ export class MockState {
   approvalEffects = new Map<string, () => string>();
   /** Règles `allow` posées par `scope: session`, par fil (mémoire seulement). */
   sessionRules = new Map<string, string[]>();
+  /** Mode chosen for an open session (`PUT /v1/local/sessions/{thread}/mode`, `PATCH /v1/code/sessions/{cs}`): wins over settings.json. */
+  sessionModes = new Map<string, PermissionMode>();
   /** Jeton local (`local-token`), absent si le mock n'en a pas écrit. */
   localToken: string | null = null;
   localTokenPath: string | null = null;
@@ -215,6 +248,18 @@ export class MockState {
   readonly packsWeb: boolean;
   crewMail: "on" | "off" | "nobox";
   readonly code: boolean;
+  readonly cast: boolean;
+  readonly showMe: boolean;
+  readonly guide: boolean;
+  readonly houseRoom: boolean;
+  readonly whoDoesWhat: boolean;
+  readonly consolidation: boolean;
+  readonly payments: boolean;
+  readonly folder: boolean;
+  /** Payments: seals or rejects the mandate of a « to pay » card (set by payments.ts, flag on). */
+  payDecided: ((approval: Approval, decision: ApprovalDecisionKind, by: string) => void) | null = null;
+  /** Cast: the demo screen was approved once (next casts show at once). */
+  castApproved = false;
   private memSettings: PermissionSettings = {};
   readonly speed: number;
   private timers = new Set<ReturnType<typeof setTimeout>>();
@@ -233,9 +278,20 @@ export class MockState {
     this.localWrites = opts.localWrites ?? false;
     this.projectMemory = opts.projectMemory ?? true;
     this.projectSkills = opts.projectSkills ?? false;
+    this.lsp = opts.lsp ?? false;
+    this.goalChecksBeforeDone = opts.goalChecksBeforeDone ?? 1;
+    this.goals = opts.goals ?? false;
     this.household = opts.household ?? "off";
     this.crewMail = opts.crewMail ?? "on";
     this.code = opts.code ?? false;
+    this.cast = opts.cast ?? false;
+    this.showMe = opts.showMe ?? false;
+    this.guide = opts.guide ?? false;
+    this.houseRoom = opts.houseRoom ?? false;
+    this.whoDoesWhat = opts.whoDoesWhat ?? false;
+    this.consolidation = opts.consolidation ?? false;
+    this.payments = opts.payments ?? false;
+    this.folder = opts.folder ?? false;
   }
 
   /** `trusted_project_skills: [{root, sha256}]` des réglages de l'utilisateur (jamais lus dans le dépôt). */
@@ -316,7 +372,8 @@ export class MockState {
   /** Réglages effectifs d'un fil : fichier utilisateur + règles de session. */
   effectiveSettings(threadId: string): PermissionSettings {
     const s = this.readSettings();
-    return { ...s, allow: [...(s.allow ?? []), ...(this.sessionRules.get(threadId) ?? [])] };
+    const mode = this.sessionModes.get(threadId.split("/sa-")[0]!) ?? s.mode;
+    return { ...s, ...(mode ? { mode } : {}), allow: [...(s.allow ?? []), ...(this.sessionRules.get(threadId) ?? [])] };
   }
 
   addSessionRule(threadId: string, rule: string): void {
@@ -346,7 +403,8 @@ export class MockState {
   }
 
   /** Annule le tour en cours du fil (et de ses sous-fils `<fil>/sa-…`) ; les cartes en attente sont retirées. */
-  cancelTurn(threadId: string): { cancelled: boolean; approvals_cancelled: number } {
+  /** Forme du noyau du 01.11 : `cancelled` = l'id du fil (toujours), `running` = un tour tournait vraiment. */
+  cancelTurn(threadId: string): { cancelled: string; approvals_cancelled: number; running: boolean } {
     const root = threadId.split("/sa-")[0]!;
     this.cancelEpochs.set(root, (this.cancelEpochs.get(root) ?? 0) + 1);
     const ids = [threadId, ...[...this.activeTurns.keys()].filter((k) => k.startsWith(`${threadId}/sa-`))];
@@ -373,7 +431,7 @@ export class MockState {
         }
       }
     }
-    return { cancelled, approvals_cancelled: approvals };
+    return { cancelled: threadId, approvals_cancelled: approvals, running: cancelled };
   }
 
   publish(event: NokkerEvent): void {
@@ -583,6 +641,7 @@ export function finalizeDecision(
   approval.decided_by = decidedBy;
   approval.decided_via = via;
   approval.decided_at = now;
+  state.payDecided?.(approval, decision, decidedBy);
   // `approval.decided` publie le STATUT posé (`"approved"`/`"rejected"`), pas le verbe de la
   // requête — APPROVALS.md §2, `BaseApprovals.decide`.
   state.publish({ type: "approval.decided", approval_id: approval.id, decision: approval.status, by: decidedBy, via });

@@ -16,11 +16,14 @@
  */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { argsSha256, type AgentStatus, type AgentTrigger, type Approval, type Bubble, type BubbleKind, type Preview, type SearchResult } from "@nokker-apps/sdk";
+import { startCast } from "./cast.js";
+import { startGuide } from "./pointer.js";
 import { backgroundTurn, closeBubble, createBubble, registerAction, registerNotifyAction, shareBubble, transferBubble, updateBubble } from "./bubbles.js";
 import { MockHttpError } from "./errors.js";
 import { createAgentFull, seedRuns } from "./agents.js";
 import { proposeHandoff } from "./handoff.js";
 import { createPage, updatePage } from "./pages.js";
+import { payDemo } from "./payments.js";
 import { MOCK_USER, hexId, normalize, randomId, type MockState } from "./state.js";
 
 export interface DemoIds {
@@ -382,6 +385,10 @@ export function interpretDemo(
 ): DemoTurn {
   const n = normalize(text);
 
+  // 0) Paiements (drapeau `payments`) : « achète … » → carte « à payer », ou refus avant toute carte.
+  const paid = payDemo(state, threadId, n);
+  if (paid !== null) return { reply: paid };
+
   // 1) Transfert / partage demandé dans le chat (§3) — AVANT la démo d'approbation « envoie ».
   const trFr = n.match(/^(?:peux-tu |tu peux )?(envoie|envoyer|deplace|deplacer|copie|copier|partage|partager|mets|mettre)\s+(?:la |cette )?bulle\s+(.+?)\s+(?:a|vers|dans|avec|sur)\s+(?:la session |le fil |la |le |l )?(.+?)\s*[.!]?$/);
   // Anglais : « send the disk bubble to Infra » ou « move bubble disk to Infra ».
@@ -572,6 +579,33 @@ export function interpretDemo(
         });
         state.later(ms, () => !b.closed_at && updateBubble(state, b.id, { status: "done" }));
       },
+    };
+  }
+
+  // « Show me » (core docs/SHOW-ME.md, flag off by default): « show me how to attach », « montre-moi … » ; with « screenshot »
+  // or « capture »: on the last image of the thread. Before the cast demo (« screen » would match it).
+  if (state.showMe && /\b(show me|montre[ -]moi|guide me|guide[ -]moi)\b/.test(n)) {
+    const onImage = /\b(screenshot|capture|image|photo)\b/.test(n);
+    const fr = /\b(montre|guide)[ -]moi\b/.test(n);
+    return {
+      reply: fr
+        ? onImage
+          ? "Regarde où pointe la flèche sur ta capture (démo)."
+          : "Je pointe, tu cliques : l'étape 1 est dans la bulle (démo). Réponds « Fait » quand c'est fait."
+        : onImage
+          ? "Look where the arrow points on your screenshot (demo)."
+          : "I'll point, you click: step 1 is in the bubble (demo). Tell me « Done » when it's done.",
+      after: () => {
+        if (!startGuide(state, threadId, onImage, fr)) state.appendTurn(threadId, "", "Attach a screenshot first, then ask again.", { sender: null, channel: "web" });
+      },
+    };
+  }
+
+  // Cast (SCREEN-CAST §7, flag off by default): « show it on the TV », « à l'écran ».
+  if (state.cast && /\b(tv|tele|television|ecran|screen)\b/.test(n)) {
+    return {
+      reply: "I am putting the week plan on the living room TV (demo); the bubble asks for your go first.",
+      after: () => void startCast(state, threadId),
     };
   }
 

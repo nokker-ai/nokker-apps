@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import { applyStoredTheme } from "./theme.js";
 import { BRAND } from "@nokker-apps/brand";
 import { createClient } from "../api.js";
 import { writeJson } from "../viewState.js";
@@ -26,6 +27,7 @@ function inviteToken(): string {
 }
 
 export function Onboarding(): React.ReactElement {
+  useEffect(applyStoredTheme, []);
   const client = useMemo(createClient, []);
   const [s, dispatch] = useReducer(reduce, undefined, () => initialState(inviteToken()));
   const [terms, setTerms] = useState<string | null>(null);
@@ -126,6 +128,7 @@ export function Onboarding(): React.ReactElement {
             anyLinked={s.connectorsLinked.mail || s.connectorsLinked.calendar}
             onLinked={(kind, linked) => dispatch({ type: "connector_linked", kind, linked })}
             onNext={() => dispatch({ type: "next" })}
+            onStartNow={() => window.location.assign("/")}
           />
         )}
         {s.step === "telegram" && (

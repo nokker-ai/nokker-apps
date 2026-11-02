@@ -295,6 +295,14 @@ export function openProjectSkills(state: MockState, threadId: string, cwd: strin
   return (void _d, out);
 }
 
+/** `GET /v1/local/sessions/{id}/skills` : état connu d'une session ouverte ; null si fil inconnu. */
+export function getProjectSkills(state: MockState, threadId: string): ProjectSkillsStatus | null {
+  const st = skillMap(state).get(threadId);
+  if (!st) return null;
+  const { dir: _d, ...out } = st;
+  return (void _d, out);
+}
+
 /** `POST /v1/local/skills/trust` : 200, 404 (fil sans skills de dépôt), 409 (empreinte différente). */
 export function trustProjectSkills(state: MockState, threadId: string, sha256: string): { status: number; body: unknown } {
   const st = skillMap(state).get(threadId);

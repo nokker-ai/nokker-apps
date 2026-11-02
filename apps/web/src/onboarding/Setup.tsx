@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { applyStoredTheme } from "./theme.js";
 import { BRAND } from "@nokker-apps/brand";
 import { NokkerApiError, type NokkerClient } from "@nokker-apps/sdk";
 import { createClient } from "../api.js";
@@ -10,6 +11,7 @@ import { t, type Key } from "./i18n.js";
 import { takeLocalToken } from "./localToken.js";
 import { StepsNav } from "./Onboarding.js";
 import { DefaultPicker, optionLabel, RouterCard } from "./SetupParts.js";
+import { ImportCard } from "./ImportCard.js";
 import {
   byokName,
   canContinueModels,
@@ -44,6 +46,7 @@ function linkFailure(err: unknown): LocalAction {
 
 
 export function Setup(): React.ReactElement {
+  useEffect(applyStoredTheme, []);
   // Le jeton local sert à tout : routes /v1/local/*, connecteurs, Telegram. Sans lui, rien ne s'ouvre.
   const [localToken] = useState(takeLocalToken);
   const client = useMemo(() => {
@@ -192,7 +195,7 @@ export function Setup(): React.ReactElement {
             </div>
           </section>
         )}
-        {s.step === "done" && <DoneStep s={s} onFinish={() => void finish()} />}
+        {s.step === "done" && <DoneStep s={s} client={client} onFinish={() => void finish()} />}
       </main>
     </div>
   );
@@ -374,7 +377,7 @@ function LocalCard({ s }: { s: LocalFlowState }): React.ReactElement {
 
 // -- Fin --------------------------------------------------------------------------------------
 
-function DoneStep({ s, onFinish }: { s: LocalFlowState; onFinish: () => void }): React.ReactElement {
+function DoneStep({ s, client, onFinish }: { s: LocalFlowState; client: NokkerClient; onFinish: () => void }): React.ReactElement {
   const L = s.lang;
   const chosen = defaultOptions(s).find((o) => o.value === s.chosen);
   const rows: [string, boolean, string][] = [
@@ -397,6 +400,7 @@ function DoneStep({ s, onFinish }: { s: LocalFlowState; onFinish: () => void }):
       </ul>
       {missingWithoutRouter(s) && <p className="ob-note lk-missing">{t(L, "lkMissing")}</p>}
       <ErrorLine lang={L} k={s.error} />
+      <ImportCard client={client} lang={L} />
       <div className="ob-actions">
         <button type="button" className="ob-btn primary" disabled={s.submitting || s.finished} onClick={onFinish}>
           {s.submitting || s.finished ? t(L, "lkDoning") : t(L, "lkDoneOpen")}

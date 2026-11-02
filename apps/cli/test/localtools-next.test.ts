@@ -60,6 +60,31 @@ describe("/checkpoints et redémarrage", () => {
     expect(out[1]).toMatch(/aaaaaaaa .*\(1 file\)  · turn 3$/);
     expect(out[2]).toMatch(/bbbbbbbb .*\(1 file\)$/);
   });
+  it("raison traduite d'après reason_code (D8), texte du noyau sans code (noyau plus ancien)", async () => {
+    const { checkpointReason, formatCheckpoints } = await import("../src/localtools.js");
+    expect(checkpointReason("before_terminal", "avant terminal")).toBe("before terminal");
+    expect(checkpointReason("before_write_file", "avant write_file")).toBe("before write_file");
+    expect(checkpointReason("before_rollback", "avant retour à abc1234")).toBe("before rollback");
+    expect(checkpointReason("manual", "manuel")).toBe("manual");
+    expect(checkpointReason("manual", "before refactor")).toBe("manual: before refactor");
+    expect(checkpointReason("auto", "automatique")).toBe("automatic");
+    expect(checkpointReason("session_start", "début de session")).toBe("session start");
+    expect(checkpointReason("other", "")).toBe("other");
+    expect(checkpointReason("other", "from my script")).toBe("from my script");
+    expect(checkpointReason(undefined, "avant patch")).toBe("avant patch");
+    expect(checkpointReason("future_code", "texte")).toBe("texte");
+    const cp = { hash: "a".repeat(40), short_hash: "aaaaaaaa", timestamp: "2026-10-25T10:00:00+00:00", reason: "avant patch", files_changed: 1 };
+    expect(formatCheckpoints([cp], { [cp.hash]: "before_patch" })).toContain("  before patch  ");
+    expect(formatCheckpoints([cp])).toContain("  avant patch  ");
+    const { setLang } = await import("../src/i18n/index.js");
+    setLang("fr");
+    try {
+      expect(checkpointReason("before_terminal", "avant terminal")).toBe("avant terminal");
+      expect(checkpointReason("session_start", "x")).toBe("début de session");
+    } finally {
+      setLang("en");
+    }
+  });
   it("enfant relu après redémarrage : interrupted / restart", () => {
     let m = applySubagentEvent(new Map(), { type: "subagent.started", child_id: "c9", goal: "g", background: true }, 0);
     m = mergeSubagentViews(m, [{ child_id: "c9", thread_id: "th_p/sa-c9", task_index: 0, goal: "g", elapsed_s: 3, status: "interrupted", exit_reason: "restart", worktree: { path: "/w", branch: "nokker/sa-c9", kept: true } }]);

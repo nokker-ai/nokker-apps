@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 import { FR_OPS } from "../src/i18n/fr-ops.js";
 import { FR, FR_SESSION } from "../src/i18n/fr.js";
 import { detectLang, formatMessage, lang, parseLang, setLang, t } from "../src/i18n/index.js";
@@ -65,6 +65,8 @@ function withoutComments(code: string): string {
 
 const files = sources(join(root, "src"))
   .filter((p) => !isCatalogue(p))
+  // prompts.ts : textes envoyés au MODÈLE, en français par décision de l'équipe d'entraînement (pas de l'interface).
+  .filter((p) => !p.endsWith(`${sep}prompts.ts`))
   .map((p) => ({ p: relative(root, p), code: withoutComments(readFileSync(p, "utf-8")) }));
 
 afterEach(() => setLang("en"));

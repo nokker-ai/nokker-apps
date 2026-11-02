@@ -484,7 +484,7 @@ export class EditorSession {
     this.decisionsThisTurn += 1;
     const { decision, scope } = choiceToDecision(choice.id);
     try {
-      const res = await this.track(this.client.decideLocalApproval(approvalId, { decision, scope, ...(choice.rule ? { rule: choice.rule } : {}) }));
+      const res = await this.track(this.client.decideLocalApproval(approvalId, { decision, scope, ...(choice.rule ?? choice.scopeRule ? { rule: choice.rule ?? choice.scopeRule } : {}) }));
       if (res.call_id && !this.waitingCalls.has(approvalId)) this.waitingCalls.set(approvalId, res.call_id);
       this.closeCard(approvalId, res.status ?? (decision === "approve" ? "approved" : "rejected"), res.result_summary ?? res.error);
       return true;

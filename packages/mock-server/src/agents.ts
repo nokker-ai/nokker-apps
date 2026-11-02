@@ -14,6 +14,11 @@ import { describeWatch, forgetWatch, mailFilterOf, MailFilterError, mailRefusal,
 type Send = (status: number, payload: unknown) => void;
 
 const runsByAgent = new WeakMap<MockState, Map<string, AgentRun[]>>();
+/** Latest run of an agent (glance view). */
+export function latestRun(state: MockState, id: string): AgentRun | null {
+  return runsOf(state, id)[0] ?? null;
+}
+
 function runsOf(state: MockState, id: string): AgentRun[] {
   let m = runsByAgent.get(state);
   if (!m) runsByAgent.set(state, (m = new Map()));
@@ -340,4 +345,26 @@ export async function handleCrewMailDev(state: MockState, method: string, path: 
     } else touch(state, a, {});
   }
   return send(200, { watch: state.crewMail, agent: a ? syncWatch(state, a) : null }), true;
+}
+
+/** Demo: the morning brief's latest run (today 07:30), so the brief has a text to show (glance view, Plan). */
+export function seedBriefRun(state: MockState, a: Agent): void {
+  const d = new Date();
+  d.setHours(7, 30, 0, 0);
+  const at = d.toISOString();
+  const run: AgentRun = {
+    run_id: hexId("run"),
+    agent_id: a.id,
+    trigger: "schedule",
+    scheduled_for: at,
+    started_at: at,
+    ended_at: at,
+    status: "succeeded",
+    thread_id: null,
+    cost: { tokens_in: 5200, tokens_out: 410, amount: 0.014, currency: "EUR" },
+    summary:
+      "(demo) Three things today: invoice follow-ups go out at 11:00, the docs deploy waits for review, call with the bank at 15:00. One live incident: disk /var at 92% on web-1. Check the cards that wait for your decision.",
+  };
+  runsOf(state, a.id).unshift(run);
+  a.last_run = { run_id: run.run_id, status: run.status, ended_at: run.ended_at };
 }

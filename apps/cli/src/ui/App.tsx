@@ -9,10 +9,12 @@ import {
   applyBubbleEvent,
   summarizeState,
   type Approval,
+  type ChatAttachment,
   type ApprovalScope,
   type Bubble,
   type LocalSessionSummary,
   type NokkerEvent,
+  type SessionModeState,
   type Thread,
   type TurnUsage,
   type CheckpointInfo,
@@ -24,6 +26,7 @@ import {
   type DelegateStatusResult,
   type ProjectMemoryList,
   type ProjectMemoryView,
+  type LspDiagnosticsResult,
   parseToolJson,
   subagentParent,
 } from "@nokker-apps/sdk";
@@ -41,7 +44,11 @@ import {
   parseCheckpointDiff,
   parseCheckpointList,
   applySubagentEvent,
+  checkpointReason,
   formatCheckpoints,
+  formatMode,
+  modeStatus,
+  reasonCodeOf,
   formatProjectSkills,
   subagentStatusLabel,
   formatPlan,
@@ -57,7 +64,15 @@ import { applyToolEvent, type ToolLine } from "../toolview.js";
 import { decisionSummary, resolveEffect } from "../approval-model.js";
 import { ringBell } from "../bell.js";
 import { helpText, parseSlashCommand } from "../commands.js";
+import { initPromptFor } from "../init.js";
+import { exportThread } from "../export.js";
+import { completeAtRef, expandAtRefs } from "../atrefs.js";
 import { t } from "../i18n/index.js";
+import { BTW_THREAD_TITLE, btwPrompt, goalCheckPrompt, goalContinuePrompt, loopPrompt, type CliControl } from "../prompts.js";
+import { LOOP_MAX_RUNS, clampInterval, formatInterval, formatLoops, loopTickDecision, loopsStatusLine, parseInterval, type LoopEntry } from "../loop.js";
+import { GOAL_MAX_AUTO_TURNS, formatGoal, goalStatusLine, newGoal, nextGoalStep, splitGoalText, type GoalState } from "../goal.js";
+import { formatQueue, queueLine, clip, type QueuedPrompt, type TurnKind } from "../promptqueue.js";
+import { applyDiagnostics, formatDiagnosticsResult, formatDiagnosticsState, stateFromResult, type DiagnosticsState } from "../diagnostics.js";
 import { ConfirmCard, type ConfirmRequest } from "./ConfirmCard.js";
 import { formatCostTotals, turnCostLine } from "../cost.js";
 import { Markdown } from "./Markdown.js";
@@ -67,36 +82,88 @@ import { BubbleLine } from "./BubbleLine.js";
 import { Header } from "./Header.js";
 import { Footer } from "./Footer.js";
 
+/** Étiquette `metadata.cli_control` d'un tour selon sa nature ; un tour tapé (ou `/init`) n'en a pas. */
+const CONTROL_OF: Record<TurnKind, CliControl | undefined> = { user: undefined, init: undefined, loop: "loop", goalCheck: "goal_check", goalContinue: "goal_continue" };
+
 type FeedItem =
   | { kind: "user"; id: string; text: string }
   | { kind: "assistant"; id: string; text: string }
   | { kind: "system"; id: string; text: string }
   | { kind: "diff"; id: string; lines: DiffLine[]; omitted: number }
   | { kind: "tool"; id: string; call: ToolLine }
-  | { kind: "sub"; id: string; childId: string; text: string };
+  | { kind: "sub"; id: string; childId: string; text: string }
+  | { kind: "btw"; id: string; question: string; text: string; state: "pending" | "done" | "error" };
 
 let seq = 0;
 const nextId = (): string => `f${seq++}`;
 
-export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: boolean; cwd: string }): React.ReactElement {
+export function App({
+  baseUrl,
+  sound = false,
+  cwd,
+  loopTimeScale = 1,
+}: {
+  baseUrl: string;
+  sound?: boolean;
+  cwd: string;
+  /** Tests seulement : échelle des minuteurs de `/loop` (0.01 : 30 s deviennent 300 ms). */
+  loopTimeScale?: number;
+}): React.ReactElement {
   const { exit } = useApp();
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [input, setInput] = useState("");
+  /** Change à chaque complétion par Tab : remonte le champ pour poser le curseur en fin de saisie. */
+  const [inputEpoch, setInputEpoch] = useState(0);
   const [status, setStatus] = useState(() => t("connecting…"));
   const [sending, setSending] = useState(false);
+  /** Envoi en cours (lu de façon synchrone : l'état React arrive trop tard pour décider d'un envoi). */
+  const sendingRef = useRef(false);
+  /** Un tour tourne sur le fil sans être le nôtre (suite d'une carte, autre client) : entre `turn.started` et `turn.done`. */
+  const remoteTurnRef = useRef(false);
+  /** File de prompts côté client : envoyés un par un, à la fin du tour en cours. */
+  const promptQueueRef = useRef<QueuedPrompt[]>([]);
+  const [queueView, setQueueView] = useState<QueuedPrompt[]>([]);
+  /** Échap ou /cancel pendant le tour courant. */
+  const stopRequestedRef = useRef(false);
+  /** `reason_codes` de la dernière réponse de `checkpoint_list` (noyau du 01.11) : raisons traduites d'après le code. */
+  const cpCodesRef = useRef<Record<string, string> | undefined>(undefined);
+  /** `/goal` : objectif de session et tour automatique dû (envoyé quand le fil est libre et la file vide). */
+  const goalRef = useRef<GoalState | null>(null);
+  const [goalView, setGoalView] = useState<GoalState | null>(null);
+  const goalDueRef = useRef<"check" | "continue" | null>(null);
+  /** `/loop` : boucles de la session et leurs minuteurs (arrêtés au départ). */
+  const loopsRef = useRef<LoopEntry[]>([]);
+  const [loopsView, setLoopsView] = useState<LoopEntry[]>([]);
+  const loopTimersRef = useRef<Map<number, ReturnType<typeof setInterval>>>(new Map());
+  const loopSeqRef = useRef(0);
+  useEffect(() => {
+    const timers = loopTimersRef.current;
+    return () => {
+      for (const tm of timers.values()) clearInterval(tm);
+      timers.clear();
+    };
+  }, []);
   const [pendingApproval, setPendingApproval] = useState<Approval | null>(null);
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [approvalMessage, setApprovalMessage] = useState<string | null>(null);
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [mode, setMode] = useState<"chat" | "threads" | "sessions" | "approvals" | "bubbles">("chat");
   const [folder, setFolder] = useState<string | null>(null);
+  /** Mode de permission de la session locale (noyau du 01.11) ; `null` : fil ordinaire ou noyau sans la route. */
+  const [permMode, setPermMode] = useState<SessionModeState | null>(null);
   const [localSessions, setLocalSessions] = useState<LocalSessionSummary[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [threads, setThreads] = useState<Thread[]>([]);
   const [approvalsList, setApprovalsList] = useState<Approval[]>([]);
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [spinnerFrame, setSpinnerFrame] = useState(0);
-  const [threadLabel, setThreadLabel] = useState("…");
+  const [threadLabel, setThreadLabelState] = useState("…");
+  /** Titre du fil courant, lu hors rendu (`/btw`). */
+  const threadLabelRef = useRef("…");
+  const setThreadLabel = (label: string): void => {
+    threadLabelRef.current = label;
+    setThreadLabelState(label);
+  };
   const [lastUsage, setLastUsage] = useState<TurnUsage | null>(null);
   const [lastCost, setLastCost] = useState<number | null>(null);
   /** Carte de confirmation (oubli d'une note, confiance aux skills du dépôt). */
@@ -120,6 +187,8 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
   const toolLinesRef = useRef<ToolLine[]>([]);
   /** Sous-agents du fil connus par les événements `subagent.*`. */
   const subagentsRef = useRef<Map<string, SubagentState>>(new Map());
+  /** Diagnostics de langage du fil : dernier état par fichier (`lsp.diagnostics`, `/diagnostics <chemin>`). */
+  const diagRef = useRef<DiagnosticsState>(new Map());
   /** Appels directs (`/rollback`, `/memory forget`) arrêtés sur une carte : approval_id -> suite, appelée avec le
    * `tool.result` qui porte cet approval_id (dans un sens ou l'autre de l'arrivée). */
   const directWaitRef = useRef<Map<string, (content: string, isError: boolean) => void>>(new Map());
@@ -137,7 +206,10 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
   const costTurnRef = useRef<string | null>(null);
   /** Résolu à la première connexion `/v1/events` : un tour ne part pas avant (sinon ses premiers événements sont perdus). */
   const connectedRef = useRef<() => void>(() => {});
-  const connectedPromise = useRef<Promise<void>>(new Promise<void>((r) => (connectedRef.current = r)));
+  // Créée UNE fois : l'argument de useRef est réévalué à chaque rendu, et chaque nouvelle promesse remplaçait le
+  // résolveur, si bien que celle gardée ne se résolvait jamais (chaque tour attendait les 3 s du repli).
+  const connectedPromise = useRef<Promise<void> | null>(null);
+  if (connectedPromise.current === null) connectedPromise.current = new Promise<void>((r) => (connectedRef.current = r));
 
   function pushSystem(text: string): void {
     setFeed((f) => [...f, { kind: "system", id: nextId(), text }]);
@@ -167,9 +239,15 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
       exit();
       return;
     }
-    // Échap ne décide jamais une carte ; hors carte, il annule le tour (côté noyau, pas seulement l'affichage).
-    if (key.escape && sending && !localCardOpen) {
-      void cancelCurrent();
+    // Tab : complète le dernier `@chemin` de la saisie (dossier de la session de code).
+    if (key.tab && !key.shift && !localCardOpen) {
+      const cwd = sessionRef.current?.cwd;
+      if (cwd) void completeAtInput(cwd);
+      return;
+    }
+    // Échap ne décide jamais une carte ; hors carte, il annule le tour (côté noyau, pas seulement l'affichage) et vide la file.
+    if (key.escape && (sendingRef.current || promptQueueRef.current.length > 0) && !localCardOpen) {
+      void stopAll();
       return;
     }
     // `o` sur un champ vide : déplie l'aperçu du dernier appel d'outil (le caractère est avalé).
@@ -181,6 +259,17 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
     }
   });
 
+  async function completeAtInput(cwd: string): Promise<void> {
+    const r = await completeAtRef(inputRef.current, cwd).catch(() => null);
+    if (!r) return;
+    if (r.value !== inputRef.current) {
+      inputRef.current = r.value;
+      setInput(r.value);
+      setInputEpoch((n) => n + 1);
+    }
+    if (r.candidates.length > 1) pushSystem(r.candidates.slice(0, 12).join("  ") + (r.candidates.length > 12 ? "  …" : ""));
+  }
+
   function toggleExpanded(id: string): void {
     setExpanded((cur) => {
       const next = new Set(cur);
@@ -190,9 +279,119 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
     });
   }
 
+  /** Échap, /cancel : vide la file (avant tout : rien ne doit partir à la fin du tour annulé), puis annule le tour. */
+  async function stopAll(): Promise<void> {
+    stopGoal(t("Esc or /cancel"));
+    const dropped = clearQueue();
+    if (dropped > 0) pushSystem(t("Queue cleared: {0} message(s) not sent.", dropped));
+    if (sendingRef.current || remoteTurnRef.current) await cancelCurrent();
+    else if (dropped === 0) await cancelCurrent();
+  }
+
+  function setGoal(g: GoalState | null): void {
+    goalRef.current = g;
+    setGoalView(g);
+  }
+
+  /** Arrête l'objectif actif (rien à faire s'il ne l'est pas). */
+  function stopGoal(reason: string): void {
+    goalDueRef.current = null;
+    const g = goalRef.current;
+    if (!g || g.status !== "active") return;
+    setGoal({ ...g, status: "stopped", reason });
+    pushSystem(t("Goal stopped: {0}.", reason));
+    if (g.kernel) stopKernelGoal();
+  }
+
+  /** Arrête l'objectif chez le noyau (`POST …/goal/stop`) ; 409 (déjà arrêté) et erreurs ignorés. */
+  function stopKernelGoal(): void {
+    const session = sessionRef.current;
+    const client = clientRef.current;
+    if (!session || !client) return;
+    void client.stopThreadGoal(session.threadId).catch(() => undefined);
+  }
+
+  function clearQueue(): number {
+    const n = promptQueueRef.current.length;
+    promptQueueRef.current = [];
+    setQueueView([]);
+    return n;
+  }
+
+  function enqueue(item: QueuedPrompt): void {
+    promptQueueRef.current = [...promptQueueRef.current, item];
+    setQueueView(promptQueueRef.current);
+    pushSystem(t("queued ({0}): “{1}” — sent when the turn in progress ends.", promptQueueRef.current.length, clip(item.shown)));
+  }
+
+  /** Un tour occupe le fil : le nôtre (requête ouverte) ou un autre (suite d'une carte). */
+  function busy(): boolean {
+    return sendingRef.current || remoteTurnRef.current;
+  }
+
+  /** Envoie le prochain prompt en file si le fil est libre (fin de notre requête, `turn.done`, reconnexion). */
+  function drain(): void {
+    // Une carte attend : rien ne part avant sa décision (la suite d'une approbation passe d'abord, un refus libère).
+    if (busy() || pendingRef.current) return;
+    if (promptQueueRef.current.length === 0) {
+      sendGoalTurn();
+      return;
+    }
+    const [next, ...rest] = promptQueueRef.current;
+    promptQueueRef.current = rest;
+    setQueueView(rest);
+    void runTurn(next!);
+  }
+
+  /** Tour automatique de `/goal` dû : seulement fil libre, file vide, aucune carte en attente, objectif actif. */
+  function sendGoalTurn(): void {
+    const due = goalDueRef.current;
+    const g = goalRef.current;
+    if (!due || !g || g.status !== "active" || pendingRef.current || busy() || promptQueueRef.current.length > 0) return;
+    goalDueRef.current = null;
+    const next = { ...g, autoTurns: g.autoTurns + 1 };
+    setGoal(next);
+    void runTurn(
+      due === "check"
+        ? { kind: "goalCheck", text: goalCheckPrompt(g.text), shown: t("(goal) is the goal reached? ({0}/{1})", next.autoTurns, GOAL_MAX_AUTO_TURNS) }
+        : { kind: "goalContinue", text: goalContinuePrompt(g.text), shown: t("(goal) continue toward the goal ({0}/{1})", next.autoTurns, GOAL_MAX_AUTO_TURNS) },
+    );
+  }
+
+  /** Fin d'un de nos tours : décision de `/goal` (le tour automatique part ensuite par `drain`). */
+  function afterTurn(item: QueuedPrompt, reply: string, failed: boolean, cancelled: boolean): void {
+    const g = goalRef.current;
+    if (!g || g.status !== "active") return;
+    const outcome = { kind: item.kind, reply, failed, cancelled, cardPending: pendingRef.current !== null };
+    const apply = (step: ReturnType<typeof nextGoalStep>): void => {
+      if (goalRef.current !== g) return; // objectif changé ou effacé pendant la relecture
+      if (step.goal !== g) setGoal(step.goal);
+      if (step.message) pushSystem(step.message);
+      goalDueRef.current = step.send;
+      // Arrêt décidé côté CLI (plafond, annulation, carte, erreur) : l'objectif s'arrête aussi chez le noyau (409 ignoré).
+      if (g.kernel && step.goal.status === "stopped") stopKernelGoal();
+    };
+    const session = sessionRef.current;
+    const client = clientRef.current;
+    if (g.kernel && item.kind === "goalCheck" && !failed && !cancelled && session && client) {
+      // Objectif noyau : la réponse du tour n'est pas lue ; l'état relu chez le noyau décide, puis la file repart.
+      goalDueRef.current = null;
+      void client
+        .getThreadGoal(session.threadId)
+        .catch(() => null)
+        .then((k) => {
+          apply(nextGoalStep(g, outcome, k));
+          drain();
+        });
+      return;
+    }
+    apply(nextGoalStep(g, outcome));
+  }
+
   async function cancelCurrent(quiet = false): Promise<void> {
     const session = sessionRef.current;
     if (!session) return;
+    stopRequestedRef.current = true;
     try {
       const done = await session.cancel();
       if (done || !quiet) pushSystem(done ? t("⏹ cancellation requested…") : t("No turn in progress."));
@@ -242,6 +441,9 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         },
         onReconnected: () => {
           eventsDownRef.current = false;
+          // Un `turn.done` a pu se perdre pendant la coupure : la file ne doit pas rester bloquée.
+          remoteTurnRef.current = false;
+          drain();
           pushSystem(t("(events) reconnected — run /approvals or /bubbles again if the state moved."));
         },
       });
@@ -253,6 +455,8 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         if (opened.messages.length) setFeed(feedFromMessages(opened.messages));
         pushSystem(opened.resumed ? t("Code session on {0} (resumed). /help for the commands.", cwd) : t("Code session on {0} (new). /help for the commands.", cwd));
         skillsRef.current = opened.skills;
+        void refreshMode(session);
+        void adoptPendingCard(session);
         if (typeof opened.skills === "object" && opened.skills.project === "untrusted") askTrust(opened.skills);
         else if (typeof opened.skills === "object" && opened.skills.project === "invalid" && opened.skills.notice) pushSystem(opened.skills.notice);
       } catch (err) {
@@ -319,6 +523,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
           pendingRef.current = null;
           pendingLocalRef.current = false;
           setPendingApproval(null);
+          setTimeout(drain, 0);
         }
         if (!summarizedRef.current.has(event.approval_id)) {
           pushSystem(t("Approval {0}: {1} by {2} ({3}).", event.approval_id, event.decision, event.by, event.via));
@@ -364,6 +569,14 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         if (event.thread_id !== session.threadId) return;
         pushSystem(t("Noted in the project memory: {0} [{1}] — /memory to review or forget it.", event.title, event.kind));
         return;
+      case "lsp.diagnostics": {
+        // Fil de la session ou un de ses sous-agents (`<fil>/sa-…`) : une ligne discrète sous l'appel d'outil.
+        if (event.thread_id !== session.threadId && !event.thread_id.startsWith(`${session.threadId}/sa-`)) return;
+        const r = applyDiagnostics(diagRef.current, event);
+        diagRef.current = r.state;
+        if (r.line) pushSystem(r.line);
+        return;
+      }
       case "memory.forgotten":
         if (event.thread_id !== session.threadId) return;
         pushSystem(t("Forgotten from the project memory: {0}.", event.name));
@@ -372,7 +585,8 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         // Le texte de NOTRE propre fil arrive déjà via le flux direct de /v1/chat/completions —
         // on ignore ici pour ne pas le doubler ; un autre fil/canal reste visible (multi-canal).
         // turn.delta est UNIQUE par tour côté noyau (réponse complète) : on l'affiche d'un bloc.
-        if (event.thread_id !== session.threadId) pushSystem(t("[other thread {0}] {1}", event.thread_id, event.text));
+        // Le fil de /btw a son propre affichage (l'encadré) : pas de doublon.
+        if (event.thread_id !== session.threadId && event.thread_id !== session.btwThreadId) pushSystem(t("[other thread {0}] {1}", event.thread_id, event.text));
         return;
       case "turn.cost":
         // Publié juste avant `turn.done` (LOKKAL.md §7.6) : une ligne discrète sous le tour, au lieu du pied.
@@ -382,14 +596,24 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
           if (line) pushSystem(line);
         }
         return;
+      case "turn.started":
+        if (event.thread_id === session.threadId && !sendingRef.current) remoteTurnRef.current = true;
+        return;
+      case "session.mode":
+        // Changé ici ou par un autre client (VS Code, autre terminal) : la barre d'état suit.
+        if (event.thread_id === session.threadId) setPermMode((cur) => ({ modes: cur?.modes ?? [], mode: event.mode, effective: event.effective ?? event.mode }));
+        return;
       case "turn.done":
         if (event.thread_id === session.threadId) {
+          remoteTurnRef.current = false;
+          setTimeout(drain, 0); // fin d'un tour qui n'était pas le nôtre ; pour le nôtre, la fin de la requête draine
           applyToolFeed(event); // replie les blocs d'écriture encore ouverts de ce tour
           // Noyau sans `turn.cost` : le pied de tour reste le seul affichage des jetons.
           const hasCostLine = costTurnRef.current === event.turn_id;
           setLastUsage(hasCostLine ? null : event.usage);
           setLastCost(hasCostLine ? null : (event.cost_chf ?? null));
           if (event.cancelled) pushSystem(t("⏹ turn cancelled."));
+          else void adoptPendingCard(session);
         }
         return;
       case "thread.updated":
@@ -442,11 +666,25 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
     if (effect !== card.effect) card = { ...card, effect };
     pendingRef.current = card;
     pendingLocalRef.current = local;
+    stopGoal(t("an approval card is waiting"));
     setPendingLocal(local);
     setPendingApproval(card);
     setApprovalMessage(null);
     ringBell(sound);
     if (!local) pushSystem(t("Approval card received for thread {0} (level {1}).", card.thread_id, card.strength));
+  }
+
+  /** Reprend une carte locale déjà en attente sur ce fil (ou sur un de ses sous-agents `<fil>/sa-…`, §7.22.7) et que l'événement `approval.requested` n'a pas apportée (session
+   * reprise, flux d'événements branché après le dépôt de la carte) : sans cela le tour reste bloqué « en attente
+   * d'approbation » et aucune touche ne la décide. */
+  async function adoptPendingCard(session: CliSession): Promise<void> {
+    if (!session.cwd || pendingRef.current) return;
+    try {
+      const hit = (await session.listLocalApprovals()).find((a) => a.status === "pending" && (a.thread_id === session.threadId || a.thread_id.startsWith(`${session.threadId}/sa-`)));
+      if (hit && !pendingRef.current) await onApprovalRequested(hit, session);
+    } catch {
+      // noyau sans routes locales : rien à reprendre
+    }
   }
 
   async function resolveThreadId(token: string): Promise<{ id: string; title: string } | null> {
@@ -505,26 +743,52 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
       await runCommand(text);
       return;
     }
-    await sendTurn(text);
+    // Références `@chemin` : développées avant l'envoi, l'écran garde la ligne tapée (pas les fichiers inlinés).
+    let expanded: Awaited<ReturnType<typeof expandAtRefs>> | null = null;
+    try {
+      expanded = await expandAtRefs(text, sessionRef.current?.cwd ?? null);
+    } catch (err) {
+      cliLog("warn", `@ references: ${String(err)}`);
+    }
+    if (expanded) {
+      for (const w of expanded.warnings) pushSystem(w);
+      if (expanded.added.length) pushSystem(t("@ references added: {0}", expanded.added.join(", ")));
+    }
+    await sendTurn(expanded?.text ?? text, text, expanded?.attachments);
   }
 
-  async function sendTurn(text: string): Promise<void> {
-    const session = sessionRef.current;
-    if (!session) {
+  /** Un tour : envoyé tout de suite si le fil est libre, sinon mis en file (jamais deux requêtes en même temps). */
+  async function sendTurn(text: string, shown?: string, attachments?: ChatAttachment[], kind: TurnKind = "user"): Promise<void> {
+    if (!sessionRef.current) {
       pushSystem(t("Not connected yet."));
       return;
     }
-    if (sending) {
-      pushSystem(t("A turn is already in progress — Esc (or /cancel) to cancel it."));
+    const item: QueuedPrompt = { text, shown: shown ?? text, kind, ...(attachments?.length ? { attachments } : {}) };
+    if (busy() || promptQueueRef.current.length > 0) {
+      enqueue(item);
+      drain();
       return;
     }
-    setFeed((f) => [...f, { kind: "user", id: nextId(), text }]);
+    await runTurn(item);
+  }
+
+  async function runTurn(item: QueuedPrompt): Promise<void> {
+    const session = sessionRef.current;
+    if (!session) return;
+    const { text, attachments } = item;
+    sendingRef.current = true;
+    stopRequestedRef.current = false;
+    setFeed((f) => [...f, { kind: "user", id: nextId(), text: item.shown }]);
     setSending(true);
-    await Promise.race([connectedPromise.current, new Promise((r) => setTimeout(r, 3000))]);
+    let reply = "";
+    let failed = false;
+    await Promise.race([connectedPromise.current!, new Promise((r) => setTimeout(r, 3000))]);
     const assistantId = nextId();
     let created = false;
     try {
-      await session.sendMessage(text, (_chunk, full) => {
+      reply = await session.sendMessage(
+        text,
+        (_chunk, full) => {
         // L'élément « réponse » naît au premier texte : les appels d'outils s'affichent AVANT la réponse.
         if (!created) {
           if (!full) return;
@@ -532,13 +796,27 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
           setFeed((f) => [...f, { kind: "assistant", id: assistantId, text: full }]);
           return;
         }
+        // `reset` sans texte (appel fini en outils, tour annulé : le noyau vide le texte partiel avant la réponse finale) :
+        // l'élément disparaît, plutôt que de laisser une réponse vide ou un reste du texte partiel.
+        if (!full) {
+          created = false;
+          setFeed((f) => f.filter((it) => it.id !== assistantId));
+          return;
+        }
         setFeed((f) => f.map((it) => (it.id === assistantId && it.kind === "assistant" ? { ...it, text: full } : it)));
-      });
+        },
+        { attachments, control: CONTROL_OF[item.kind] },
+      );
     } catch (err) {
+      failed = true;
       pushSystem(t("Send error: {0}", String(err)));
     } finally {
+      sendingRef.current = false;
+      remoteTurnRef.current = false; // notre requête est close : le tour est fini, même si son `turn.done` s'est perdu
       setSending(false);
     }
+    afterTurn(item, reply, failed, stopRequestedRef.current);
+    drain();
   }
 
   async function runCommand(cmdLine: string): Promise<void> {
@@ -567,7 +845,9 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
           const thread = await session.createNamedThread(title);
           setFeed([]);
           setBubbles([]);
+          diagRef.current = new Map();
           setFolder(null);
+          setPermMode(null);
           setThreadLabel(thread.title);
           setLastUsage(null);
           pushSystem(t("New thread “{0}” ({1}).", thread.title, thread.id));
@@ -598,7 +878,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
       case "checkpoints": {
         if (!session || !localOnly(session)) return;
         const list = await listCheckpoints(session);
-        if (list) pushSystem(formatCheckpoints(list));
+        if (list) pushSystem(formatCheckpoints(list, cpCodesRef.current));
         return;
       }
 
@@ -611,7 +891,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
           pushSystem(list.length ? t("Checkpoint not found: {0} (/checkpoints)", cmd.target ?? "") : t("No checkpoints."));
           return;
         }
-        const label = `${cp.short_hash} (${cp.reason})`;
+        const label = `${cp.short_hash} (${checkpointReason(reasonCodeOf(cpCodesRef.current, cp), cp.reason)})`;
         try {
           const r = await session.callTool("checkpoint_restore", { hash: cp.hash, safe: true });
           if ("approval_id" in r) {
@@ -680,9 +960,66 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         return;
       }
 
-      case "cancel":
-        await cancelCurrent();
+      case "mode": {
+        if (!session || !localOnly(session)) return;
+        try {
+          if (!cmd.name) {
+            const m = await session.getMode();
+            setPermMode(m);
+            pushSystem(m ? formatMode(m) : t("/mode: not available on this core (session modes need a newer core)."));
+            return;
+          }
+          const m = await session.setMode(cmd.name);
+          setPermMode(m);
+          pushSystem(m.effective !== m.mode ? t("Mode of this session: {0} (in effect: {1}).", m.mode, m.effective) : t("Mode of this session: {0}.", m.mode));
+        } catch (err) {
+          pushSystem(modeError(err, cmd.name ?? "", permMode?.modes ?? []));
+        }
         return;
+      }
+
+      case "diagnostics": {
+        if (!session || !localOnly(session)) return;
+        if (!cmd.path) {
+          pushSystem(formatDiagnosticsState(diagRef.current));
+          return;
+        }
+        await runDiagnostics(session, cmd.path);
+        return;
+      }
+
+      case "cancel":
+        await stopAll();
+        return;
+
+      case "queue": {
+        if (cmd.clear) {
+          const n = clearQueue();
+          pushSystem(n ? t("Queue cleared: {0} message(s) not sent.", n) : t("The queue is empty."));
+        } else pushSystem(formatQueue(promptQueueRef.current));
+        return;
+      }
+
+      case "export": {
+        const client = clientRef.current;
+        if (!session || !client) {
+          pushSystem(t("Not connected yet."));
+          return;
+        }
+        try {
+          const r = await exportThread(client, session.threadId, { format: cmd.format, file: cmd.file, base: session.cwd ?? process.cwd(), cwd: session.cwd });
+          pushSystem(t("Exported {0} turn(s) to {1}", r.turns, r.path));
+        } catch (err) {
+          pushSystem(toolCallError("/export", err));
+        }
+        return;
+      }
+
+      case "init": {
+        if (!session || !localOnly(session)) return;
+        await sendTurn(initPromptFor(session.cwd!), "/init");
+        return;
+      }
 
       case "out": {
         if (lastToolRef.current) toggleExpanded(lastToolRef.current);
@@ -730,6 +1067,56 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         } catch (err) {
           pushSystem(t("Error {0}: {1}", "/sessions", String(err)));
         }
+        return;
+      }
+
+      case "loop": {
+        if (!session) return;
+        if (cmd.action === "list") pushSystem(formatLoops(loopsRef.current, Date.now()));
+        else if (cmd.action === "stop") stopLoops(cmd.id);
+        else startLoop(cmd.interval, cmd.prompt);
+        return;
+      }
+
+      case "goal": {
+        if (cmd.action === "show") {
+          pushSystem(formatGoal(goalRef.current));
+          return;
+        }
+        if (cmd.action === "clear") {
+          goalDueRef.current = null;
+          if (goalRef.current?.kernel && goalRef.current.status === "active") stopKernelGoal();
+          if (goalRef.current) pushSystem(t("Goal cleared."));
+          else pushSystem(t("No goal set."));
+          setGoal(null);
+          return;
+        }
+        goalDueRef.current = null;
+        const client = clientRef.current;
+        if (!session || !client) return;
+        // Noyau à objectifs (GET …/goal répond) : l'objectif est posé et noté chez lui ; 404 : ancien contrat.
+        const kernel = await client.getThreadGoal(session.threadId).then(
+          () => true,
+          (err: unknown) => (err instanceof NokkerApiError && (err.status === 404 || err.status === 405) ? false : err),
+        );
+        if (kernel !== true && kernel !== false) {
+          pushSystem(t("/goal: could not set the goal on the core: {0}", apiErrorText(kernel)));
+          return;
+        }
+        if (kernel) {
+          const { text, criteria } = splitGoalText(cmd.text);
+          try {
+            await client.setThreadGoal(session.threadId, { text, driver: "client", ...(criteria.length ? { criteria } : {}) });
+          } catch (err) {
+            pushSystem(err instanceof NokkerApiError && err.status === 400 ? t("/goal: the core refused the goal: {0}", apiErrorText(err)) : t("/goal: could not set the goal on the core: {0}", apiErrorText(err)));
+            return;
+          }
+          setGoal(newGoal(text, true));
+          pushSystem(t("Goal set on the core: {0} — graded by the core after each turn ({1} automatic turns at most).", text, GOAL_MAX_AUTO_TURNS));
+          return;
+        }
+        setGoal(newGoal(cmd.text));
+        pushSystem(t("Goal set: {0} — checked at the end of each turn ({1} automatic turns at most).", cmd.text, GOAL_MAX_AUTO_TURNS));
         return;
       }
 
@@ -813,6 +1200,16 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
         return;
       }
 
+      case "btw": {
+        if (!session) return;
+        if (!cmd.question) {
+          pushSystem(t("Usage: {0}", "/btw <question>"));
+          return;
+        }
+        await askBtw(session, cmd.question);
+        return;
+      }
+
       case "approvals": {
         if (!session) return;
         const list = await session.listApprovals();
@@ -872,6 +1269,27 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
     }
   }
 
+  /** Lit le mode de la session locale (barre d'état) ; silencieux si le noyau ne le donne pas ou en cas d'erreur. */
+  async function refreshMode(session: CliSession): Promise<void> {
+    const m = await session.getMode().catch(() => null);
+    if (sessionRef.current === session) setPermMode(m);
+  }
+
+  function modeError(err: unknown, name: string, modes: readonly string[]): string {
+    if (err instanceof NokkerApiError && err.status === 400 && err.code === "bad_mode") {
+      return modes.length ? t("Unknown mode: {0} (modes: {1}).", name, modes.join(", ")) : t("Unknown mode: {0} (/mode lists the modes).", name);
+    }
+    if (err instanceof NokkerApiError && err.status === 400 && err.code === "mode_above_project") {
+      return t("Mode {0} refused: the repository or a team imposes a stricter mode on this session.", name);
+    }
+    if (err instanceof NokkerApiError && (err.status === 404 || err.status === 405)) return t("/mode: not available on this core (session modes need a newer core).");
+    return toolCallError("/mode", err);
+  }
+
+  function apiErrorText(err: unknown): string {
+    return err instanceof NokkerApiError ? err.serverMessage : err instanceof Error ? err.message : String(err);
+  }
+
   function toolCallError(label: string, err: unknown): string {
     if (err instanceof NokkerApiError && err.status === 409) return t("a turn is in progress, try again afterwards");
     return t("Error {0}: {1}", label, err instanceof NokkerApiError ? err.serverMessage : String(err));
@@ -879,6 +1297,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
 
   async function listCheckpoints(session: CliSession): Promise<CheckpointInfo[] | null> {
     const r = await callTool(session, "checkpoint_list");
+    cpCodesRef.current = r?.reason_codes;
     const list = r ? parseCheckpointList(r.content) : undefined;
     if (r && !list) pushSystem(t("Unreadable checkpoint_list answer."));
     return list ?? null;
@@ -1000,6 +1419,112 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
       return;
     }
     pushSystem(formatSubagents(subagentsRef.current, Date.now(), note));
+  }
+
+  // -- /loop : relance périodique ----------------------------------------------------------------------------
+
+  function setLoops(list: LoopEntry[]): void {
+    loopsRef.current = list;
+    setLoopsView(list);
+  }
+
+  function startLoop(interval: string, prompt: string): void {
+    const asked = parseInterval(interval);
+    if (asked === null || !prompt) {
+      pushSystem(t("Usage: {0}", "/loop <interval: 30s, 5m, 1m30s> <prompt>"));
+      return;
+    }
+    const { ms, raised } = clampInterval(asked);
+    const id = ++loopSeqRef.current;
+    const every = formatInterval(ms);
+    const delay = Math.max(10, Math.round(ms * loopTimeScale));
+    setLoops([...loopsRef.current, { id, everyMs: ms, every, prompt, runs: 0, nextAt: Date.now() + delay }]);
+    if (raised) pushSystem(t("Interval raised to the 30s floor."));
+    pushSystem(t("Loop #{0}: every {1}, {2} runs at most, never during a turn. /loop stop {0} stops it.", id, every, LOOP_MAX_RUNS));
+    loopTimersRef.current.set(id, setInterval(() => loopTick(id), delay));
+    loopTick(id); // première relance tout de suite
+  }
+
+  /** Une relance : jamais pendant un tour (la file la garde) ; pas de doublon si la précédente attend encore. */
+  function loopTick(id: number): void {
+    const l = loopsRef.current.find((x) => x.id === id);
+    if (!l) return;
+    const delay = Math.max(10, Math.round(l.everyMs * loopTimeScale));
+    const d = loopTickDecision(l, promptQueueRef.current.some((q) => q.loopId === id));
+    if (d.skip) {
+      setLoops(loopsRef.current.map((x) => (x.id === id ? { ...x, nextAt: Date.now() + delay } : x)));
+      return;
+    }
+    const { run, last } = d;
+    setLoops(last ? loopsRef.current.filter((x) => x.id !== id) : loopsRef.current.map((x) => (x.id === id ? { ...x, runs: run, nextAt: Date.now() + delay } : x)));
+    if (last) {
+      clearInterval(loopTimersRef.current.get(id));
+      loopTimersRef.current.delete(id);
+    }
+    const item: QueuedPrompt = { kind: "loop", loopId: id, text: loopPrompt(l.prompt, run, LOOP_MAX_RUNS, l.everyMs), shown: t("(loop #{0}, {1}/{2}) {3}", id, run, LOOP_MAX_RUNS, l.prompt) };
+    if (busy() || pendingRef.current || promptQueueRef.current.length > 0) enqueue(item);
+    else void runTurn(item);
+    if (last) pushSystem(t("Loop #{0} finished: {1} runs.", id, LOOP_MAX_RUNS));
+  }
+
+  function stopLoops(id: number | null): void {
+    const stopped = loopsRef.current.filter((l) => id === null || l.id === id);
+    if (stopped.length === 0) {
+      pushSystem(id === null ? t("No loop running.") : t("No loop #{0}.", id));
+      return;
+    }
+    for (const l of stopped) {
+      clearInterval(loopTimersRef.current.get(l.id));
+      loopTimersRef.current.delete(l.id);
+    }
+    setLoops(loopsRef.current.filter((l) => !stopped.includes(l)));
+    // Une relance déjà en file pour ces boucles ne part plus (sinon elle s'envoie après le « Stopped »).
+    const ids = new Set(stopped.map((l) => l.id));
+    const kept = promptQueueRef.current.filter((q) => !(q.kind === "loop" && q.loopId !== undefined && ids.has(q.loopId)));
+    if (kept.length !== promptQueueRef.current.length) {
+      promptQueueRef.current = kept;
+      setQueueView(kept);
+    }
+    pushSystem(t("Stopped: {0}.", stopped.map((l) => `#${l.id}`).join(", ")));
+  }
+
+  // -- /btw : question latérale, fil séparé ------------------------------------------------------------------
+
+  /** Passe même pendant un tour (autre fil, autre requête). Rien n'est écrit dans le fil courant côté noyau. */
+  async function askBtw(session: CliSession, question: string): Promise<void> {
+    const id = nextId();
+    const title = threadLabelRef.current && threadLabelRef.current !== session.threadId ? threadLabelRef.current : null;
+    setFeed((f) => [...f, { kind: "btw", id, question, text: "", state: "pending" }]);
+    const update = (patch: Partial<Extract<FeedItem, { kind: "btw" }>>): void =>
+      setFeed((f) => f.map((it) => (it.id === id && it.kind === "btw" ? { ...it, ...patch } : it)));
+    try {
+      const full = await session.sendAside(btwPrompt({ cwd: session.cwd, threadTitle: title }, question), BTW_THREAD_TITLE, (text) => update({ text }));
+      update({ text: full, state: "done" });
+    } catch (err) {
+      update({ text: t("Error {0}: {1}", "/btw", err instanceof NokkerApiError ? err.serverMessage : String(err)), state: "error" });
+    }
+  }
+
+  // -- Diagnostics de langage (/diagnostics <chemin>, lot 13, LOKKAL-LSP.md) ----------------------------------
+
+  async function runDiagnostics(session: CliSession, path: string): Promise<void> {
+    try {
+      const r = await session.callTool("lsp_diagnostics", { paths: [path] });
+      if ("approval_id" in r) {
+        pushSystem(t("{0}: waiting for approval ({1}).", "lsp_diagnostics", r.approval_id));
+        return;
+      }
+      const out = r.is_error ? null : parseToolJson<LspDiagnosticsResult>(r.content);
+      if (!out || !Array.isArray(out.files)) {
+        pushSystem(r.is_error ? `✗ lsp_diagnostics: ${r.content}` : t("Unreadable lsp_diagnostics answer."));
+        return;
+      }
+      diagRef.current = stateFromResult(diagRef.current, out);
+      pushSystem(formatDiagnosticsResult(out));
+    } catch (err) {
+      if (err instanceof NokkerApiError && err.status === 403) pushSystem(t("Language diagnostics are not available on this core (local.lsp.enabled is off, or the core predates them)."));
+      else pushSystem(toolCallError("/diagnostics", err));
+    }
   }
 
   // -- Mémoire de projet (/memory, LOKKAL.md §7.11.7) ------------------------------------------------------
@@ -1128,11 +1653,14 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
     }
     try {
       const view = await session.switchThread(target.id);
+      diagRef.current = new Map();
       setFeed(feedFromMessages(view.messages));
       setBubbles(view.bubbles.filter((b) => b.closed_at === null));
       const ls = (await session.listLocalSessions().catch(() => [] as LocalSessionSummary[])).find((l) => l.thread_id === view.thread.id);
       session.cwd = ls?.cwd ?? null;
       setFolder(ls ? basename(ls.cwd) : null);
+      setPermMode(null);
+      if (ls) void refreshMode(session);
       setThreadLabel(view.thread.title || view.thread.id);
       setLastUsage(null);
       setLastCost(null);
@@ -1148,7 +1676,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
 
   return (
     <Box flexDirection="column">
-      <Header threadLabel={threadLabel} folder={folder} status={status} />
+      <Header threadLabel={threadLabel} folder={folder} status={status} goal={goalView ? goalStatusLine(goalView) : null} loops={loopsStatusLine(loopsView)} permMode={modeStatus(permMode)} />
 
       {mode === "threads" ? (
         <Box flexDirection="column" borderStyle="single" paddingX={1}>
@@ -1221,6 +1749,16 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
               );
             if (item.kind === "tool") return <ToolCallView key={item.id} call={item.call} expanded={toolsExpanded || expanded.has(item.id)} />;
             if (item.kind === "sub") return <Text key={item.id} dimColor>{"      "}{item.text}</Text>;
+            if (item.kind === "btw")
+              return (
+                <Box key={item.id} flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={1}>
+                  <Text color="magenta" bold>
+                    {t("by the way")}
+                  </Text>
+                  <Text dimColor>› {item.question}</Text>
+                  {item.state === "pending" && !item.text ? <Text dimColor>{t("… thinking")}</Text> : item.state === "error" ? <Text color="red">{item.text}</Text> : <Markdown text={item.text} />}
+                </Box>
+              );
             return (
               <Box key={item.id} flexDirection="column">
                 <Markdown text={item.text} />
@@ -1257,11 +1795,14 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
 
       {sending && !pendingApproval ? <Text dimColor>{t("… turn in progress (Esc to cancel)")}</Text> : null}
 
+      {queueView.length > 0 ? <Text color="yellow">{queueLine(queueView)}</Text> : null}
+
       {mode === "chat" ? <Footer usage={lastUsage} costChf={lastCost} /> : null}
 
       <Box>
         <Text color="green">{"> "}</Text>
         <TextInput
+          key={inputEpoch}
           value={input}
           focus={!localCardOpen}
           onChange={(v) => {
@@ -1299,6 +1840,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
       pendingRef.current = null;
       pendingLocalRef.current = false;
       setPendingApproval(null);
+      setTimeout(drain, 0);
     } catch (err) {
       summarizedRef.current.delete(a.id);
       setApprovalMessage(t("Failed: {0}", err instanceof NokkerApiError ? err.serverMessage : String(err)));
@@ -1317,6 +1859,7 @@ export function App({ baseUrl, sound = false, cwd }: { baseUrl: string; sound?: 
     pendingRef.current = null;
     pendingLocalRef.current = false;
     setPendingApproval(null);
+    setTimeout(drain, 0);
     try {
       await session.decideLocal(a.id, "reject", "once");
     } catch {

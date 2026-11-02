@@ -163,6 +163,14 @@ describe("se déconnecter", () => {
     expect(s.calls).toEqual(["forget"]);
   });
   it("textes FR/EN présents", () => {
-    for (const l of ["fr", "en"] as const) for (const k of ["accSignOut", "accSignOutBody", "accSignOutBtn"] as const) expect(t(l, k)).not.toBe(k);
+    for (const l of ["fr", "en"] as const) for (const k of ["accSignOut", "accSignOutBody", "accSignOutBtn", "accSignOutGlasses"] as const) expect(t(l, k)).not.toBe(k);
+  });
+});
+
+describe("premiers pas (fil vide)", () => {
+  it("trois idées et le raccourci, en FR et en EN", () => {
+    for (const l of ["fr", "en"] as const)
+      for (const k of ["firstTitle", "firstIdeaDraft", "firstIdeaSearch", "firstIdeaWhat", "firstConnect", "firstConnectBody", "startNow", "startNowNote"] as const)
+        expect(t(l, k)).not.toBe(k);
   });
 });

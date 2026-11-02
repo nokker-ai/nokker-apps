@@ -173,11 +173,18 @@ export interface Approval {
    * terminal → [`terminal(<cmd>)`, `terminal(<2 premiers mots>*)`] ; fichier → [`<outil>(<chemin>)`, `<outil>(<dossier>/**)`] ;
    * carte forte → []. Absent/vide = pas d'« always ». */
   suggested_rules?: string[];
+  /** Ce que couvre chaque règle de `suggested_rules`, même ordre (noyau du 01.11, `GET /v1/local/approvals`) : pour un
+   * libellé juste (« this file », « this folder »…). Absent d'un noyau plus ancien. */
+  suggested_rule_kinds?: SuggestedRuleKind[];
   /** Présent dans `GET /v1/local/approvals` (noyau du 25.10, LOKKAL.md §7.3) : carte forte déposée chez nokker.ai, le
    * lien de décision est parti au téléphone. Faux ou absent : machine non liée, ou dépôt pas encore fait (il sera
    * annoncé par `approval.forwarded`) — elle se décide au terminal. */
   forwarded?: boolean;
 }
+
+/** `tool` (tout appel de l'outil), `file` (ce fichier), `dir` (ce dossier), `prefix` (commandes qui commencent ainsi),
+ * `exact` (cette commande, cet hôte:chemin) — `nokker/local/approvals.py::rule_kind`. */
+export type SuggestedRuleKind = "tool" | "file" | "dir" | "prefix" | "exact";
 
 export type ApprovalDecisionKind = "approve" | "reject";
 
@@ -303,6 +310,8 @@ export interface ToolResultEvent {
   content?: string;
   /** Caviardé, tronqué à 1200 caractères par le noyau ; la CLI n'en montre que 3 lignes. */
   preview?: string;
+  /** Refused outright (`is_error: true`): `plan_mode`, `deny_rule`, `hardline`, `no_code_session` (see session-mode.ts). */
+  reason?: string;
 }
 
 /** Écriture en direct (lot X22, BUBBLES.md §6) : pendant que le modèle écrit les arguments de `write_file`, `patch` ou
@@ -426,8 +435,22 @@ export interface TurnDoneEvent {
   usage: TurnUsage;
   tier?: string;
   cost_chf?: number;
-  /** `true` quand le tour a été arrêté par `POST /v1/threads/{id}/cancel`. */
+  /** `true` quand le tour a été arrêté par `POST /v1/threads/{id}/cancel` (absent sinon). */
   cancelled?: boolean;
+  /** Le tour a échoué (noyau du 01.11, CLIENT-API.md §Fin de tour) : code stable + message caviardé (≤ 500 car.).
+   * Absent pour un tour réussi, annulé, refusé par un plafond ou escaladé ; absent aussi d'un noyau plus ancien. */
+  error?: TurnDoneError;
+  /** `true` : au moins un effet a été refusé d'office pendant le tour (règle `deny`, mode plan, « hardline »,
+   * invariant) ou une carte du tour était déjà rejetée à sa fin. Absent sinon. */
+  refused?: boolean;
+}
+
+/** Codes d'échec d'un tour (`turn.done.error.code`). Un code inconnu d'un noyau plus récent reste une chaîne. */
+export type TurnErrorCode = "tier_unavailable" | "provider_error" | "max_calls" | "stopped" | "internal_error";
+
+export interface TurnDoneError {
+  code: TurnErrorCode | (string & {});
+  message: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -501,7 +524,12 @@ export function parseTurnId(turnId: string): { thread_id: string; index: number 
 }
 
 import type { HookRanEvent, HookUntrustedEvent, MemoryForgottenEvent, MemoryNotedEvent, SkillUntrustedEvent } from "./local-machine.js";
+import type { LspDiagnosticsEvent } from "./lsp.js";
 import type { IncidentUpdatedEvent, PlanCardDeletedEvent, PlanCardUpdatedEvent, PlanProposalUpdatedEvent } from "./ops.js";
+import type { SessionModeEvent, TodoUpdatedEvent } from "./session-mode.js";
+import type { HouseAgentEvent, HouseMessageEvent } from "./house.js";
+import type { PaymentEvent } from "./payments.js";
+import type { PresenceChangedEvent } from "./presence.js";
 
 export type NokkerEvent =
   | IncidentUpdatedEvent
@@ -513,6 +541,7 @@ export type NokkerEvent =
   | SkillUntrustedEvent
   | MemoryNotedEvent
   | MemoryForgottenEvent
+  | LspDiagnosticsEvent
   | AttachmentSkippedEvent
   | TurnStartedEvent
   | TurnDeltaEvent
@@ -528,6 +557,12 @@ export type NokkerEvent =
   | ApprovalDecidedEvent
   | TurnCostEvent
   | TurnDoneEvent
+  | SessionModeEvent
+  | TodoUpdatedEvent
+  | HouseMessageEvent
+  | PaymentEvent
+  | HouseAgentEvent
+  | PresenceChangedEvent
   | BubbleEvent;
 
 export const NOKKER_EVENT_TYPES = [
@@ -536,6 +571,7 @@ export const NOKKER_EVENT_TYPES = [
   "skill.untrusted",
   "memory.noted",
   "memory.forgotten",
+  "lsp.diagnostics",
   "attachment.skipped",
   "turn.started",
   "turn.delta",
@@ -566,6 +602,16 @@ export const NOKKER_EVENT_TYPES = [
   "plan.card.updated",
   "plan.card.deleted",
   "plan.proposal.updated",
+  "session.mode",
+  "todo.updated",
+  "house.message",
+  "house.agent",
+  "presence.changed",
+  "payment.to_pay",
+  "payment.mandate_signed",
+  "payment.rejected",
+  "payment.refused",
+  "payment.budget_changed",
 ] as const satisfies readonly NokkerEvent["type"][];
 
 // ---------------------------------------------------------------------------
@@ -697,9 +743,12 @@ export interface LocalSessionSummary {
 /** Réponse (202) de `POST /v1/threads/{id}/cancel` : cartes en attente du fil et de ses `/sa-` retirées ; sous-agents
  * (fond et premier plan) arrêtés (`subagents_cancelled`, §7.22.4). */
 export interface CancelResult {
-  /** Le noyau rend l'id du fil annulé ; les anciens mocks, un booléen. */
+  /** Accusé de réception : le noyau rend TOUJOURS l'id du fil (même sans tour en cours) ; les anciens mocks, un booléen. */
   cancelled: boolean | string;
   approvals_cancelled: number;
+  /** Noyau du 01.11 (LOKKAL.md §7.4.4) : un tour TOURNAIT sur le fil au moment de la demande (un tour en file ne compte
+   * pas) ; il finira par `turn.done {cancelled: true}`. Absent d'un noyau plus ancien. */
+  running?: boolean;
   subagents_cancelled?: number;
 }
 
@@ -730,8 +779,10 @@ export type LocalToolName =
   | "memory"
   /** Sous-agents en arrière-plan (§7.22.3) : sans `wait_s` hors tour (400 sinon). */
   | "delegate_status"
-  /** §7.22.4 — PAS dans la liste blanche du noyau aujourd'hui (403) : `cancelSubagents` replie sur l'annulation du fil. */
-  | "delegate_cancel";
+  /** §7.22.4 — dans la liste blanche du noyau depuis 03c3164 ; un noyau plus ancien répond 403 (l'appelant replie sur l'annulation du fil). */
+  | "delegate_cancel"
+  /** Diagnostics de langage (lot 13, LOKKAL-LSP.md) : `{paths?, severity?}`, lecture ; drapeau `local.lsp.enabled`, sinon 403. */
+  | "lsp_diagnostics";
 
 export interface LocalToolCallRequest {
   thread_id: string;
@@ -744,6 +795,11 @@ export interface LocalToolCallRequest {
 export interface LocalToolResult {
   content: string;
   is_error: boolean;
+  /** Refus d'office (noyau du 01.11, LOKKAL.md §7.4.2) : `plan_mode`, `deny_rule`, `hardline`, `no_code_session`. */
+  reason?: string;
+  /** Outil de points de retour (noyau du 01.11, §7.4.7) : `{hash: reason_code}` de chaque point nommé dans `content`
+   * (hash complet d'une liste, `restored_to` et `snapshot` d'une restauration). Absent d'un noyau plus ancien. */
+  reason_codes?: Record<string, CheckpointReasonCode>;
 }
 
 /** 202 : l'effet exige une carte ; le résultat arrivera dans un événement `tool.result` (champ `approval_id`). */
@@ -769,6 +825,11 @@ export interface CheckpointInfo {
   tool?: string;
 }
 
+/** Code STABLE de la raison d'un point de retour (noyau du 01.11) : `before_<outil>` (`before_terminal`,
+ * `before_write_file`…), `before_rollback`, `manual`, `auto`, `session_start`, `other`. Le texte (`reason`) reste celui du
+ * noyau, en français : le client affiche la raison d'après le code. */
+export type CheckpointReasonCode = "before_rollback" | "manual" | "auto" | "session_start" | "other" | `before_${string}` | (string & {});
+
 /** Point de retour nouveau (§7.4.7) : avant un outil non READ, `checkpoint_create`, point « avant retour ». */
 export interface CheckpointCreatedEvent {
   type: "checkpoint.created";
@@ -776,6 +837,8 @@ export interface CheckpointCreatedEvent {
   turn_index: number;
   hash: string;
   tool: string;
+  /** Noyau du 01.11 ; absent d'un noyau plus ancien. */
+  reason_code?: CheckpointReasonCode;
 }
 
 /** `content` de `checkpoint_diff`. */
@@ -896,4 +959,41 @@ export interface DelegateStatusResult {
 export interface DelegateCancelResult {
   cancelled: string[];
   unknown?: string[];
+}
+
+// -- Objectif persistant du noyau (docs/OUTCOMES-GOAL.md du noyau, drapeau `goals_enabled`) --------------------------
+
+/** Statut d'un objectif tenu par le noyau. */
+export type KernelGoalStatus = "draft" | "active" | "done" | "budget" | "blocked" | "stopped";
+
+/** Note du correcteur (`Grade.to_json`). */
+export interface KernelGoalGrade {
+  total: number;
+  max: number;
+  need: number;
+  passed: boolean;
+  scores?: { id: string; score: number; justification?: string }[];
+}
+
+/** `GET|POST /v1/threads/{id}/goal` → `{goal}` (champs utiles au client ; le noyau en rend d'autres). */
+export interface KernelGoal {
+  id: string;
+  text: string;
+  status: KernelGoalStatus;
+  driver: "kernel" | "client";
+  mode?: "goal" | "task";
+  stop_reason?: string;
+  budget?: Record<string, unknown>;
+  spent?: { tokens?: number; turns?: number; auto_turns?: number; [k: string]: unknown };
+  gradings?: number;
+  last_grade?: KernelGoalGrade | null;
+  rubric?: { id: string; text: string }[] | null;
+}
+
+export interface SetKernelGoalRequest {
+  text: string;
+  criteria?: string[];
+  driver?: "kernel" | "client";
+  mode?: "goal" | "task";
+  budget?: Record<string, unknown>;
 }

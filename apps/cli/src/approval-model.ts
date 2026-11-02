@@ -1,7 +1,7 @@
 /**
  * Logique pure de la carte d'approbation locale (LOKKAL-CLI.md §2.2) — testée sans Ink.
  */
-import { STRONG_PHONE_TEXT, strongCardText, type Approval, type ApprovalScope, type LocalChoice } from "@nokker-apps/sdk";
+import { STRONG_PHONE_TEXT, rulePrefix, strongCardText, type Approval, type ApprovalScope, type LocalChoice } from "@nokker-apps/sdk";
 import { t } from "./i18n/index.js";
 import { effectName, toolTarget, type ToolLine } from "./toolview.js";
 
@@ -14,14 +14,39 @@ export function effectLabel(effect: string | null): string {
 }
 
 /** Libellé d'un choix de carte dans la langue de l'interface (mêmes choix et même ordre que `localChoices` du SDK). */
-export function choiceLabel(c: Pick<LocalChoice, "id" | "key">, toolName: string): string {
+export function choiceLabel(c: Pick<LocalChoice, "id" | "key"> & Partial<Pick<LocalChoice, "ruleKind" | "rule" | "scopeRule">>, toolName: string): string {
   const file = toolName !== "terminal";
   switch (c.id) {
     case "once":
       return t("Once");
     case "session":
+      // Noyau du 01.11 : ce que couvre la règle (`suggested_rule_kinds`) ; sinon le libellé d'avant.
+      switch (c.ruleKind) {
+        case "tool":
+          return t("This tool for this session");
+        case "file":
+          return t("This file for this session");
+        case "dir":
+          return t("This folder for this session");
+        case "prefix":
+          return t("Commands starting with “{0}” for this session", rulePrefix(c.scopeRule));
+        case "exact":
+          return t("This exact command for this session");
+      }
       return t("For this session");
     case "always":
+      switch (c.ruleKind) {
+        case "tool":
+          return t("Always this tool");
+        case "file":
+          return t("Always this file");
+        case "dir":
+          return t("Always this folder");
+        case "prefix":
+          return t("Always commands starting with “{0}”", rulePrefix(c.rule));
+        case "exact":
+          return t("Always this exact command");
+      }
       if (c.key === "3b") return file ? t("Always this folder (rule)") : t("Always commands starting with this prefix");
       return file ? t("Always this file (rule)") : t("Always this command");
     case "reject":

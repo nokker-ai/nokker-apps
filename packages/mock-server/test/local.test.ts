@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { NokkerClient, type Approval, type NokkerEvent } from "@nokker-apps/sdk";
+import { NokkerClient, applyChatChunk, type Approval, type ChatCompletionChunk, type NokkerEvent } from "@nokker-apps/sdk";
 import { startMockServer, type MockServerHandle } from "../src/index.js";
 
 let mock: MockServerHandle;
@@ -213,16 +213,76 @@ describe("hardline, annulation", () => {
     expect(r[0]).toMatchObject({ is_error: true, preview: "refusé : commande interdite (hardline)" });
   });
 
-  it("cancel pendant une carte : 202 {cancelled, approvals_cancelled}, turn.done {cancelled:true}", async () => {
+  it("cancel pendant une carte : 202 {cancelled: <fil>, approvals_cancelled, running}, turn.done {cancelled:true}", async () => {
     const th = await newSession();
     const t = startTurn(th, "corrige le test add");
     const card = await until(() => pendingCard(th));
-    expect(await client.cancelTurn(th)).toEqual({ cancelled: true, approvals_cancelled: 1, subagents_cancelled: 0 });
+    expect(await client.cancelTurn(th)).toEqual({ cancelled: th, approvals_cancelled: 1, running: true, subagents_cancelled: 0 });
     await t;
     const done = (await until(() => events.filter((e) => e.type === "turn.done" && e.thread_id === th).at(-1))) as { cancelled?: boolean };
     expect(done.cancelled).toBe(true);
     expect((await client.getApproval(card.id)).status).toBe("rejected");
-    expect(await client.cancelTurn(th)).toEqual({ cancelled: false, approvals_cancelled: 0, subagents_cancelled: 0 });
+    // Noyau du 01.11 : `cancelled` reste l'id du fil (accusé de réception), `running` dit qu'aucun tour ne tournait.
+    expect(await client.cancelTurn(th)).toEqual({ cancelled: th, approvals_cancelled: 0, running: false, subagents_cancelled: 0 });
+  });
+
+  it("cancel pendant une réponse en flux (D6) : texte partiel, puis reset, puis « Annulé à ta demande. » final", async () => {
+    const th = await newSession();
+    const speed = mock.state.speed;
+    mock.state.speed = 1;
+    try {
+      const chunks: ChatCompletionChunk[] = [];
+      let full = "";
+      const t = client.streamChatCompletion(th, [{ role: "user", content: "write a long answer" }], (c) => {
+        chunks.push(c);
+        full = applyChatChunk(full, c);
+      });
+      await until(() => full.includes("long answer"));
+      expect((await client.cancelTurn(th)).running).toBe(true);
+      await t;
+      const resets = chunks.filter((c) => c.nokker?.reset);
+      expect(resets).toHaveLength(2);
+      expect(resets[0]!.choices[0]!.delta.content ?? "").toBe("");
+      expect(resets[1]).toMatchObject({ nokker: { reset: true, final: true }, choices: [{ delta: { content: "Annulé à ta demande." } }] });
+      expect(full).toBe("Annulé à ta demande.");
+      const done = (await until(() => events.filter((e) => e.type === "turn.done" && e.thread_id === th).at(-1))) as { cancelled?: boolean };
+      expect(done.cancelled).toBe(true);
+    } finally {
+      mock.state.speed = speed;
+    }
+  });
+
+  it("turn.done : error sur un tour en échec, refused sur un refus d'office, rien sur un tour réussi (D7)", async () => {
+    const th = await newSession();
+    const doneOf = () => events.filter((e) => e.type === "turn.done" && e.thread_id === th).at(-1) as Record<string, unknown> | undefined;
+    await startTurn(th, "simulate a provider error");
+    expect(await until(doneOf)).toMatchObject({ error: { code: "provider_error", message: "upstream 502 (mock)" } });
+    const n = events.length;
+    await startTurn(th, "rm -rf / now");
+    const d2 = await until(() => events.slice(n).find((e) => e.type === "turn.done" && e.thread_id === th) as Record<string, unknown> | undefined);
+    expect(d2.refused).toBe(true);
+    expect(d2.error).toBeUndefined();
+    const m = events.length;
+    await startTurn(th, "hello");
+    const d3 = await until(() => events.slice(m).find((e) => e.type === "turn.done" && e.thread_id === th) as Record<string, unknown> | undefined);
+    expect([d3.error, d3.refused, d3.cancelled]).toEqual([undefined, undefined, undefined]);
+  });
+
+  it("mode d'une session (§7.4.10) : effet sur les permissions du fil et de ses sous-agents, effective restreint par le projet", async () => {
+    // GET/PUT, session.mode, bad_mode, mode_above_project, 404 : test/session-mode.test.ts.
+    const th = await newSession();
+    await client.setLocalSessionMode(th, "plan");
+    expect(mock.state.effectiveSettings(th).mode).toBe("plan");
+    expect(mock.state.effectiveSettings(`${th}/sa-x`).mode).toBe("plan");
+    expect(mock.state.effectiveSettings(await newSession("/work/other")).mode).toBe(mock.state.readSettings().mode);
+    // Choix d'avant plus large que le mode imposé ensuite : `mode` reste, `effective` = l'imposé.
+    await client.setLocalSessionMode(th, "accept_edits");
+    process.env.MOCK_PROJECT_MODE = "default";
+    try {
+      expect(await client.getLocalSessionMode(th)).toMatchObject({ mode: "accept_edits", effective: "default" });
+    } finally {
+      delete process.env.MOCK_PROJECT_MODE;
+    }
   });
 
   it("routes : /v1/approvals/{id}/decision refuse le jeton local ; /v1/local/approvals/{id}/decide : 400 strong≠once, 409 déjà décidée, 404 inconnue", async () => {
@@ -503,5 +563,18 @@ describe("décision locale : réponse tout de suite (LOKKAL.md §7.4.3, §7.4.9)
     } finally {
       mock.state.approvalStyle = "inline";
     }
+  });
+});
+
+describe("thread list and ownership", () => {
+  it("an account does not see a local session in its list (its GET would be 403); the local owner does", async () => {
+    const th = await newSession("/work/owned");
+    expect((await client.listThreads()).some((t) => t.id === th)).toBe(true);
+    const alice = new NokkerClient({ baseUrl: mock.url });
+    await alice.demoSessionMockExtension();
+    const list = await alice.listThreads();
+    expect(list.length).toBeGreaterThan(0);
+    expect(list.some((t) => t.id === th)).toBe(false);
+    await expect(alice.getThread(th)).rejects.toMatchObject({ status: 403 });
   });
 });

@@ -1,0 +1,76 @@
+# nokker-apps CI: typecheck + unit tests of every package, then two blocking end-to-end jobs in parallel: the web
+# journeys and the onboarding area's journeys.
+# Runner label `docker` = node 22 image with actions/checkout.
+name: ci
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v4
+      - name: pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.0 --activate
+          pnpm install --frozen-lockfile
+      - name: typecheck
+        run: pnpm typecheck
+      - name: unit tests
+        run: pnpm test
+
+  e2e:
+    needs: [test]
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v4
+      - name: pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.0 --activate
+          pnpm install --frozen-lockfile
+      - name: Chromium cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Chromium
+        working-directory: apps/web
+        run: npx playwright-core install --with-deps chromium
+      - name: e2e (desktop, phone 390 px, phone 320 px, phone in French)
+        run: E2E_PREVIEW=1 E2E_SHOTS="$PWD/e2e-shots" pnpm --filter @nokker-apps/web e2e
+      - name: Screenshots of a failed journey
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: e2e-shots
+          path: e2e-shots
+
+  e2e-onboarding:
+    needs: [test]
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v4
+      - name: pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.0 --activate
+          pnpm install --frozen-lockfile
+      - name: Chromium cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Chromium
+        working-directory: apps/web
+        run: npx playwright-core install --with-deps chromium
+      - name: e2e of the onboarding area (invitation, first launch, import, learning)
+        run: E2E_SHOTS="$PWD/e2e-onboarding-shots" pnpm --filter @nokker-apps/web e2e:onboarding
+      - name: Screenshots of a failed journey
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: e2e-onboarding-shots
+          path: e2e-onboarding-shots

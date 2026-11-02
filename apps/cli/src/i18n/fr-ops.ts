@@ -1,5 +1,5 @@
 /**
- * Catalogue français (partie « exploitation ») : doctor, update, logs, lokkal.json, coffre, authentification, pont ACP,
+ * Catalogue français (partie « exploitation ») : doctor, update, backup, logs, lokkal.json, coffre, authentification, pont ACP,
  * mode non interactif. Clé = libellé source anglais tel qu'écrit dans `t("…")`.
  */
 export const FR_OPS: Record<string, string> = {
@@ -121,6 +121,48 @@ export const FR_OPS: Record<string, string> = {
   "The kernel does not respond on /healthz yet after the update — check with nokker doctor.":
     "Le noyau ne répond pas encore sur /healthz après la mise à jour — vérifie avec nokker doctor.",
   "Kernel: version {0} → {1}": "Noyau : version {0} → {1}",
+  "download of install.sh failed (HTTP {0})": "téléchargement d'install.sh impossible (HTTP {0})",
+  "download of install.sh failed ({0})": "téléchargement d'install.sh impossible ({0})",
+  "no install.sh.sha256 in the release (HTTP {0}): cannot verify": "pas d'install.sh.sha256 dans la release (HTTP {0}) : vérification impossible",
+  "wrong sha256 checksum for install.sh (expected {0}…, received {1}…)": "somme sha256 d'install.sh incorrecte (attendue {0}…, reçue {1}…)",
+  "install.sh.sha256 not found ({0}): cannot verify": "install.sh.sha256 introuvable ({0}) : vérification impossible",
+  "cosign verification of install.sh failed ({0})": "vérification cosign d'install.sh échouée ({0})",
+  "--version expects a version like 1.2.3 (got {0}).": "--version attend une version comme 1.2.3 (reçu : {0}).",
+  "Kernel {0} is newer than {1}: downgrades are not supported (migrations only go forward).":
+    "Le noyau {0} est plus récent que {1} : pas de retour en arrière (les migrations ne vont que vers l'avant).",
+  "Update refused: {0}. Nothing was run.": "Mise à jour refusée : {0}. Rien n'a été exécuté.",
+  "install.sh {0}: sha256 and cosign signature verified.": "install.sh {0} : sha256 et signature cosign vérifiés.",
+  "install.sh {0}: sha256 verified; signature NOT verified (cosign is not installed).":
+    "install.sh {0} : sha256 vérifié ; signature NON vérifiée (cosign n'est pas installé).",
+  "Release {0} publishes no install.sh: updating through the compose file.":
+    "La release {0} ne publie pas d'install.sh : mise à jour par le fichier compose.",
+
+  // backup / restore
+  "update --version expects a version like 1.2.3": "update --version attend une version comme 1.2.3",
+  "--to expects a folder or s3://bucket/prefix": "--to attend un dossier ou s3://bucket/préfixe",
+  "--keep expects an integer ≥ 0": "--keep attend un entier ≥ 0",
+  "{0} only applies to nokker {1}": "{0} ne s'applique qu'à nokker {1}",
+  "backup list only takes --to": "backup list ne prend que --to",
+  "restore expects a backup file or s3://… (nokker backup list)": "restore attend un fichier de sauvegarde ou s3://… (nokker backup list)",
+  "Backups to S3 are always encrypted (they hold the secrets of the install): add --encrypt.":
+    "Les sauvegardes vers S3 sont toujours chiffrées (elles contiennent les secrets de l'installation) : ajoute --encrypt.",
+  "backup.sh not found ({0}): rerun install.sh, or update with nokker update.":
+    "backup.sh introuvable ({0}) : relance install.sh, ou mets à jour avec nokker update.",
+  "--keep only prunes folder backups: it is ignored for S3.": "--keep ne purge que les sauvegardes dans un dossier : ignoré pour S3.",
+  "restore replaces the data of the install: confirm with --yes (no terminal to ask).":
+    "restore remplace les données de l'installation : confirme avec --yes (pas de terminal pour demander).",
+  "Replace the data of {0} with the backup {1}? [y/N] ": "Remplacer les données de {0} par la sauvegarde {1} ? [o/N] ",
+  "Restore cancelled: nothing was changed.": "Restauration annulée : rien n'a été modifié.",
+  "A passphrase is required and there is no terminal to ask for it: set {0}.":
+    "Une phrase de passe est requise et aucun terminal ne permet de la demander : définis {0}.",
+  "Backup passphrase: ": "Phrase de passe de la sauvegarde : ",
+  "Empty passphrase: nothing was done.": "Phrase de passe vide : rien n'a été fait.",
+  "Passphrase again: ": "Phrase de passe, à nouveau : ",
+  "The two passphrases differ: nothing was done.": "Les deux phrases de passe diffèrent : rien n'a été fait.",
+  "Keep this passphrase safe: without it the backup cannot be restored.":
+    "Garde cette phrase de passe en lieu sûr : sans elle, la sauvegarde ne peut pas être restaurée.",
+  "{0} not found: cannot run backup.sh.": "{0} introuvable : impossible de lancer backup.sh.",
+  "backup.sh did not finish in time.": "backup.sh ne s'est pas terminé à temps.",
 
   // logs
   "Kernel logs unavailable: {0}.\nThe client log is still readable: nokker logs --component cli":
@@ -198,4 +240,63 @@ export const FR_OPS: Record<string, string> = {
   "unknown method: {0}": "méthode inconnue : {0}",
   "local token not found: is Lokkal installed and running? (nokker doctor)": "jeton local introuvable : Lokkal est-il installé et démarré ? (nokker doctor)",
   "no session for {0}: first run {1} --server {0} in a terminal": "aucune session pour {0} : lance d'abord {1} --server {0} dans un terminal",
+
+  // import
+  "take over another agent's install: the kernel lists what it reads, those paths are mounted read-only (never credentials or identity files) into a one-off container; dry run, then --apply writes after confirmation; --project (claude-code, cursor) also reads a repository. Not followed: a custom HERMES_HOME, an OpenClaw agents.defaults.workspace outside ~/.openclaw":
+    "reprendre l'installation d'un autre agent : le noyau liste ce qu'il lit, ces chemins sont montés en lecture seule (jamais les identifiants ni l'identité) dans un conteneur jetable ; à blanc, puis --apply écrit après confirmation ; --project (claude-code, cursor) lit aussi un dépôt. Non suivis : un HERMES_HOME personnalisé, un agents.defaults.workspace d'OpenClaw hors de ~/.openclaw",
+  "import expects one of: {0}": "import attend l'une de ces sources : {0}",
+  "--project expects the root folder of a repository": "--project attend le dossier racine d'un dépôt",
+  "--project only applies to {0}: {1} reads nothing in a project.": "--project ne vaut que pour {0} : {1} ne lit rien dans un projet.",
+  "--project: {0} is not a folder.": "--project : {0} n'est pas un dossier.",
+  "--project: {0} is (or contains) the home folder: give the root of a repository.": "--project : {0} est (ou contient) le dossier personnel : donnez la racine d'un dépôt.",
+  "--project: {0} contains a colon: it cannot be mounted.": "--project : {0} contient un deux-points : il ne peut pas être monté.",
+  "import --apply writes to the state of Nokker: confirm with --yes (no terminal to ask).":
+    "import --apply écrit dans l'état de Nokker : confirmez avec --yes (pas de terminal pour poser la question).",
+  "Cannot import: {0}.": "Import impossible : {0}.",
+  "nokker import is not available under WSL yet: run it from a shell inside the {0} distribution.":
+    "nokker import n'est pas encore disponible sous WSL : lancez-le depuis un shell dans la distribution {0}.",
+  "The home folder {0} contains a colon: it cannot be mounted.": "Le dossier personnel {0} contient un deux-points : il ne peut pas être monté.",
+  "{0} not found: cannot run the kernel container.": "{0} introuvable : impossible de lancer le conteneur du noyau.",
+  "The kernel did not list the paths in time.": "Le noyau n'a pas listé les chemins à temps.",
+  "The kernel does not know --list-paths {0} (exit code 2): it may predate it, try nokker update.":
+    "Le noyau ne connaît pas --list-paths {0} (code 2) : il est peut-être antérieur, essayez nokker update.",
+  "The kernel could not list the paths to import (exit code {0}): {1}": "Le noyau n'a pas pu lister les chemins à importer (code {0}) : {1}",
+  "no message": "aucun message",
+  "Invalid answer from the kernel to --list-paths (one JSON line {source, paths:[{path, kind}], project_paths} expected): {0}":
+    "Réponse invalide du noyau à --list-paths (une ligne JSON {source, paths:[{path, kind}], project_paths} attendue) : {0}",
+  "empty output": "sortie vide",
+  "absolute path": "chemin absolu",
+  "contains ..": "contient ..",
+  "character not allowed in a mount": "caractère interdit dans un montage",
+  "credentials or identity file": "fichier d'identifiants ou d'identité",
+  "empty path": "chemin vide",
+  "symbolic link leading outside its root folder": "lien symbolique qui sort de son dossier racine",
+  "symbolic link to a credentials or identity file": "lien symbolique vers un fichier d'identifiants ou d'identité",
+  "expected a file, found a folder": "fichier attendu, dossier trouvé",
+  "expected a folder, found a file": "dossier attendu, fichier trouvé",
+  "folder too large to check, or holding a link to a credentials file": "dossier trop gros pour être contrôlé, ou contenant un lien vers des identifiants",
+  "✗ refused: {0} ({1})": "✗ refusé : {0} ({1})",
+  "Not on this machine, ignored: {0}": "Absent de cette machine, ignoré : {0}",
+  "Nothing to import from {0} on this machine: no container was started.": "Rien à importer de {0} sur cette machine : aucun conteneur lancé.",
+  "Mounted read-only into a one-off kernel container (never copied or shown here):": "Monté en lecture seule dans un conteneur jetable du noyau (jamais copié ni affiché ici) :",
+  "hidden (credentials): {0}": "masqué (identifiants) : {0}",
+  "Report and imported data go to the kernel state: {0} → {1}": "Le rapport et les données importées vont dans l'état du noyau : {0} → {1}",
+  "Report: {0}": "Rapport : {0}",
+  "Dry run (nothing is written):": "À blanc (rien n'est écrit) :",
+  "The dry run failed: nothing was written.": "L'essai à blanc a échoué : rien n'a été écrit.",
+  "No terminal: MCP servers found by the import will not be added (the kernel asks for each one on a terminal).":
+    "Pas de terminal : les serveurs MCP trouvés par l'import ne seront pas ajoutés (le noyau demande chacun sur un terminal).",
+  "Apply this import to the state of Nokker? [y/N] ": "Appliquer cet import à l'état de Nokker ? [o/N] ",
+  "Import cancelled: nothing was written.": "Import annulé : rien n'a été écrit.",
+  "Applying the import…": "Application de l'import…",
+  "The import did not finish in time.": "L'import ne s'est pas terminé à temps.",
+  "{0} is not a plain folder (link or file): it cannot be mounted for writing.": "{0} n'est pas un simple dossier (lien ou fichier) : il ne peut pas être monté en écriture.",
+  "{0} is too large to check for credentials files (or holds a link to one): it cannot be mounted for writing.":
+    "{0} est trop gros pour y chercher des fichiers d'identifiants (ou contient un lien vers l'un d'eux) : il ne peut pas être monté en écriture.",
+  "--apply will write:": "--apply écrira :",
+  "{0} (kernel state: skills, settings, MCP servers, memory, report)": "{0} (état du noyau : skills, réglages, serveurs MCP, mémoire, rapport)",
+  "{0}/ (repository skills and hooks) → {1}, read-write{2}": "{0}/ (skills et hooks du dépôt) → {1}, en écriture{2}",
+  " (created)": " (créé)",
+  "{0} (only if it does not exist: written to a temporary folder, then copied)": "{0} (seulement s'il n'existe pas : écrit dans un dossier temporaire, puis recopié)",
+  "NOKKER.md written: {0}": "NOKKER.md écrit : {0}",
 };

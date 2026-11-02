@@ -31,7 +31,7 @@ import { LOCAL_TOOL_CALL_PATH, argsSha256, canonicalJson, type Approval, type Ap
 import { deviceToJson, finalizeDecision, knownUsersJson, KNOWN_USERS, LOCAL_OWNER, MockState, MOCK_USER, randomId, type MockDeviceRecord } from "./state.js";
 import { localTitle, rootFor, runLocalTurn, scheduleLocalDecision } from "./local.js";
 import { handleLocalToolCall } from "./localtools.js";
-import { cancelChildren, openProjectSkills, trustProjectSkills } from "./project.js";
+import { cancelChildren, getProjectSkills, openProjectSkills, trustProjectSkills } from "./project.js";
 import { localCostTotals, publishTurnCost } from "./cost.js";
 import {
   MockHttpError,
@@ -56,16 +56,29 @@ import { handleHousehold } from "./household.js";
 import { handleLocalMirror } from "./mirror.js";
 import { handleLocalMail } from "./local-mail.js";
 import { handlePacks } from "./packs.js";
+import { handleConsolidation } from "./consolidation.js";
+import { handleFolder } from "./folder.js";
+import { handlePayments, payChallengeBinding, payDecided, payProofRefusal } from "./payments.js";
+import { handleHouse } from "./house.js";
+import { handlePresence } from "./presence.js";
+import { handleGuide } from "./guide.js";
+import { handleGlance } from "./glance.js";
+import { handleSessionMode } from "./session-mode.js";
+import { cliControlOf, handleKernelGoal } from "./goals.js";
 import { handleCode } from "./code.js";
 import { handleSso, handleSsoPublic, type SsoSession } from "./sso.js";
 import { handleAlertReceive, handleOps, handleOpsDev } from "./ops.js";
 import { handleLocalMachine, handleLocalMachineDev, handlePreview } from "./local-machine.js";
+import { handleImport } from "./importers.js";
+import { handleLearning } from "./learning.js";
 import { handleLink, handleLinkDev } from "./link.js";
 import { handleGatewayAuthorize, handleGatewayRelay } from "./gateway.js";
 import { handleLocal, LOCAL_TOKEN } from "./local-setup.js";
 import { handleAuthedOnboarding, handlePublicOnboarding } from "./onboarding.js";
 
 export const MOCK_TOTP_CODE = "000000";
+/** Réponse finale d'un tour annulé, mot pour mot celle du noyau (`turn.error = "cancelled"`, LOKKAL.md §7.4.4). */
+export const CANCELLED_REPLY = "Annulé à ta demande.";
 /** `aud` du défi de connexion — APPROVALS.md §3.6, identique au noyau (`BaseApprovals.login_challenge`). */
 const LOGIN_CHALLENGE_AUD = "nokker-login";
 const APPROVAL_CHALLENGE_AUD = "nokker-approval";
@@ -227,6 +240,8 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   // ---- Onboarding du testeur (publiques : pas encore de session) ----------------------------
   let bodyCache: Promise<Record<string, unknown>> | undefined;
   const readBody = (): Promise<Record<string, unknown>> => (bodyCache ??= readJsonBody(req));
+  // Glance tokens (AMBIENT.md §6) are gated before anything else: they open GET /v1/glance only.
+  if (await handleGlance(state, req.headers["authorization"], method, path, readBody, (st, obj, h) => sendJson(res, st, obj, h), () => authUser(state, req))) return;
   if (await handlePublicOnboarding(state, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleGatewayRelay(state, req, res, method, path, readBody)) return;
   if (
@@ -393,6 +408,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   if (await handleLocalMirror(state, authUser(state, req), method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleOpsDev(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleCrewMailDev(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (path === "/v1/dev/todo" && (await handleSessionMode(state, null, method, path, readBody, (st, obj) => sendJson(res, st, obj)))) return;
   if (path === "/v1/dev/code-mock" && (await handleCode(state, null, method, url, readBody, (st, obj) => sendJson(res, st, obj)))) return;
   // X18 : réception d'alertes SANS session (signée HMAC ou Bearer selon la source) ; le corps brut sert à la signature.
   if (
@@ -415,10 +431,20 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   if (user && (await handleLink(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj)))) return;
   if (await handleGatewayAuthorize(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleLocalMachine(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleImport(state, user, method, path + url.search, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleFolder(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleLearning(state, user, method, path + url.search, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleLocalMail(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (user && (await handleSso(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj)))) return;
   if (await handlePacks(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleCode(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleSessionMode(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleKernelGoal(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handlePresence(state, user ?? MOCK_USER, method, path, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleGuide(state, user ?? MOCK_USER, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleHouse(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleConsolidation(state, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handlePayments(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleHousehold(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleTeam(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj), sessionDevice(state, req))) return;
   if (await handleOps(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
@@ -551,6 +577,12 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     const r = trustProjectSkills(state, String(body.thread_id ?? ""), String(body.sha256 ?? ""));
     return void sendJson(res, r.status, r.body);
   }
+  const skillsGet = path.match(/^\/v1\/local\/sessions\/([^/]+)\/skills$/);
+  if (method === "GET" && skillsGet) {
+    if (user !== LOCAL_OWNER) return void sendJson(res, 401, { error: { message: "jeton local requis" } });
+    const r = state.projectSkills ? getProjectSkills(state, decodeURIComponent(skillsGet[1]!)) : null;
+    return void (r ? sendJson(res, 200, { thread_id: decodeURIComponent(skillsGet[1]!), skills: r }) : sendJson(res, 404, { error: { message: "fil inconnu ou skills du dépôt désactivés" } }));
+  }
   if (method === "POST" && path === LOCAL_TOOL_CALL_PATH) {
     if (user !== LOCAL_OWNER) return void sendJson(res, 403, { error: { message: "jeton local requis" } });
     const r = await handleLocalToolCall(state, await readBody());
@@ -565,7 +597,10 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
 
   // ---- Fils (BUBBLES.md §1) ----------------------------------------------------------------
   if (method === "GET" && path === "/v1/threads") {
-    sendJson(res, 200, state.sortedThreads());
+    // Like the core (tenancy): only the threads this user owns or belongs to; the local owner sees them all. Without
+    // this filter a local session (owner: local owner) showed up in an account's list and its GET answered 403.
+    const mine = (t: { owner?: string; members?: string[] }): boolean => user === LOCAL_OWNER || !user || t.owner === user || (t.members ?? []).includes(user);
+    sendJson(res, 200, state.sortedThreads().filter(mine));
     return;
   }
   if (method === "POST" && path === "/v1/threads") {
@@ -627,7 +662,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     const body = await readJsonBody(req);
     const kind = String(body.kind ?? "") as BubbleKind;
     // `pack_agents` (BUBBLES §9.6) : posée par le noyau seulement (400 pour un client).
-    if (!(BUBBLE_KINDS as readonly string[]).includes(kind) || kind === "notify" || kind === "pack_agents") {
+    if (!(BUBBLE_KINDS as readonly string[]).includes(kind) || kind === "notify" || kind === "pack_agents" || kind === "cast" || kind === "pointer") {
       return void sendJson(res, 400, { error: { message: `kind non créable par un client : ${kind}` } });
     }
     if (body.state !== undefined && (typeof body.state !== "object" || body.state === null || Array.isArray(body.state))) {
@@ -791,6 +826,8 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
       nonce,
       exp: expMs,
       aud: APPROVAL_CHALLENGE_AUD,
+      // Carte « à payer » (PAYMENTS §5) : le défi porte l'empreinte du mandat, signée telle quelle.
+      ...(payChallengeBinding(state, approval.id) ? { mandate_sha256: payChallengeBinding(state, approval.id) } : {}),
     });
     state.challenges.set(nonce, { nonce, exp: expMs, scope: approval.id, used: false });
     sendJson(res, 200, { challenge, nonce, exp: Math.floor(expMs / 1000) });
@@ -840,6 +877,10 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     if (parsed.args_sha256 !== approval.args_sha256 || argsSha256(approval.arguments) !== approval.args_sha256) {
       return void sendJson(res, 409, { error: { message: "args_sha256 a changé — APPROVALS.md §2" } });
     }
+
+    // Une carte « à payer » ne s'approuve qu'à la passkey (mandat signé) : ni TOTP, ni signature brute.
+    const payRefused = payProofRefusal(state, approval, decision, body.webauthn && typeof body.webauthn === "object" ? "webauthn" : "other");
+    if (payRefused) return void sendJson(res, 403, { error: { message: payRefused } });
 
     if (typeof body.totp === "string") {
       if (approval.strength === ("strong" as ApprovalStrength)) {
@@ -957,6 +998,35 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
       const isLocal = state.localSessions.has(threadId);
       let cancelled = false;
       let localReply = "";
+      let turnRefused = false;
+      let turnError: { code: string; message: string } | undefined;
+      // Texte streamé PENDANT le tour (jetons en direct) : à vider par un `reset` si le tour finit autrement (annulation).
+      let partialSent = false;
+      let roleSent = false;
+      const completionId = `chatcmpl-mock-${randomId("")}`;
+      const created = Math.floor(Date.now() / 1000);
+      const writeChunk = (choiceDelta: Record<string, unknown>, finish: string | null, extra: Record<string, unknown> = {}): void => {
+        if (res.writableEnded || res.destroyed) return;
+        res.write(
+          `data: ${JSON.stringify({
+            id: completionId,
+            object: "chat.completion.chunk",
+            created,
+            model,
+            choices: [{ index: 0, delta: choiceDelta, finish_reason: finish }],
+            ...extra,
+          })}\n\n`,
+        );
+      };
+      const onPartial = (text: string): void => {
+        if (!liveTokens) return;
+        if (!roleSent) {
+          writeChunk({ role: "assistant" }, null);
+          roleSent = true;
+        }
+        writeChunk({ content: text }, null);
+        partialSent = true;
+      };
       if (isLocal) {
         // Session locale : le tour se déroule en temps réel (outils, cartes) ; la connexion SSE reste ouverte
         // avec des `: ping` comme le noyau.
@@ -964,16 +1034,18 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
         state.activeTurns.set(threadId, { turnId, abort: ctl });
         const ping = stream ? setInterval(() => !res.writableEnded && res.write(": ping\n\n"), 10_000) : undefined;
         try {
-          const r = await runLocalTurn(state, threadId, turnId, userText, ctl.signal);
+          const r = await runLocalTurn(state, threadId, turnId, userText, ctl.signal, onPartial, cliControlOf(body));
           localReply = r.reply;
           cancelled = r.cancelled;
+          turnRefused = Boolean(r.refused);
+          turnError = r.error;
         } finally {
           if (ping) clearInterval(ping);
           state.activeTurns.delete(threadId);
         }
       }
       const demo = isLocal
-        ? { reply: cancelled ? "" : localReply, triggersApproval: false, after: undefined }
+        ? { reply: cancelled ? CANCELLED_REPLY : localReply, triggersApproval: false, after: undefined }
         : interpretDemo(state, threadId, userText, { turnId, context });
       const { triggersApproval, after } = demo;
       const reply = imageCount > 0 && !isLocal ? `(demo) ${imageCount === 1 ? "Image received" : `${imageCount} images received`}, not analysed by the mock. ${demo.reply}` : demo.reply;
@@ -1029,13 +1101,14 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
           turn_id: turnId,
           usage: { prompt_tokens: userText.length, completion_tokens: reply.length, total_tokens: userText.length + reply.length },
           tier: "mock",
+          // Champs du noyau du 01.11 (CLIENT-API.md §Fin de tour), présents seulement quand ils s'appliquent.
+          ...(turnError ? { error: turnError } : {}),
           ...(cancelled ? { cancelled: true } : {}),
+          ...(turnRefused ? { refused: true } : {}),
         });
         state.setWorking(threadId, false);
         state.publishThread(threadId);
       };
-      const completionId = `chatcmpl-mock-${randomId("")}`;
-      const created = Math.floor(Date.now() / 1000);
       const usage = { prompt_tokens: userText.length, completion_tokens: reply.length, total_tokens: userText.length + reply.length };
 
       if (!stream) {
@@ -1057,22 +1130,16 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
         withUsage = false,
         nokker?: { reset?: boolean; final?: boolean },
       ): void => {
-        res.write(
-          `data: ${JSON.stringify({
-            id: completionId,
-            object: "chat.completion.chunk",
-            created,
-            model,
-            choices: [{ index: 0, delta: choiceDelta, finish_reason: finish }],
-            ...(withUsage ? { usage } : {}),
-            ...(nokker ? { nokker } : {}),
-          })}\n\n`,
-        );
+        writeChunk(choiceDelta, finish, { ...(withUsage ? { usage } : {}), ...(nokker ? { nokker } : {}) });
       };
-      sseChunk({ role: "assistant" }, null);
-      // Découpe la réponse en mots pour exercer un vrai rendu incrémental côté clients.
+      if (!roleSent) sseChunk({ role: "assistant" }, null);
+      // Tour annulé (noyau du 01.11, LOKKAL.md §7.4.4) : le texte partiel n'est pas gardé — `reset`, puis la réponse
+      // finale « Annulé à ta demande. ». Sans jetons en direct : la réponse complète, d'un bloc.
+      if (cancelled && liveTokens && partialSent) sseChunk({}, null, false, { reset: true });
+      if (cancelled && !liveTokens) sseChunk({ content: reply }, null);
+      // Découpe la réponse en mots pour exercer un vrai rendu incrémental côté clients (déjà fait pendant le tour : `long`).
       const words = reply.split(" ");
-      for (const w of cancelled ? [] : words) {
+      for (const w of cancelled || partialSent ? [] : words) {
         if (res.destroyed) break;
         sseChunk({ content: `${w} ` }, null);
         await new Promise((r) => setTimeout(r, Math.round(18 * state.speed)));

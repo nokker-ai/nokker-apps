@@ -11,7 +11,7 @@ import { startMockServer, type MockServerHandle } from "@nokker-apps/mock-server
 import { connect, login } from "../src/auth.js";
 import { CliSession } from "../src/session.js";
 import { applyToolEvent, formatToolLine, type ToolLine } from "../src/toolview.js";
-import { runPrint } from "../src/headless.js";
+import { printExitCode, runPrint } from "../src/headless.js";
 
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 async function until<T>(fn: () => T | undefined | false, ms = 4000): Promise<T> {
@@ -114,6 +114,19 @@ describe("session locale", () => {
     expect(again.resumed).toBe(true);
     expect(s2.threadId).toBe(id);
     expect((await session.listLocalSessions()).some((s) => s.thread_id === id && s.title === null && s.working === false && s.pending_approvals === 0)).toBe(true); // forme du noyau : titre null avant le premier tour
+  });
+
+  it("session reprise : l'état des skills du dépôt est relu (GET …/skills), pas « unknown » — sinon aucune carte à la reprise", async () => {
+    const skills = { enabled: true, project: "untrusted", root: "/w/p", sha256: "ab", count: 1, notice: "n" };
+    const fake = {
+      listLocalSessions: async () => [{ thread_id: "th_r", cwd: "/w/p", last_turn_at: null }],
+      getThread: async () => ({ messages: [] }),
+      getLocalSessionSkills: async (id: string) => ({ thread_id: id, skills }),
+    };
+    const r = await new CliSession(fake as never, null).openLocal("/w/p");
+    expect(r).toMatchObject({ resumed: true, skills });
+    const off = { ...fake, getLocalSessionSkills: async () => { throw new Error("404"); } };
+    expect((await new CliSession(off as never, null).openLocal("/w/p")).skills).toBe("unknown");
   });
 
   it("403 hors racines", async () => {
@@ -224,6 +237,9 @@ describe("mode non interactif", () => {
       expect(res.reply).toContain("refused");
       expect(res.pending_approvals).toEqual([]);
       expect(res.cancelled).toBe(false);
+      // D7 : un effet refusé → code 3, sans erreur de tour.
+      expect(res.error).toBeNull();
+      expect(res.exit_code).toBe(3);
       // X2 : le coût du tour recopié de `turn.cost` (LOKKAL.md §7.6).
       expect(res.cost).toMatchObject({ thread_id: res.thread_id, calls: 1, subagent_calls: 0, unpriced_models: [] });
       expect(Object.keys(res.cost!.cost)).toEqual(["EUR"]);
@@ -234,6 +250,53 @@ describe("mode non interactif", () => {
       process.env.NOKKER_CONFIG_DIR_OVERRIDE = keep;
       await rm(d2, { recursive: true, force: true });
     }
+  });
+});
+
+describe("mode non interactif : fin de tour (D7)", () => {
+  async function printWith(text: string) {
+    const d = await mkdtemp(join(tmpdir(), "nokker-cli-print-d7-"));
+    const keep = process.env.NOKKER_CONFIG_DIR_OVERRIDE;
+    process.env.NOKKER_CONFIG_DIR_OVERRIDE = d;
+    const m = await startMockServer({ port: 0, seed: false, speed: 0.01, localRoots: null });
+    try {
+      const c = new NokkerClient({ baseUrl: m.url });
+      const conn = await connect(c, m.url, "batch");
+      return await runPrint(text, c, conn, "/work/ci");
+    } finally {
+      await m.close();
+      process.env.NOKKER_CONFIG_DIR_OVERRIDE = keep;
+      await rm(d, { recursive: true, force: true });
+    }
+  }
+
+  it("tour réussi : code 0, error null", async () => {
+    const res = await printWith("hello");
+    expect(res.error).toBeNull();
+    expect(res.refused).toEqual([]);
+    expect(res.exit_code).toBe(0);
+  });
+
+  it("tour en échec : turn.done.error recopié, code 4", async () => {
+    const res = await printWith("simulate a provider error");
+    expect(res.error).toEqual({ code: "provider_error", message: "upstream 502 (mock)" });
+    expect(res.exit_code).toBe(4);
+    expect(JSON.parse(JSON.stringify(res))).toMatchObject({ error: { code: "provider_error" }, exit_code: 4 });
+  });
+
+  it("refus d'office du noyau (hardline, sans carte) : refused: true seul suffit pour le code 3", async () => {
+    const res = await printWith("rm -rf / please");
+    expect(res.refused).toEqual([]);
+    expect(res.exit_code).toBe(3);
+  });
+
+  it("priorité : erreur (4) > annulation (130) > refus (3) > 0", () => {
+    const err = { code: "max_calls", message: "x" };
+    expect(printExitCode({ error: err, cancelled: true, refusedByCore: true, refused: [1] })).toBe(4);
+    expect(printExitCode({ error: null, cancelled: true, refusedByCore: true, refused: [1] })).toBe(130);
+    expect(printExitCode({ error: null, cancelled: false, refusedByCore: true, refused: [] })).toBe(3);
+    expect(printExitCode({ error: null, cancelled: false, refusedByCore: false, refused: [1] })).toBe(3);
+    expect(printExitCode({ error: null, cancelled: false, refusedByCore: false, refused: [] })).toBe(0);
   });
 });
 

@@ -3,6 +3,7 @@ import type { Bubble, Thread } from "@nokker-apps/sdk";
 import { Icon } from "../icons.js";
 import { useStore } from "../context.js";
 import { tr } from "../i18n/index.js";
+import { displayTitle } from "../showme/model.js";
 
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -65,7 +66,7 @@ export function SharePopover({
   const toggle = (list: string[], v: string): string[] => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
 
   return (
-    <div className="popover share-pop" role="dialog" aria-label={tr("Share the bubble {0}", bubble.title)} ref={ref} onPointerDown={(e) => e.stopPropagation()}>
+    <div className="popover share-pop" role="dialog" aria-label={tr("Share the bubble {0}", displayTitle(bubble))} ref={ref} onPointerDown={(e) => e.stopPropagation()}>
       <span className="eyebrow">{tr("Members")}</span>
       <div className="pick-list">
         {members.map((m) => {

@@ -5,6 +5,7 @@ import { delimiter, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { createMockHttpServer } from "./server.js";
 import { MockState } from "./state.js";
+import { payDecided } from "./payments.js";
 
 export { MOCK_TOTP_CODE } from "./server.js";
 export { accountMock } from "./account.js";
@@ -63,10 +64,32 @@ export async function startMockServer(
     projectMemory?: boolean;
     /** Drapeau `local.project_skills` (défaut : éteint ; `MOCK_PROJECT_SKILLS=1` l'allume). */
     projectSkills?: boolean;
+    /** Drapeau `local.lsp.enabled` (défaut : éteint ; `MOCK_LSP=1` l'allume). */
+    lsp?: boolean;
+    /** Scénario `/goal` : vérifications répondues `GOAL: CONTINUE` avant `GOAL: DONE` (défaut 1). */
+    goalChecksBeforeDone?: number;
+    /** Drapeau `goals_enabled` du noyau (défaut : éteint ; `MOCK_GOALS=1` l'allume). */
+    goals?: boolean;
     /** Foyer (X23) : `MOCK_HOUSEHOLD=payer|member|minor|none` (défaut `off` : 404 comme le noyau sans drapeau). */
     household?: "off" | "payer" | "member" | "minor" | "none";
     /** Drapeau `code.enabled` (LOKKAL §7.28) ; défaut `MOCK_CODE=1`, sinon éteint. */
     code?: boolean;
+    /** Flag `local.cast.enabled` (SCREEN-CAST §7) ; `MOCK_CAST=1`, otherwise off. */
+    cast?: boolean;
+    /** Flag `show_me` (core docs/SHOW-ME.md) ; `MOCK_SHOW_ME=1`, otherwise off. */
+    showMe?: boolean;
+    /** Flag `guide` (core docs/GUIDE.md) ; `MOCK_GUIDE=1`, otherwise off. */
+    guide?: boolean;
+    /** Flags `house_room` + `household` (HOUSE-ROOM §6) ; `MOCK_HOUSE_ROOM=1`, otherwise off. */
+    houseRoom?: boolean;
+    /** Flag `who_does_what` (WHO-DOES-WHAT) ; `MOCK_WHO_DOES_WHAT=1`, otherwise off. */
+    whoDoesWhat?: boolean;
+    /** Flag `memory_consolidation` (CONSOLIDATION §6) ; `MOCK_CONSOLIDATION=1`, otherwise off. */
+    consolidation?: boolean;
+    /** Flag `payments` (PAYMENTS §5) ; `MOCK_PAYMENTS=1`, otherwise off. */
+    payments?: boolean;
+    /** Flag `local.folder_mode` (FOLDER-MODE §6) ; `MOCK_FOLDER=1`, otherwise off. */
+    folder?: boolean;
     /** Relève du courrier du Crew : `MOCK_CREW_MAIL=off|nobox` (défaut `on`). */
     crewMail?: "on" | "off" | "nobox";
   } = {},
@@ -85,10 +108,22 @@ export async function startMockServer(
     localWrites: opts.localWrites ?? process.env.MOCK_LOCAL_WRITES === "1",
     projectMemory: opts.projectMemory ?? process.env.MOCK_PROJECT_MEMORY !== "0",
     projectSkills: opts.projectSkills ?? process.env.MOCK_PROJECT_SKILLS === "1",
+    lsp: opts.lsp ?? process.env.MOCK_LSP === "1",
+    ...(opts.goalChecksBeforeDone !== undefined ? { goalChecksBeforeDone: opts.goalChecksBeforeDone } : {}),
+    goals: opts.goals ?? process.env.MOCK_GOALS === "1",
     code: opts.code ?? process.env.MOCK_CODE === "1",
+    cast: opts.cast ?? process.env.MOCK_CAST === "1",
+    showMe: opts.showMe ?? process.env.MOCK_SHOW_ME === "1",
+    guide: opts.guide ?? process.env.MOCK_GUIDE === "1",
+    houseRoom: opts.houseRoom ?? process.env.MOCK_HOUSE_ROOM === "1",
+    whoDoesWhat: opts.whoDoesWhat ?? process.env.MOCK_WHO_DOES_WHAT === "1",
+    consolidation: opts.consolidation ?? process.env.MOCK_CONSOLIDATION === "1",
+    payments: opts.payments ?? process.env.MOCK_PAYMENTS === "1",
+    folder: opts.folder ?? process.env.MOCK_FOLDER === "1",
     crewMail: opts.crewMail ?? (process.env.MOCK_CREW_MAIL === "off" || process.env.MOCK_CREW_MAIL === "nobox" ? process.env.MOCK_CREW_MAIL : "on"),
     household: opts.household ?? (["payer", "member", "minor", "none"].includes(process.env.MOCK_HOUSEHOLD ?? "") ? (process.env.MOCK_HOUSEHOLD as "payer" | "member" | "minor" | "none") : "off"),
   });
+  if (state.payments) state.payDecided = (a, d, by) => payDecided(state, a, d, by);
   if (configDir) {
     mkdirSync(configDir, { recursive: true, mode: 0o700 });
     state.localToken = randomBytes(32).toString("base64url");

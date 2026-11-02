@@ -1,0 +1,109 @@
+/* Folder mode (FOLDER-MODE §6). Tokens of theme.css only. */
+.fm-new {
+  display: grid;
+  gap: 6px;
+}
+.fm-new input:not([type="checkbox"]),
+.fm-new textarea {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+.fm-new textarea {
+  font: inherit;
+}
+.fm-check input {
+  flex: none;
+  margin-top: 3px;
+}
+.fm-check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.fm-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.fm-task {
+  font-weight: 600;
+  margin: 8px 0 4px;
+  overflow-wrap: anywhere;
+}
+.fm-path {
+  overflow-wrap: anywhere;
+}
+.fm-model {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 4px 0;
+}
+.fm-steps,
+.fm-touched {
+  margin: 4px 0 0;
+  padding-left: 1.4em;
+  display: grid;
+  gap: 4px;
+}
+.fm-steps li {
+  overflow-wrap: anywhere;
+}
+.fm-steps li > .chip {
+  margin-left: 6px;
+}
+.fm-action {
+  font-weight: 600;
+  margin-right: 6px;
+}
+.fm-card {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+}
+.fm-card.strong {
+  border-color: var(--ko);
+}
+.fm-card p {
+  margin: 0 0 8px;
+}
+.fm-report {
+  margin-top: 10px;
+}
+.fm-said {
+  margin: 8px 0 0;
+  padding-left: 10px;
+  border-left: 3px solid var(--line-strong);
+}
+.fm-said figcaption {
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+.fm-undo {
+  margin-top: 10px;
+}
+.fm-runs li {
+  align-items: center;
+}
+.fm-run {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 4px 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  min-height: 24px;
+}
+.fm-run-task {
+  overflow-wrap: anywhere;
+}
+.fm-runs li.current .fm-run-task {
+  font-weight: 600;
+}

@@ -4,6 +4,7 @@ import { Markdown } from "../Markdown.js";
 import { Icon } from "../icons.js";
 import { readAsDataUrl, refusalText, refuseImage, type PendingImage } from "../composer/images.js";
 import { tr } from "../i18n/index.js";
+import { anchor } from "../showme/model.js";
 
 /** Conversation du fil courant. Les blocs `system` (bulle reçue, message d'une autre session) s'affichent en
  * ligne discrète : c'est le contexte que Nina voit. */
@@ -21,13 +22,16 @@ export function Chat({
   writing = [],
   hookNotice = null,
   onTrustHooks,
+  empty,
+  onCommand,
 }: {
   title: string;
   messages: ThreadMessage[];
   streaming: string | null;
   live?: { turn_id: string; text: string } | null;
   sending: boolean;
-  onSend: (text: string, images: string[]) => void;
+  /** Resolves `false` when nothing was sent: the text and images come back to the composer if it is still empty. */
+  onSend: (text: string, images: string[]) => Promise<boolean | void> | void;
   /** Fil courant : sert aux images de l'historique et au coût par tour (`<fil>:<index>`). */
   threadId?: string | null;
   client?: NokkerClient;
@@ -40,11 +44,16 @@ export function Chat({
   /** X3 : hooks du dépôt pas encore de confiance sur ce fil. */
   hookNotice?: { count: number; notice: string } | null;
   onTrustHooks?: () => void;
+  /** Fil vide : contenu d'accueil ; `fill` remplit la zone de saisie (sans envoyer). */
+  empty?: (fill: (text: string) => void) => React.ReactNode;
+  /** A line typed in the composer that the client handles itself (`/guide`): true = handled, nothing is sent. */
+  onCommand?: (text: string) => boolean;
 }): React.ReactElement {
   const [draft, setDraft] = useState("");
   const [images, setImages] = useState<PendingImage[]>([]);
   const [imgError, setImgError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const online = useOnline();
   const fileRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   // Nina réfléchit : envoi en cours et aucun jeton reçu — le premier jeton streamé arrête le scanner KITT ; un
@@ -65,10 +74,19 @@ export function Chat({
   function submit(): void {
     const t = draft.trim();
     if ((!t && images.length === 0) || sending) return;
+    if (t && images.length === 0 && onCommand?.(t)) {
+      setDraft("");
+      return;
+    }
+    const kept = images;
     setDraft("");
     setImages([]);
     setImgError(null);
-    onSend(t, images.map((i) => i.dataUrl));
+    void Promise.resolve(onSend(t, kept.map((i) => i.dataUrl))).then((ok) => {
+      if (ok !== false) return;
+      setDraft((d) => (d.trim() ? d : t));
+      setImages((cur) => (cur.length ? cur : kept));
+    });
   }
 
   // X7 : images collées, déposées ou choisies. Refus annoncé (type, taille, nombre), jamais silencieux.
@@ -97,6 +115,12 @@ export function Chat({
     <section className="chat" aria-label={tr("Conversation with Nina — session {0}", title)}>
       <div className="chat-scroll" role="log" aria-live="polite" aria-relevant="additions">
         <div className="chat-inner">
+          {empty && messages.length === 0 && !live && !streaming && !sending
+            ? empty((text) => {
+                setDraft(text);
+                document.getElementById("nk-composer")?.focus();
+              })
+            : null}
           {messages.map((m, i) => (
             <Message
               key={`${m.index}-${m.role}`}
@@ -160,6 +184,11 @@ export function Chat({
           {imgError ? <span className="fine composer-img-error" role="alert">{imgError}</span> : null}
         </div>
       ) : null}
+      {!online ? (
+        <p className="fine composer-offline" role="status">
+          {tr("You are offline: nothing can be sent until the connection is back.")}
+        </p>
+      ) : null}
       <form
         className={`composer ${dragging ? "dropping" : ""}`}
         onSubmit={(e) => {
@@ -182,7 +211,7 @@ export function Chat({
         <label htmlFor="nk-composer" className="sr-only">
           {tr("Message to Nina")}
         </label>
-        <button type="button" className="icon-btn" aria-label={tr("Attach an image")} onClick={() => fileRef.current?.click()}>
+        <button type="button" className="icon-btn" aria-label={tr("Attach an image")} {...anchor("attach")} onClick={() => fileRef.current?.click()}>
           <Icon name="image" size={18} />
         </button>
         <input
@@ -198,6 +227,7 @@ export function Chat({
         />
         <input
           id="nk-composer"
+          {...anchor("composer")}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onPaste={(e) => {
@@ -210,7 +240,7 @@ export function Chat({
           placeholder={tr("Say something to Nina…")}
           autoComplete="off"
         />
-        <button type="submit" className="icon-btn send" aria-label={tr("Send")} disabled={sending || (!draft.trim() && images.length === 0)}>
+        <button type="submit" className="icon-btn send" aria-label={tr("Send")} {...anchor("send")} disabled={sending || (!draft.trim() && images.length === 0)}>
           <Icon name="send" size={18} />
         </button>
       </form>
@@ -412,4 +442,20 @@ function LiveWrite({ w }: { w: LiveInput }): React.ReactElement {
       </pre>
     </div>
   );
+}
+
+/** `navigator.onLine`, followed: the browser knows before a request fails. */
+function useOnline(): boolean {
+  const [online, setOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine));
+  useEffect(() => {
+    const up = (): void => setOnline(true);
+    const down = (): void => setOnline(false);
+    window.addEventListener("online", up);
+    window.addEventListener("offline", down);
+    return () => {
+      window.removeEventListener("online", up);
+      window.removeEventListener("offline", down);
+    };
+  }, []);
+  return online;
 }

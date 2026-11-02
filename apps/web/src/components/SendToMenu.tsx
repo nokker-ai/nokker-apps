@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import type { Bubble, Thread, TransferMode } from "@nokker-apps/sdk";
 import { tr } from "../i18n/index.js";
+import { displayTitle } from "../showme/model.js";
 
 /** Alternative clavier (et tactile) au glisser-déposer : « Envoyer vers… » une autre session. */
 export function SendToMenu({
@@ -25,7 +26,7 @@ export function SendToMenu({
   }, [onClose]);
   const from = bubble.thread_id ?? (bubble.kind === "notify" ? bubble.state.from_thread : null);
   return (
-    <div className="popover send-pop" role="dialog" aria-label={tr("Send the bubble {0} to a session", bubble.title)} ref={ref} onPointerDown={(e) => e.stopPropagation()}>
+    <div className="popover send-pop" role="dialog" aria-label={tr("Send the bubble {0} to a session", displayTitle(bubble))} ref={ref} onPointerDown={(e) => e.stopPropagation()}>
       <span className="eyebrow">{tr("Send to…")}</span>
       {threads
         .filter((t) => t.id !== from)

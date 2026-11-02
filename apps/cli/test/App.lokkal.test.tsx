@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startMockServer, type MockServerHandle } from "@nokker-apps/mock-server";
+import { postLocalApproval } from "../../../packages/mock-server/src/local.js";
 import { App } from "../src/ui/App.js";
 import { setLang } from "../src/i18n/index.js";
 
@@ -103,6 +104,34 @@ describe("skills du dépôt", () => {
   });
 });
 
+describe("carte déjà en attente à l'ouverture", () => {
+  it("une session reprise avec une carte posée avant le branchement des événements l'affiche (sinon le tour reste bloqué)", async () => {
+    const root = await repo("pending-card");
+    const rec = mock.state.createThread("pending-card", { members: ["mock-user"] });
+    rec.thread.owner = "mock-user";
+    mock.state.localSessions.set(rec.thread.id, { cwd: root, root, backend: "mock" });
+    postLocalApproval(mock.state, rec.thread.id, "turn_x", { name: "terminal", effect: "write", args: { command: "pytest -q" } });
+    const r = render(<App baseUrl={mock.url} cwd={root} />);
+    await frameHas(r, "Action à approuver");
+    expect(r.lastFrame()).toContain("pytest -q");
+    r.unmount();
+  });
+});
+
+describe("carte de sous-agent déjà en attente à l'ouverture", () => {
+  it("une session reprise avec une carte posée sur <fil>/sa-… l'affiche (§7.22.7) — sinon le sous-agent reste bloqué sans carte à décider", async () => {
+    const root = await repo("pending-sa-card");
+    const rec = mock.state.createThread("pending-sa-card", { members: ["mock-user"] });
+    rec.thread.owner = "mock-user";
+    mock.state.localSessions.set(rec.thread.id, { cwd: root, root, backend: "mock" });
+    postLocalApproval(mock.state, `${rec.thread.id}/sa-abc123`, "turn_x", { name: "terminal", effect: "write", args: { command: "find . -name '*.py'" } });
+    const r = render(<App baseUrl={mock.url} cwd={root} />);
+    await frameHas(r, "Action à approuver");
+    expect(r.lastFrame()).toContain("find . -name");
+    r.unmount();
+  });
+});
+
 describe("carte de confiance : frappe anticipée", () => {
   it("une commande tapée au moment où la carte s'ouvre ne lui répond pas", async () => {
     const root = await repo("typeahead");
@@ -171,7 +200,9 @@ describe("sous-agents en arrière-plan", () => {
     const r = render(<App baseUrl={mock.url} cwd={join(work, "bg")} />);
     await frameHas(r, "Session de code sur");
     await type(r, "lance deux sous-agents en arrière-plan");
-    await frameHas(r, "(arrière-plan) : audit the test suite");
+    // La ligne « ↳ sous-agent … (arrière-plan) : <but> » est remplacée en place par l'état final : sans l'attente de 3 s
+    // qui précédait chaque tour (corrigée), elle peut ne jamais être vue ; on attend donc la fin des enfants.
+    await frameHas(r, "Sous-agent en arrière-plan");
     // les deux enfants finis, et le tour du parent rendu (delegate_status répond 409 pendant un tour)
     for (let i = 0; i < 200 && (r.lastFrame() ?? "").split("pour son résultat.").length < 3; i++) await wait(25);
     await wait(200);
@@ -208,6 +239,57 @@ describe("anglais par défaut", () => {
     expect(r.lastFrame()).toContain("/memory forget <note>");
     await type(r, "/agents");
     await frameHas(r, "No sub-agents on this thread.");
+    r.unmount();
+  });
+
+  it("/init : tour ordinaire avec le prompt fixe (« /init » seul à l'écran) ; refusé hors session de code", async () => {
+    setLang("en");
+    const root = await repo("init-repo");
+    const r = render(<App baseUrl={mock.url} cwd={root} />);
+    await frameHas(r, "Trust this repository's skills?");
+    await key(r, "n");
+    await type(r, "/init");
+    await frameHas(r, "› /init");
+    const sent = (): string[] => [...mock.state.threads.keys()].flatMap((id) => mock.state.messagesOf(id).filter((m) => m.role === "user").map((m) => m.content));
+    const t0 = Date.now();
+    while (!sent().some((c) => c.includes("AGENTS.md"))) {
+      if (Date.now() - t0 > 10_000) throw new Error("prompt /init jamais reçu");
+      await wait(50);
+    }
+    const prompt = sent().find((c) => c.includes("AGENTS.md"))!;
+    expect(prompt).toContain("already exists"); // le dépôt de test a un AGENTS.md
+    expect(prompt).toContain("Do NOT overwrite");
+    expect(r.lastFrame()).not.toContain("Scan this repository");
+    r.unmount();
+
+    const plain = render(<App baseUrl={mock.url} />);
+    await frameHas(plain, "connected");
+    await type(plain, "/init");
+    await frameHas(plain, "available in a code session");
+    plain.unmount();
+  });
+
+  it("références @ : Tab complète le chemin ; l'envoi garde la ligne tapée à l'écran et annonce ce qui est ajouté", async () => {
+    setLang("en");
+    const root = await repo("atref-repo");
+    await writeFile(join(root, "notes.txt"), "remember the milk\n");
+    const r = render(<App baseUrl={mock.url} cwd={root} />);
+    await frameHas(r, "Trust this repository's skills?");
+    await key(r, "n");
+    await wait(300);
+    r.stdin.write("read @not");
+    await wait(100);
+    r.stdin.write("\t");
+    await frameHas(r, "> read @notes.txt");
+    await key(r, "\r");
+    await frameHas(r, "· @ references added: notes.txt");
+    const sent = (): string[] => [...mock.state.threads.keys()].flatMap((id) => mock.state.messagesOf(id).filter((m) => m.role === "user").map((m) => m.content));
+    const t0 = Date.now();
+    while (!sent().some((c) => c.includes("remember the milk"))) {
+      if (Date.now() - t0 > 10_000) throw new Error("fichier jamais inséré dans le message");
+      await wait(50);
+    }
+    expect(r.lastFrame()).not.toContain("remember the milk");
     r.unmount();
   });
 });

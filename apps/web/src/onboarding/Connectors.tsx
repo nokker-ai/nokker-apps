@@ -28,6 +28,8 @@ export function ConnectorsStep(props: {
   lang: Lang;
   embedded?: boolean;
   anyLinked?: boolean;
+  /** Onboarding : aller tout de suite à Nokker (Telegram et le reste se règlent plus tard dans Mon compte). */
+  onStartNow?: () => void;
   onLinked?: (kind: ConnectorKind, linked: boolean) => void;
   onNext?: () => void;
 }): React.ReactElement {
@@ -73,11 +75,19 @@ export function ConnectorsStep(props: {
         </>
       )}
       {props.onNext && (
-        <div className="ob-actions">
-          <button type="button" className="ob-btn primary" onClick={props.onNext}>
-            {props.anyLinked ? t(L, "next") : t(L, "skip")}
-          </button>
-        </div>
+        <>
+          <div className="ob-actions">
+            {props.onStartNow ? (
+              <button type="button" className="ob-btn primary" onClick={props.onStartNow}>
+                {t(L, "startNow")}
+              </button>
+            ) : null}
+            <button type="button" className={"ob-btn" + (props.onStartNow ? "" : " primary")} onClick={props.onNext}>
+              {props.anyLinked || props.onStartNow ? t(L, "next") : t(L, "skip")}
+            </button>
+          </div>
+          {props.onStartNow ? <p className="ob-note">{t(L, "startNowNote")}</p> : null}
+        </>
       )}
     </section>
   );

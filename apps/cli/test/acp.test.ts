@@ -135,8 +135,9 @@ describe("nokker acp (ACP v1) contre le mock", () => {
   it("un tour : texte, outils avec effet, diff du patch, carte → permission, carte forte → terminal (machine non liée), coût", async () => {
     let terminalSeen = false;
     answer = (req) => {
-      // Commande de test : « Pour cette session » est la première option (mêmes règles que la CLI).
-      expect(req.options[0]!.name).toBe("For this session");
+      // Commande de test : « Pour cette session » est la première option (mêmes règles que la CLI), libellée d'après
+      // `suggested_rule_kinds` (noyau du 01.11) : la règle proposée en premier est la commande exacte.
+      expect(req.options[0]!.name).toBe("This exact command for this session");
       expect(req.options.map((o) => o.kind)).toContain("reject_once");
       return { outcome: { outcome: "selected", optionId: req.options[0]!.optionId } };
     };

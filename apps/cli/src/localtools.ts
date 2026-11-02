@@ -9,6 +9,7 @@ import type {
   ProjectMemoryList,
   ProjectMemoryView,
   ProjectSkillsStatus,
+  SessionModeState,
   SkillInfo,
   SubagentView,
   TodoItem,
@@ -70,11 +71,38 @@ export function hhmm(iso: string): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-export function formatCheckpoints(list: CheckpointInfo[]): string {
+/** Raison d'un point de retour dans la langue de l'interface, d'après son code stable (`reason_codes[hash]` de la réponse
+ * du noyau du 01.11) ; sans code (noyau plus ancien) ou code inconnu, le texte du noyau tel quel. `manual` et `other`
+ * gardent la raison libre donnée (« avant refactor »), qu'aucun code ne dit. */
+export function checkpointReason(code: string | undefined, text: string): string {
+  if (!code) return text;
+  const free = (text ?? "").trim();
+  switch (code) {
+    case "before_rollback":
+      return t("before rollback");
+    case "auto":
+      return t("automatic");
+    case "session_start":
+      return t("session start");
+    case "manual":
+      return ["", "manuel", "manual"].includes(free) ? t("manual") : `${t("manual")}: ${free}`;
+    case "other":
+      return free || t("other");
+  }
+  if (code.startsWith("before_") && code.length > "before_".length) return t("before {0}", code.slice("before_".length));
+  return text;
+}
+
+/** Code d'un point : `reason_codes` est indexé par le hash complet (liste) ou court (`restored_to`). */
+export function reasonCodeOf(codes: Record<string, string> | undefined, c: Pick<CheckpointInfo, "hash" | "short_hash">): string | undefined {
+  return codes?.[c.hash] ?? codes?.[c.short_hash];
+}
+
+export function formatCheckpoints(list: CheckpointInfo[], codes?: Record<string, string>): string {
   if (!list.length) return t("No checkpoints.");
   // Tour du point (noyau du 25.10 : `turn_index` 0 = premier tour) quand le lien est connu ; rien sinon.
   const turn = (c: CheckpointInfo): string => (typeof c.turn_index === "number" ? `  · ${t("turn {0}", c.turn_index + 1)}` : "");
-  const rows = list.map((c, i) => `${String(i + 1).padStart(2)}. ${c.short_hash}  ${hhmm(c.timestamp)}  ${c.reason}  (${c.files_changed > 1 ? t("{0} files", c.files_changed) : t("{0} file", c.files_changed)})${turn(c)}`);
+  const rows = list.map((c, i) => `${String(i + 1).padStart(2)}. ${c.short_hash}  ${hhmm(c.timestamp)}  ${checkpointReason(reasonCodeOf(codes, c), c.reason)}  (${c.files_changed > 1 ? t("{0} files", c.files_changed) : t("{0} file", c.files_changed)})${turn(c)}`);
   return `${t("Checkpoints (most recent first):")}\n${rows.join("\n")}\n/diff <hash|n> · /rollback <hash|n>`;
 }
 
@@ -400,4 +428,20 @@ export function findMemoryEntry(list: ProjectMemoryList, query: string): { name:
   if (exact) return exact;
   const pre = all.filter((e) => e.name.startsWith(query));
   return pre.length === 1 ? pre[0]! : null;
+}
+
+/** Barre d'état : `mode: plan`, ou `mode: auto → default` quand le dépôt ou une équipe restreint le mode choisi. */
+export function modeStatus(m: Pick<SessionModeState, "mode" | "effective"> | null): string | null {
+  if (!m) return null;
+  return m.effective && m.effective !== m.mode ? t("mode: {0} → {1}", m.mode, m.effective) : t("mode: {0}", m.mode);
+}
+
+/** `/mode` : mode choisi, mode en vigueur, liste. `effective` diffère du choix seulement quand le dépôt (`.nokker/settings.json`)
+ * ou une équipe impose un mode plus strict. */
+export function formatMode(m: SessionModeState): string {
+  const lines = [t("Mode of this session: {0}", m.mode)];
+  if (m.effective !== m.mode) lines.push(t("In effect: {0} (the repository or a team imposes a stricter mode)", m.effective));
+  else lines.push(t("In effect: {0}", m.effective));
+  lines.push(t("Modes: {0} — /mode <name> changes it for this session only (until the core restarts).", m.modes.join(", ")));
+  return lines.join("\n");
 }

@@ -48,13 +48,12 @@ function nextNoonUtc(now = new Date()): string {
   return d.toISOString();
 }
 
-/** Lundi 06:00 UTC : `offsetDays` 0 = le prochain, -7 = celui d'avant. */
-function weekStartUtc(offsetDays: number, now = new Date()): string {
+/** Fenêtre de la semaine : du lundi 06:00 UTC passé au prochain lundi 06:00 UTC (strictement après `now`). */
+export function weekWindowUtc(now = new Date()): { starts: string; resets_at: string } {
   const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 6));
-  const toMonday = (8 - d.getUTCDay()) % 7 || 7;
-  d.setUTCDate(d.getUTCDate() + toMonday + offsetDays);
-  if (offsetDays === 0 && d.getTime() - now.getTime() > 7 * 86_400_000) d.setUTCDate(d.getUTCDate() - 7);
-  return d.toISOString();
+  d.setUTCDate(d.getUTCDate() + ((8 - d.getUTCDay()) % 7));
+  if (d.getTime() <= now.getTime()) d.setUTCDate(d.getUTCDate() + 7);
+  return { starts: new Date(d.getTime() - 7 * 86_400_000).toISOString(), resets_at: d.toISOString() };
 }
 
 const zurichDay = (): string => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Zurich" }).format(new Date());
@@ -131,8 +130,7 @@ export async function handleAccount(
         turns: { used: m.turnsToday, cap: dayCap, over: dayCap !== null && m.turnsToday > dayCap, hard_cap: dayCap === null ? null : 150 },
       },
       week: {
-        starts: weekStartUtc(-7),
-        resets_at: weekStartUtc(0),
+        ...weekWindowUtc(),
         turns: { used: weekUsed, cap: weekCap, over: weekCap !== null && weekUsed > weekCap },
       },
       month: { turns: { used: 412 } },

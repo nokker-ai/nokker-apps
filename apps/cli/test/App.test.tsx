@@ -68,9 +68,9 @@ describe("App (session locale)", () => {
     // mode accept_edits : le patch passe sans carte, la première carte est pytest (terminal)
     expect(r.lastFrame()).toContain("✓ patch src/app.py");
     expect(r.lastFrame()).toContain("Command: pytest -q tests/test_add.py");
-    expect(r.lastFrame()).toContain("3. Always this command");
-    // commande de test : « Pour cette session » est la touche 1
-    expect(r.lastFrame()).toMatch(/1\. For this session[\s\S]*2\. Once/);
+    expect(r.lastFrame()).toContain("3. Always this exact command");
+    // commande de test : « Pour cette session » est la touche 1 (libellé d'après `suggested_rule_kinds`)
+    expect(r.lastFrame()).toMatch(/1\. This exact command for this session[\s\S]*2\. Once/);
     await wait(150); // laisse Ink brancher les touches de la carte
     r.stdin.write("1");
     await frameHas(r, "✓ Approved (for this session): terminal pytest -q tests/test_add.py");

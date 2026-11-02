@@ -37,7 +37,7 @@ async function writeLokkal(over: Record<string, unknown> = {}): Promise<{ compos
   );
   return { compose, envFile };
 }
-const releases = (tags: Array<{ tag_name: string; prerelease?: boolean }>, assets: Record<string, Buffer | number> = {}): NonNullable<Parameters<typeof runUpdate>[0]["http"]> =>
+const releases = (tags: Array<{ tag_name: string; prerelease?: boolean; draft?: boolean }>, assets: Record<string, Buffer | number> = {}): NonNullable<Parameters<typeof runUpdate>[0]["http"]> =>
   (async (url: string) => {
     const ok = (body: unknown) => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => body, text: async () => String(body), arrayBuffer: async () => body as ArrayBuffer });
     if (url.includes("api.github.com")) return ok(tags);
@@ -209,6 +209,27 @@ describe("lokkal.json et serveur", () => {
   });
 });
 
+/** Exécuteur factice : enregistre les appels ; `cosign` absent (ENOENT), présent et valide, ou présent et refusant. */
+function hostRun(calls: string[][], cosign: "absent" | "ok" | "bad"): Runner {
+  return async (cmd, args) => {
+    calls.push([cmd, ...args]);
+    if (cmd === "cosign" && cosign === "absent") return { code: null, stdout: "", stderr: "", error: "ENOENT" };
+    if (cmd === "cosign" && args[0] === "verify-blob" && cosign === "bad") return { code: 1, stdout: "", stderr: "no matching signatures\n" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+}
+const INSTALLER = Buffer.from("#!/bin/sh\necho installeur factice\n");
+async function installerAssets(body: Buffer = INSTALLER, sha?: string): Promise<Record<string, Buffer>> {
+  const { createHash } = await import("node:crypto");
+  return {
+    "/install.sh": body,
+    "/install.sh.sha256": Buffer.from(`${sha ?? createHash("sha256").update(body).digest("hex")}  install.sh\n`),
+    "/install.sh.sigstore.json": Buffer.from("{}"),
+  };
+}
+/** Appels qui EXÉCUTENT un installeur (sh/bash sur un install.sh, directement ou via wsl.exe). */
+const installerRuns = (calls: string[][]): string[][] => calls.filter((c) => c.some((a) => a.endsWith("install.sh")) && c[0] !== "cosign");
+
 describe("Windows + WSL 2 et install_dir", () => {
   const UNC = "\\\\wsl.localhost\\Ubuntu\\home\\nina\\.nokker\\state\\local-token";
   const wsl = {
@@ -242,25 +263,19 @@ describe("Windows + WSL 2 et install_dir", () => {
 
     const ucalls: string[][] = [];
     const code = await runUpdate({
-      serverUrl: mock.url, check: false, run: recording(ucalls), http: releases([{ tag_name: "lokkal-v0.2.0" }]),
+      serverUrl: mock.url, check: false, run: hostRun(ucalls, "absent"), http: releases([{ tag_name: "lokkal-v0.2.0" }], await installerAssets()),
       out: () => {}, err: () => {}, healthWaitMs: 10, selfPath: null,
     });
     expect(code).toBe(0);
-    expect(ucalls.map((c) => c.join(" "))).toContain("wsl.exe -d Ubuntu -- sh /home/nina/.nokker/install.sh --update");
+    const inst = installerRuns(ucalls);
+    expect(inst).toHaveLength(1);
+    // l'installeur téléchargé est sur le disque Windows : wslpath -u le traduit dans la distro
+    expect(inst[0]!.slice(0, 6)).toEqual(["wsl.exe", "-d", "Ubuntu", "--", "sh", "-c"]);
+    expect(inst[0]![6]).toContain("wslpath -u");
+    expect(inst[0]![7]).toBe("sh");
+    expect(inst[0]![8]).toMatch(/install\.sh$/);
+    expect(inst[0]!.slice(9)).toEqual(["--update", "--version", "0.2.0", "--dir", "/home/nina/.nokker"]);
     expect(ucalls.some((c) => c.includes("pull"))).toBe(false);
-    await rm(join(dir, "lokkal.json"));
-  });
-
-  it("Linux/macOS : <install_dir>/install.sh --update est préféré à celui du compose", async () => {
-    const instDir = join(dir, "inst");
-    await (await import("node:fs/promises")).mkdir(instDir, { recursive: true });
-    await writeFile(join(instDir, "install.sh"), "#!/bin/sh\n");
-    await writeLokkal({ install_dir: instDir });
-    await writeFile(join(dir, "install.sh"), "#!/bin/sh\n"); // à côté du compose : doit perdre
-    const calls: string[][] = [];
-    await runUpdate({ serverUrl: mock.url, check: false, run: recording(calls), http: releases([{ tag_name: "lokkal-v0.2.0" }]), out: () => {}, err: () => {}, healthWaitMs: 10, selfPath: null });
-    expect(calls.map((c) => c.join(" "))).toContain(`bash ${join(instDir, "install.sh")} --update`);
-    await rm(join(dir, "install.sh"));
     await rm(join(dir, "lokkal.json"));
   });
 
@@ -280,10 +295,10 @@ describe("update", () => {
     expect(err).toContain("no Lokkal installed");
   });
 
-  it("--check compare la version installée à la dernière release lokkal-v* (ignore les autres tags et préversions)", async () => {
+  it("--check compare la version installée à la release lokkal-v* la plus haute (ignore les autres tags et les brouillons)", async () => {
     await writeLokkal({ version: "0.1.0" });
     let out = "";
-    const http = releases([{ tag_name: "cli-v9.9.9" }, { tag_name: "lokkal-v0.3.0-rc1", prerelease: true }, { tag_name: "lokkal-v0.2.0" }, { tag_name: "lokkal-v0.1.0" }]);
+    const http = releases([{ tag_name: "cli-v9.9.9" }, { tag_name: "lokkal-v0.3.0", draft: true }, { tag_name: "lokkal-v0.2.0-rc1", prerelease: true }, { tag_name: "lokkal-v0.2.0" }, { tag_name: "lokkal-v0.1.0" }]);
     const code = await runUpdate({ serverUrl: mock.url, check: true, run: noDocker, http, out: (t) => (out += t), err: () => {} });
     expect(code).toBe(0);
     expect(out).toContain("Installed: 0.1.0");
@@ -313,7 +328,7 @@ describe("update", () => {
     let out = "";
     const code = await runUpdate({
       serverUrl: mock.url, check: false, run: recording(calls), http: releases([{ tag_name: "lokkal-v0.2.0" }]),
-      out: (t) => (out += t), err: () => {}, healthWaitMs: 10, selfPath: null, nokkerHome: join(dir, "nope"),
+      out: (t) => (out += t), err: () => {}, healthWaitMs: 10, selfPath: null,
     });
     expect(code).toBe(0);
     expect((await readFile(envFile, "utf-8"))).toBe("FOO=1\nNOKKER_VERSION=0.2.0\n");
@@ -323,18 +338,95 @@ describe("update", () => {
     expect(JSON.parse(await readFile(join(dir, "lokkal.json"), "utf-8")).version).toBe("0.2.0");
   });
 
-  it("install.sh à côté du compose : préféré (install.sh --update)", async () => {
-    await writeLokkal({ version: "0.1.0" });
-    await writeFile(join(dir, "install.sh"), "#!/bin/sh\n");
+  it("install.sh de la version CIBLE téléchargé, empreinte bonne : sh <install.sh> --update --version <cible>, cosign absent dit", async () => {
+    const instDir = join(dir, "inst");
+    await writeLokkal({ version: "0.1.0", install_dir: instDir });
+    const tmpRoot = await mkdtemp(join(tmpdir(), "nokker-upd-tmp-"));
     const calls: string[][] = [];
-    const code = await runUpdate({
-      serverUrl: mock.url, check: false, run: recording(calls), http: releases([{ tag_name: "lokkal-v0.2.0" }]),
-      out: () => {}, err: () => {}, healthWaitMs: 10, selfPath: null,
-    });
+    const urls: string[] = [];
+    const base = releases([{ tag_name: "lokkal-v0.3.0" }], await installerAssets());
+    const http = (async (url: string, init?: unknown) => (urls.push(url), base(url, init as never))) as typeof base;
+    let out = "";
+    const code = await runUpdate({ serverUrl: mock.url, check: false, run: hostRun(calls, "absent"), http, out: (t) => (out += t), err: () => {}, healthWaitMs: 10, selfPath: null, tmpRoot });
     expect(code).toBe(0);
-    expect(calls.some((c) => c.join(" ") === `bash ${join(dir, "install.sh")} --update`)).toBe(true);
+    expect(urls).toContain("https://github.com/nokker-ai/nokker/releases/download/lokkal-v0.3.0/install.sh");
+    expect(urls).toContain("https://github.com/nokker-ai/nokker/releases/download/lokkal-v0.3.0/install.sh.sha256");
+    const inst = installerRuns(calls);
+    expect(inst).toHaveLength(1);
+    expect(inst[0]![0]).toBe("sh");
+    expect(inst[0]![1]!.startsWith(tmpRoot)).toBe(true);
+    expect(inst[0]!.slice(2)).toEqual(["--update", "--version", "0.3.0", "--dir", instDir]);
+    expect(out).toContain("signature NOT verified (cosign is not installed)");
     expect(calls.some((c) => c.includes("pull"))).toBe(false);
-    await rm(join(dir, "install.sh"));
+    expect(await (await import("node:fs/promises")).readdir(tmpRoot)).toEqual([]); // dossier temporaire effacé
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("empreinte d'install.sh fausse : refus, rien n'est exécuté ni modifié", async () => {
+    const { envFile } = await writeLokkal({ version: "0.1.0" });
+    const tmpRoot = await mkdtemp(join(tmpdir(), "nokker-upd-tmp-"));
+    const calls: string[][] = [];
+    let err = "";
+    const http = releases([{ tag_name: "lokkal-v0.3.0" }], await installerAssets(INSTALLER, "ab".repeat(32)));
+    const code = await runUpdate({ serverUrl: mock.url, check: false, run: hostRun(calls, "ok"), http, out: () => {}, err: (t) => (err += t), healthWaitMs: 10, selfPath: null, tmpRoot });
+    expect(code).toBe(1);
+    expect(err).toContain("wrong sha256 checksum for install.sh");
+    expect(err).toContain("Nothing was run");
+    expect(installerRuns(calls)).toEqual([]);
+    expect(calls.some((c) => c.includes("pull") || c.includes("up"))).toBe(false); // pas de repli non plus
+    expect(await readFile(envFile, "utf-8")).toBe("FOO=1\nNOKKER_VERSION=0.1.0\n");
+    expect(await (await import("node:fs/promises")).readdir(tmpRoot)).toEqual([]); // rien n'a même été écrit
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("install.sh sans .sha256 dans la release : refus (empreinte obligatoire)", async () => {
+    await writeLokkal({ version: "0.1.0" });
+    const calls: string[][] = [];
+    let err = "";
+    const http = releases([{ tag_name: "lokkal-v0.3.0" }], { "/install.sh": INSTALLER });
+    expect(await runUpdate({ serverUrl: mock.url, check: false, run: hostRun(calls, "absent"), http, out: () => {}, err: (t) => (err += t), healthWaitMs: 10, selfPath: null })).toBe(1);
+    expect(err).toContain("no install.sh.sha256");
+    expect(installerRuns(calls)).toEqual([]);
+  });
+
+  it("cosign présent : verify-blob avec l'identité et l'émetteur d'install.sh ; signature fausse = refus", async () => {
+    await writeLokkal({ version: "0.1.0" });
+    const calls: string[][] = [];
+    let out = "";
+    const http = releases([{ tag_name: "lokkal-v0.3.0" }], await installerAssets());
+    expect(await runUpdate({ serverUrl: mock.url, check: false, run: hostRun(calls, "ok"), http, out: (t) => (out += t), err: () => {}, healthWaitMs: 10, selfPath: null })).toBe(0);
+    const v = calls.find((c) => c[0] === "cosign" && c[1] === "verify-blob")!;
+    expect(v).toContain("--bundle");
+    expect(v[v.indexOf("--certificate-identity-regexp") + 1]).toBe("^https://github\\.com/nokker-ai/nokker/\\.github/workflows/lokkal-images\\.yml@refs/tags/lokkal-v");
+    expect(v[v.indexOf("--certificate-oidc-issuer") + 1]).toBe("https://token.actions.githubusercontent.com");
+    expect(v.at(-1)).toMatch(/install\.sh$/);
+    expect(out).toContain("sha256 and cosign signature verified");
+    expect(installerRuns(calls)).toHaveLength(1);
+
+    const bad: string[][] = [];
+    let err = "";
+    expect(await runUpdate({ serverUrl: mock.url, check: false, run: hostRun(bad, "bad"), http, out: () => {}, err: (t) => (err += t), healthWaitMs: 10, selfPath: null })).toBe(1);
+    expect(err).toContain("cosign verification of install.sh failed (no matching signatures)");
+    expect(installerRuns(bad)).toEqual([]);
+  });
+
+  it("--version X.Y.Z : cible explicite, sans consulter la liste des releases ; retour en arrière refusé", async () => {
+    await writeLokkal({ version: "0.1.0" });
+    const calls: string[][] = [];
+    const urls: string[] = [];
+    const base = releases([], await installerAssets());
+    const http = (async (url: string, init?: unknown) => (urls.push(url), base(url, init as never))) as typeof base;
+    expect(await runUpdate({ serverUrl: mock.url, check: false, version: "0.2.5", run: hostRun(calls, "absent"), http, out: () => {}, err: () => {}, healthWaitMs: 10, selfPath: null })).toBe(0);
+    expect(urls.some((u) => u.includes("api.github.com"))).toBe(false);
+    expect(urls[0]).toBe("https://github.com/nokker-ai/nokker/releases/download/lokkal-v0.2.5/install.sh");
+    expect(installerRuns(calls)[0]!.slice(2, 5)).toEqual(["--update", "--version", "0.2.5"]);
+
+    await writeLokkal({ version: "0.3.0" });
+    let err = "";
+    const back: string[][] = [];
+    expect(await runUpdate({ serverUrl: mock.url, check: false, version: "0.2.0", run: hostRun(back, "absent"), http, out: () => {}, err: (t) => (err += t), healthWaitMs: 10, selfPath: null })).toBe(1);
+    expect(err).toContain("downgrades are not supported");
+    expect(installerRuns(back)).toEqual([]);
   });
 
   const body = Buffer.alloc(1_200_000, 7);
@@ -415,6 +507,46 @@ describe("update", () => {
     expect((await readFile(`${self}.new`)).length).toBe(1_200_000);
     expect(out).toContain("nokker.exe.new");
     expect(await readFile(self, "utf-8")).toBe("ancien");
+  });
+
+  it("latestRelease : la plus haute en semver, quel que soit l'ordre de l'API", async () => {
+    const { latestRelease } = await import("../src/update.js");
+    const latest = async (tags: Array<{ tag_name: string; prerelease?: boolean; draft?: boolean }>) => (await latestRelease(releases(tags)))?.version ?? null;
+    const pre = (v: string) => ({ tag_name: `lokkal-v${v}`, prerelease: true });
+    expect(await latest([pre("0.1.0-rc.9"), pre("0.1.0-rc.10"), pre("0.1.0-rc.2")])).toBe("0.1.0-rc.10");
+    expect(await latest([pre("0.1.0-rc.8"), pre("0.1.0-rc.8.1"), pre("0.1.0-rc.7")])).toBe("0.1.0-rc.8.1");
+    expect(await latest([pre("0.1.0-rc.8.1"), { tag_name: "lokkal-v0.1.0" }, pre("0.1.0-rc.12")])).toBe("0.1.0");
+    // préversion retenue seulement si aucune finale n'est plus haute
+    expect(await latest([{ tag_name: "lokkal-v0.1.0" }, pre("0.2.0-rc.1")])).toBe("0.2.0-rc.1");
+    expect(await latest([pre("0.2.0-rc.1"), { tag_name: "lokkal-v0.2.1" }, pre("0.2.1-rc.3")])).toBe("0.2.1");
+    // ordre de l'API mélangé, brouillon plus haut ignoré, tags étrangers ou mal formés ignorés
+    expect(
+      await latest([
+        pre("0.1.0-rc.7"), { tag_name: "lokkal-v0.0.9" }, { tag_name: "lokkal-v9.0.0", draft: true }, { tag_name: "cli-v5.0.0" },
+        { tag_name: "lokkal-vnext" }, pre("0.1.0-rc.10"), { tag_name: "lokkal-v0.0.10" }, pre("0.1.0-rc.8.1"),
+      ]),
+    ).toBe("0.1.0-rc.10");
+    expect(await latest([{ tag_name: "lokkal-v1.0.0", draft: true }])).toBeNull();
+  });
+
+  it("compareSemver", async () => {
+    const { compareSemver } = await import("../src/version.js");
+    expect(compareSemver("0.1.0-rc.10", "0.1.0-rc.9")).toBe(1);
+    expect(compareSemver("0.1.0-rc.8.1", "0.1.0-rc.8")).toBe(1);
+    expect(compareSemver("0.1.0", "0.1.0-rc.99")).toBe(1);
+    expect(compareSemver("0.1.0-rc.7", "0.1.0")).toBe(-1);
+    expect(compareSemver("0.1.0-rc.8", "0.1.0-rc.8")).toBe(0);
+    expect(compareSemver("0.1.0-rc10", "0.1.0-rc9")).toBe(1);
+    expect(compareSemver("0.1.0-1", "0.1.0-alpha")).toBe(-1);
+    expect(compareSemver("0.2.0-rc.1", "0.1.9")).toBe(1);
+  });
+
+  it("noyau en rc.7, cible rc.8 : la mise à jour a bien lieu (les préversions comptent)", async () => {
+    await writeLokkal({ version: "0.1.0-rc.7" });
+    const calls: string[][] = [];
+    const http = releases([{ tag_name: "lokkal-v0.1.0-rc.7", prerelease: true }, { tag_name: "lokkal-v0.1.0-rc.8", prerelease: true }], await installerAssets());
+    expect(await runUpdate({ serverUrl: mock.url, check: false, run: hostRun(calls, "absent"), http, out: () => {}, err: () => {}, healthWaitMs: 10, selfPath: null })).toBe(0);
+    expect(installerRuns(calls)[0]!.slice(2, 5)).toEqual(["--update", "--version", "0.1.0-rc.8"]);
   });
 
   it("versions", () => {

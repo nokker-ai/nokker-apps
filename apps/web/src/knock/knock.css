@@ -1,0 +1,76 @@
+/* Knock to call (KNOCK.md §7). Tokens of theme.css only. */
+.knock-pill {
+  position: relative;
+  flex: none;
+  height: 44px;
+  min-width: 44px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--tool);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.knock-pill:hover {
+  color: var(--strong);
+  background: rgba(var(--ov), 0.06);
+}
+.knock-pill.live {
+  border-color: rgba(var(--ok-rgb), 0.6);
+  color: var(--ok);
+}
+.knock-pill.live::after {
+  content: "";
+  position: absolute;
+  right: 5px;
+  top: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  animation: knockbreath 2.4s ease-in-out infinite;
+}
+.knock-pill.muted {
+  border-style: dashed;
+}
+.knock-pill.paused {
+  color: var(--muted);
+}
+.app.narrow .knock-pill {
+  width: 44px;
+  min-width: 44px;
+  flex: 0 0 44px;
+  padding: 0;
+}
+.app.narrow .knock-pill-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+@keyframes knockbreath {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .knock-pill.live::after {
+    animation: none;
+  }
+}
+.knock-card .ob-check.disabled {
+  opacity: 0.6;
+}
+.knock-why {
+  margin-top: 4px;
+}
+.knock-actions {
+  flex-wrap: wrap;
+}

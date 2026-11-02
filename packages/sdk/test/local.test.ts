@@ -36,6 +36,24 @@ describe("session locale et annulation", () => {
     expect(calls[2]).toMatchObject({ url: "http://x/v1/threads/th_abc/cancel", method: "POST" });
   });
 
+  it("mode d'une session (§7.4.10) : GET/PUT …/mode, 400 bad_mode lisible par NokkerApiError.code", async () => {
+    const calls: Array<{ url: string; method?: string; body?: string }> = [];
+    const fetchImpl = vi.fn(async (url: string, init: { method?: string; body?: string }) => {
+      calls.push({ url, method: init.method, body: init.body });
+      if (init.method === "PUT" && JSON.parse(init.body!).mode === "yolo") return jsonResponse(400, { error: { code: "bad_mode", message: "mode refusé" } });
+      const mode = init.method === "PUT" ? JSON.parse(init.body!).mode : "accept_edits";
+      return jsonResponse(200, { mode, modes: ["default", "accept_edits", "auto", "plan"], effective: mode === "auto" ? "default" : mode });
+    }) as unknown as FetchLike;
+    const c = new NokkerClient({ baseUrl: "http://x", token: "t", fetchImpl });
+    expect(await c.getLocalSessionMode("th/a")).toMatchObject({ mode: "accept_edits", effective: "accept_edits" });
+    expect(calls[0]).toMatchObject({ url: "http://x/v1/local/sessions/th%2Fa/mode" });
+    expect(await c.setLocalSessionMode("th/a", "auto")).toMatchObject({ mode: "auto", effective: "default" });
+    expect(calls[1]).toMatchObject({ method: "PUT", body: JSON.stringify({ mode: "auto" }) });
+    const err = await c.setLocalSessionMode("th/a", "yolo").catch((e: unknown) => e);
+    expect((err as { status: number; code?: string }).status).toBe(400);
+    expect((err as { code?: string }).code).toBe("bad_mode");
+  });
+
   it("listLocalSessions accepte {sessions: [...]} (noyau) et un tableau nu", async () => {
     const row = { thread_id: "th_1", cwd: "/w", title: "w", last_turn_at: null };
     for (const payload of [{ sessions: [row] }, [row]]) {
@@ -119,9 +137,27 @@ describe("callLocalTool", () => {
     expect(JSON.parse(calls[0]!.body!)).toEqual({ thread_id: "th_1", name: "todo", arguments: { x: 1 } });
     expect(await c.callLocalTool("th_1", "checkpoint_restore", { hash: "h", safe: true })).toEqual({ approval_id: "appr_1" });
     expect(LOCAL_TOOL_CALL_PATH).toBe("/v1/local/tools/call");
-    expect(LOCAL_TOOL_NAMES).toHaveLength(9);
+    expect(LOCAL_TOOL_NAMES).toHaveLength(11);
+    expect(LOCAL_TOOL_NAMES).toContain("lsp_diagnostics");
     expect(parseToolJson<{ a: number }>("{\"a\":1}")).toEqual({ a: 1 });
     expect(parseToolJson("pas du json")).toBeNull();
+  });
+
+  it("lsp_diagnostics {paths} ; l'événement lsp.diagnostics est un type connu, décodé depuis la ligne event:", async () => {
+    const { toNokkerEvent } = await import("../src/events.js");
+    const { NOKKER_EVENT_TYPES } = await import("../src/types.js");
+    const calls: string[] = [];
+    const fetchImpl = (async (_url: string, init: { body?: string }) => {
+      calls.push(init.body!);
+      return jsonResponse(200, { content: JSON.stringify({ files: [{ path: "src/calc.py", errors: 1, warnings: 0, items: [{ line: 3, col: 5, severity: "error", code: "x", message: "m" }] }], language_servers: ["pyright"] }), is_error: false });
+    }) as unknown as FetchLike;
+    const c = new NokkerClient({ baseUrl: "http://x", token: "t", fetchImpl });
+    const r = await c.callLocalTool("th_1", "lsp_diagnostics", { paths: ["src/calc.py"] });
+    expect(JSON.parse(calls[0]!)).toEqual({ thread_id: "th_1", name: "lsp_diagnostics", arguments: { paths: ["src/calc.py"] } });
+    expect("content" in r && JSON.parse(r.content).files[0].errors).toBe(1);
+    expect(NOKKER_EVENT_TYPES).toContain("lsp.diagnostics");
+    const ev = toNokkerEvent("lsp.diagnostics", { thread_id: "th_1", path: "src/calc.py", counts: { error: 2, warning: 0 }, items: [] });
+    expect(ev).toMatchObject({ type: "lsp.diagnostics", path: "src/calc.py", counts: { error: 2 } });
   });
 
   it("403 devient une NokkerApiError", async () => {
@@ -142,6 +178,18 @@ describe("skills du dépôt et sous-agents (LOKKAL §7.21, §7.22)", () => {
     expect(await c.trustProjectSkills("th_1", "ab")).toEqual({ thread_id: "th_1", root: "/w/p", sha256: "ab", trusted: true });
     expect(calls[0]).toMatchObject({ url: "http://x/v1/local/skills/trust", method: "POST" });
     expect(JSON.parse(calls[0]!.body!)).toEqual({ thread_id: "th_1", sha256: "ab" });
+  });
+
+  it("getLocalSessionSkills : GET /v1/local/sessions/{id}/skills (reprise, §7.21.4)", async () => {
+    const calls: Array<{ url: string; method?: string }> = [];
+    const body = { thread_id: "th_1", skills: { enabled: true, project: "untrusted", root: "/w/p", sha256: "ab", count: 1, notice: "n" } };
+    const fetchImpl = vi.fn(async (url: string, init: { method?: string }) => {
+      calls.push({ url, method: init.method });
+      return jsonResponse(200, body);
+    }) as unknown as FetchLike;
+    const c = new NokkerClient({ baseUrl: "http://x", token: "t", fetchImpl });
+    expect(await c.getLocalSessionSkills("th_1")).toEqual(body);
+    expect(calls[0]!.url).toBe("http://x/v1/local/sessions/th_1/skills");
   });
 
   it("subagentParent : parent_thread_id, sinon thread_id", async () => {

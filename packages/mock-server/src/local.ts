@@ -11,6 +11,7 @@
  * `state.localWrites` : `patch` et `write_file` écrivent vraiment dans le dossier de la session.
  */
 import { basename, isAbsolute, relative, resolve } from "node:path";
+import { kernelGoalTurn } from "./goals.js";
 import {
   argsSha256,
   decide,
@@ -18,6 +19,8 @@ import {
   type Approval,
   type ApprovalContinuation,
   type LocalToolEffect,
+  type SuggestedRuleKind,
+  type LspDiagnosticItem,
 } from "@nokker-apps/sdk";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -26,6 +29,7 @@ import { autoCheckpoint } from "./localtools.js";
 import { LOCAL_OWNER, MockState, normalize, randomId, type ApprovalOutcome } from "./state.js";
 import { publishTurnCost } from "./cost.js";
 import { children, type MockChild } from "./project.js";
+import { MOCK_CALC_ERRORS, publishLspDiagnostics } from "./lsp.js";
 
 const APPROVAL_TTL_MS = 300_000;
 
@@ -69,6 +73,10 @@ export function redactArgs(args: Record<string, unknown>): Record<string, unknow
 export interface LocalTurnResult {
   reply: string;
   cancelled: boolean;
+  /** `turn.done.refused` (noyau du 01.11) : un effet refusé d'office (deny, hardline) ou une carte rejetée pendant le tour. */
+  refused?: boolean;
+  /** `turn.done.error` (noyau du 01.11) : le tour a échoué. */
+  error?: { code: string; message: string };
 }
 
 interface Step {
@@ -80,6 +88,8 @@ interface Step {
   preview: string;
   /** Écriture en direct (X22) : ce que le « modèle » écrit, montré avant le `tool.call`. */
   live?: { field: "content" | "new_string" | "patch"; text: string };
+  /** Drapeau `state.lsp` : état du fichier publié en `lsp.diagnostics` après l'écriture réussie (lot 13). */
+  diagnostics?: LspDiagnosticItem[];
 }
 
 function sleep(state: MockState, ms: number, signal: AbortSignal): Promise<void> {
@@ -95,14 +105,43 @@ function sleep(state: MockState, ms: number, signal: AbortSignal): Promise<void>
   });
 }
 
-function scenarioFor(text: string): { kind: "fix" | "hardline" | "delegate" | "background" | "plain"; test: string } {
+function scenarioFor(text: string): { kind: "fix" | "hardline" | "delegate" | "background" | "lsp" | "lspFix" | "fail" | "long" | "plain"; test: string } {
   const n = normalize(text);
   const test = text.match(/\btest[\s_:]*([\w./-]+)/i)?.[1] ?? "test_app";
+  // Tour en échec (D7) : `turn.done.error {code: provider_error}`.
+  if (/simulate (?:a |an )?(?:provider )?(?:error|failure)|simule une (?:erreur|panne)/.test(n)) return { kind: "fail", test };
+  // Longue réponse streamée PENDANT le tour (D6) : l'annulation coupe le texte partiel (reset + réponse finale).
+  if (/long (?:answer|reply|essay)|longue reponse/.test(n)) return { kind: "long", test };
   if (/rm -rf \/|mkfs|fork bomb|efface tout le disque|wipe the (?:whole|entire) disk/.test(n)) return { kind: "hardline", test };
   if (/arriere-plan|background/.test(n)) return { kind: "background", test };
+  // Diagnostics de langage (lot 13) : « break the types » écrit deux erreurs dans src/calc.py, « fix the type errors » les répare.
+  if (/type errors?|erreurs? de typage|diagnostics?/.test(n)) return { kind: /(corrig|repar|fix)/.test(n) ? "lspFix" : "lsp", test };
+  if (/break the types|casse le typage/.test(n)) return { kind: "lsp", test };
   if (/sous-?agent|sub-?agent|delegu|delegate|en parallele|in parallel/.test(n)) return { kind: "delegate", test };
   if (/(corrig|repar|fix|debug)/.test(n) && /test/.test(n)) return { kind: "fix", test };
   return { kind: "plain", test };
+}
+
+/** Vérifications d'objectif déjà répondues, par fil (scénario `/goal`). */
+const goalChecks = new WeakMap<MockState, Map<string, number>>();
+
+/** Faux modèle pour `/goal` de la CLI : une vérification (les deux marqueurs dans la demande) répond `GOAL: CONTINUE`
+ * `goalChecksBeforeDone` fois par fil, puis `GOAL: DONE` ; une relance (« Continue toward the session goal ») répond
+ * une phrase. `null` : ce n'est pas un tour d'objectif. */
+async function goalTurn(state: MockState, threadId: string, userText: string, signal: AbortSignal): Promise<LocalTurnResult | null> {
+  const check = userText.includes("GOAL: DONE") && userText.includes("GOAL: CONTINUE");
+  const cont = /^Continue toward the session goal/.test(userText);
+  if (!check && !cont) return null;
+  await sleep(state, 120, signal);
+  if (signal.aborted) return { reply: "", cancelled: true };
+  if (cont) return { reply: "I did one more step toward the goal.", cancelled: false };
+  let m = goalChecks.get(state);
+  if (!m) goalChecks.set(state, (m = new Map()));
+  const n = m.get(threadId) ?? 0;
+  m.set(threadId, n + 1);
+  return n < state.goalChecksBeforeDone
+    ? { reply: "Not yet: one step is left.\nGOAL: CONTINUE", cancelled: false }
+    : { reply: "Yes, everything asked is done.\nGOAL: DONE", cancelled: false };
 }
 
 export async function runLocalTurn(
@@ -111,7 +150,13 @@ export async function runLocalTurn(
   turnId: string,
   userText: string,
   signal: AbortSignal,
+  onPartial?: (text: string) => void,
+  control?: string,
 ): Promise<LocalTurnResult> {
+  const kernel = await kernelGoalTurn(state, threadId, control, signal);
+  if (kernel) return kernel;
+  const goal = await goalTurn(state, threadId, userText, signal);
+  if (goal) return goal;
   const sc = scenarioFor(userText);
   const meta = state.localSessions.get(threadId);
   const folder = meta ? localTitle(meta.cwd) : "folder";
@@ -119,6 +164,27 @@ export async function runLocalTurn(
   const steps: Step[] = [];
   let rejected = false;
 
+  if (sc.kind === "fail") {
+    await sleep(state, 60, signal);
+    if (signal.aborted) return { reply: "", cancelled: true };
+    return {
+      reply: "The model provider did not answer; the turn stopped without a conclusion.",
+      cancelled: false,
+      error: { code: "provider_error", message: "upstream 502 (mock)" },
+    };
+  }
+  if (sc.kind === "long") {
+    // Le texte part au fil de l'eau (jetons en direct) : `onPartial` l'écrit dans le flux du tour, avant la fin.
+    const words = "Here is a long answer, written word by word so that a cancellation catches it halfway through the text and the client must drop the partial text it already shows.".split(" ");
+    let text = "";
+    for (const w of words) {
+      await sleep(state, 40, signal);
+      if (signal.aborted) return { reply: "", cancelled: true };
+      text += `${w} `;
+      onPartial?.(`${w} `);
+    }
+    return { reply: text.trim(), cancelled: false };
+  }
   if (sc.kind === "plain") {
     await sleep(state, 120, signal);
     return signal.aborted
@@ -132,6 +198,19 @@ export async function runLocalTurn(
     return r;
   } else if (sc.kind === "background") {
     return runBackgroundDelegate(state, threadId, turnId);
+  } else if (sc.kind === "lsp" || sc.kind === "lspFix") {
+    const broken = sc.kind === "lsp";
+    steps.push({
+      name: "patch",
+      effect: "write",
+      args: { path: "src/calc.py", old: broken ? "return total" : "return totl.foo", new: broken ? "return totl.foo" : "return total" },
+      ms: 60,
+      preview: broken ? "--- src/calc.py\n-    return total\n+    return totl.foo" : "--- src/calc.py\n-    return totl.foo\n+    return total",
+      diagnostics: broken ? MOCK_CALC_ERRORS : [],
+    });
+    const r = await runSteps(state, threadId, turnId, steps, signal);
+    if (r.cancelled) return { reply: "", cancelled: true };
+    return { reply: broken ? "I edited `src/calc.py`." : "I fixed the type errors in `src/calc.py`.", cancelled: false };
   } else {
     steps.push(
       { name: "read_file", effect: "read", args: { path: testFile }, ms: 12, preview: `def test_add():\n    assert add(2, 3) == 5\n# ${testFile}` },
@@ -164,15 +243,20 @@ export async function runLocalTurn(
     return { reply: `The command \`${String(pending.arguments.command ?? pending.tool_name)}\` is waiting for your approval on the card.`, cancelled: false };
   }
   rejected = r.rejected;
+  const refusedFlag = r.refused ? { refused: true } : {};
 
   if (sc.kind === "hardline") {
-    return { reply: "The core forbids this command, I am not running it.", cancelled: false };
+    return { reply: "The core forbids this command, I am not running it.", cancelled: false, ...refusedFlag };
+  }
+  if (state.effectiveSettings(threadId).mode === "plan") {
+    return { reply: "Plan mode, nothing written. Plan: 1) fix `add()` in `src/app.py` (it returns a - b); 2) re-run the test; 3) clean `build/`.", cancelled: false };
   }
   return {
     reply: rejected
       ? `I fixed \`src/app.py\` (add returned a - b) and test ${sc.test} passes. I did not clean \`build/\`: deletion refused.`
       : `I fixed \`src/app.py\` (add returned a - b), test ${sc.test} passes and \`build/\` is cleaned up.`,
     cancelled: false,
+    ...refusedFlag,
   };
 }
 
@@ -183,8 +267,9 @@ async function runSteps(
   turnId: string,
   steps: Step[],
   signal: AbortSignal,
-): Promise<{ cancelled: boolean; rejected: boolean; pending?: Approval; pendingStep?: Step; rest: Step[] }> {
+): Promise<{ cancelled: boolean; rejected: boolean; refused?: boolean; pending?: Approval; pendingStep?: Step; rest: Step[] }> {
   let rejected = false;
+  let refused = false;
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i]!;
     if (signal.aborted) return { cancelled: true, rejected, rest: [] };
@@ -197,15 +282,23 @@ async function runSteps(
     state.publish({ type: "tool.call", thread_id: threadId, turn_id: turnId, call_id: callId, name: step.name, effect: step.effect, args: shownArgs });
     const hard = step.name === "terminal" && isHardline(String(step.args.command ?? ""));
     // Hardline : refus direct SANS carte, l'outil revient en erreur (permissions:hardline).
-    const verdict = hard ? "deny" : decide(state.effectiveSettings(threadId), step.name, step.args, step.effect);
+    const settings = state.effectiveSettings(threadId);
+    const verdict = hard ? "deny" : decide(settings, step.name, step.args, step.effect);
+    // Refused by plan mode (and not by a deny rule): `reason: "plan_mode"` on the tool.result.
+    const planRefusal = !hard && verdict === "deny" && settings.mode === "plan" && decide({ ...settings, mode: "default" }, step.name, step.args, step.effect) !== "deny";
     let ok = step.ok ?? true;
     let preview = step.preview;
     let approvalId: string | undefined;
     if (hard) {
       ok = false;
+      refused = true;
       preview = "refusé : commande interdite (hardline)";
+    } else if (planRefusal) {
+      ok = false;
+      preview = "refusé : mode plan (rien n'est écrit)";
     } else if (verdict === "deny") {
       ok = false;
+      refused = true;
       preview = "refusé par une règle (deny)";
     } else if (verdict === "ask" && state.approvalStyle === "kernel") {
       const card = postLocalApproval(state, threadId, turnId, step, "cli", callId);
@@ -257,11 +350,14 @@ async function runSteps(
       ms: ok ? step.ms : 0,
       effect: step.effect,
       preview: preview.split("\n").slice(0, 3).join("\n"),
+      ...(planRefusal ? { reason: "plan_mode" } : hard ? { reason: "hardline" } : verdict === "deny" ? { reason: "deny_rule" } : {}),
       // Outil exécuté après sa carte : le résultat porte la carte, comme celui de l'exécuteur du noyau.
       ...(approvalId ? { approval_id: approvalId } : {}),
     });
+    // Diagnostics après l'édition (lot 13) : publiés après le `tool.result`, comme le crochet du noyau.
+    if (ok && step.diagnostics) publishLspDiagnostics(state, threadId, String(step.args.path ?? ""), step.diagnostics);
   }
-  return { cancelled: false, rejected, rest: [] };
+  return { cancelled: false, rejected, refused: refused || rejected, rest: [] };
 }
 
 /** `localWrites` : `patch {path, old, new}` remplace le passage, `write_file {path, content}` écrit le fichier, dans le
@@ -523,8 +619,9 @@ export function postLocalApproval(
 ): Approval {
   const approval = newLocalApproval(threadId, turnId, step, channel, callId);
   state.approvals.set(approval.id, approval);
-  const { suggested_rules: _rules, forwarded: _fwd, ...onWire } = approval;
+  const { suggested_rules: _rules, suggested_rule_kinds: _kinds, forwarded: _fwd, ...onWire } = approval;
   void _rules;
+  void _kinds;
   void _fwd;
   state.publish({ type: "approval.requested", approval: onWire });
   relayStrongCard(state, approval);
@@ -537,6 +634,20 @@ export function postLocalApproval(
   return approval;
 }
 
+/** Outils de fichier du noyau (`FILE_TOOLS`) : une règle exacte y couvre un fichier, ailleurs une commande. */
+const FILE_TOOLS = ["write_file", "patch", "read_file", "search_files"];
+
+/** Ce que couvre une règle proposée (port de `nokker/local/approvals.py::rule_kind`). */
+export function ruleKind(rule: string): SuggestedRuleKind {
+  if (!rule.includes("(")) return "tool";
+  const tool = rule.slice(0, rule.indexOf("("));
+  let pattern = rule.slice(rule.indexOf("(") + 1);
+  if (pattern.endsWith(")")) pattern = pattern.slice(0, -1);
+  if (pattern.endsWith("/**")) return "dir";
+  if (pattern.endsWith("*")) return "prefix";
+  return FILE_TOOLS.includes(tool) ? "file" : "exact";
+}
+
 function newLocalApproval(
   threadId: string,
   turnId: string,
@@ -544,6 +655,8 @@ function newLocalApproval(
   channel: Approval["channel"],
   callId: string | null,
 ): Approval {
+  // Carte destructive = « forte-locale » : jamais d'« always » (aucune règle proposée).
+  const rules = step.effect === "destructive" ? [] : suggestRules(step.name, step.args);
   const args = redactArgs(step.args);
   return {
     id: randomId("appr"),
@@ -573,8 +686,9 @@ function newLocalApproval(
     result_summary: null,
     error: null,
     call_id: callId,
-    // Carte destructive = « forte-locale » : jamais d'« always » (aucune règle proposée).
-    suggested_rules: step.effect === "destructive" ? [] : suggestRules(step.name, step.args),
+    suggested_rules: rules,
+    // Noyau du 01.11 : ce que couvre chaque règle, même ordre (`nokker/local/approvals.py::rule_kind`).
+    suggested_rule_kinds: rules.map((r) => ruleKind(r)),
     forwarded: false,
   };
 }
@@ -593,8 +707,9 @@ export async function askLocalApproval(
   state.approvals.set(approval.id, approval);
   const waiter = new Promise<ApprovalOutcome>((res) => state.approvalWaiters.set(approval.id, res));
   // L'événement ne porte ni `suggested_rules` ni `forwarded` : la CLI récupère la carte par GET /v1/local/approvals.
-  const { suggested_rules: _rules, forwarded: _fwd, ...onWire } = approval;
+  const { suggested_rules: _rules, suggested_rule_kinds: _kinds, forwarded: _fwd, ...onWire } = approval;
   void _rules;
+  void _kinds;
   void _fwd;
   state.publish({ type: "approval.requested", approval: onWire });
   relayStrongCard(state, approval);

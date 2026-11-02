@@ -9,11 +9,15 @@
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "e2e": "node e2e/run.mjs",
+    "e2e:onboarding": "node e2e/onboarding.mjs",
+    "e2e:guide": "node e2e/guide.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
     "@nokker-apps/brand": "workspace:*",
     "@nokker-apps/sdk": "workspace:*",
+    "qrcode-generator": "1.4.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
@@ -21,6 +25,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "playwright-core": "1.60.0",
     "typescript": "^5.6.3",
     "vite": "^6.0.3",
     "vitest": "^2.1.4"

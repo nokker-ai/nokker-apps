@@ -13,6 +13,8 @@ import { formatChecks, runDoctor } from "./doctor.js";
 import { resolveServer } from "./lokkal.js";
 import { runLogs } from "./logs.js";
 import { runUpdate } from "./update.js";
+import { runBackup } from "./backup.js";
+import { runImport } from "./import.js";
 import { runAcp } from "./acp/run.js";
 import { parseLang, setLang, t } from "./i18n/index.js";
 
@@ -79,7 +81,16 @@ async function runSubcommand(opts: ParsedArgs): Promise<number> {
   if (opts.command === "logs") {
     return runLogs({ follow: opts.follow, lines: opts.lines, since: opts.since, component: opts.component });
   }
-  return runUpdate({ serverUrl: opts.serverUrl, check: opts.check });
+  if (opts.command === "backup" || opts.command === "restore") {
+    return runBackup({
+      action: opts.command === "restore" ? "restore" : opts.backupList ? "list" : "backup",
+      to: opts.to, keep: opts.keep, encrypt: opts.encrypt, yes: opts.yes, source: opts.source,
+    });
+  }
+  if (opts.command === "import" && opts.importSource) {
+    return runImport({ source: opts.importSource, project: opts.project, apply: opts.apply, yes: opts.yes });
+  }
+  return runUpdate({ serverUrl: opts.serverUrl, check: opts.check, version: opts.targetVersion });
 }
 
 function printHelp(): void {
@@ -87,10 +98,14 @@ function printHelp(): void {
   const rows: Array<[string, string]> = [
     ["", t("code session in the current folder (resumes this folder's thread)")],
     ['-p "request"', t("one turn in the current folder, answer on stdout (scripts/CI); any effect without a rule is REJECTED (unattended mode)")],
-    ['-p "request" --json', t("same, JSON output {reply, thread_id, cwd, pending_approvals, refused, cost}")],
+    ['-p "request" --json', t("same, JSON output {reply, thread_id, cwd, pending_approvals, refused, cancelled, error, exit_code, cost}")],
     ["doctor [--fix]", t("checks: docker, compose, server, authentication, version, git")],
     ["logs [-f] [-n N] [--since 1h|30m|2d] [--component core|cli]", ""],
-    ["update [--check]", t("update the core (docker compose pull + up -d); --check compares the digests")],
+    ["update [--check] [--version X.Y.Z]", t("update the core with the installer of the target release (sha256 checked, cosign signature if installed), then the client; --check compares versions")],
+    ["backup [--to <dir|s3://…>] [--keep N] [--encrypt]", t("full backup of the install (databases, .env, config, state, vault); encryption required for S3, passphrase asked without echo")],
+    ["backup list [--to <dir|s3://…>]", t("list the backups")],
+    ["restore <file|s3://…> [--yes]", t("replace the data of the install with a backup (asks for confirmation without --yes)")],
+    ["import <claude-code|cursor|hermes|openclaw> [--project <dir>] [--apply] [--yes]", t("take over another agent's install: the kernel lists what it reads, those paths are mounted read-only (never credentials or identity files) into a one-off container; dry run, then --apply writes after confirmation; --project (claude-code, cursor) also reads a repository. Not followed: a custom HERMES_HOME, an OpenClaw agents.defaults.workspace outside ~/.openclaw")],
     ["acp", t("ACP agent on stdio for an editor (Zed, JetBrains, Neovim…): session of the editor's folder")],
     ["--server <url>", t("server (default {0}, or $NOKKER_SERVER_URL)", args.serverUrl)],
     ["--lang en|fr", t("interface language (default: NOKKER_LANG, LC_ALL, LC_MESSAGES, LANG; English otherwise)")],
@@ -107,6 +122,8 @@ function printHelp(): void {
 
 ${t("Usage:")}
 ${lines.join("\n")}
+
+${t("-p exit codes: 0 done, 3 an effect was refused, 4 the turn failed, 130 cancelled, 1 client error (error wins over cancelled, cancelled over refused).")}
 
 ${t("In a session, /help lists the commands (/sessions, /thread, /diff, /checkpoints, /rollback, /skills, /plan, /agents, /memory, /cost, /cancel, /approvals…). Esc cancels the turn in progress. A strong card is decided locally once only; from the web or the gateway, on the phone.")}
 `);
@@ -134,12 +151,14 @@ async function runNonInteractive(opts: ParsedArgs): Promise<number> {
       if (res.pending_approvals.length) {
         process.stderr.write(`${t("({0} approval(s) pending on this thread — decide them from an interactive session or another client.)", res.pending_approvals.length)}\n`);
       }
+      if (res.error) process.stderr.write(`${t("Turn failed ({0}): {1}", res.error.code, res.error.message)}\n`);
+      else if (res.cancelled) process.stderr.write(`${t("Turn cancelled.")}\n`);
     }
-    return 0;
+    return res.exit_code;
   } catch (err) {
     cliLog("error", `-p : ${String(err)}`);
     if (opts.json) {
-      process.stdout.write(`${JSON.stringify({ error: String(err), refused: [] })}\n`);
+      process.stdout.write(`${JSON.stringify({ error: String(err), exit_code: 1, refused: [] })}\n`);
     } else {
       process.stderr.write(`${t("Error: {0}", String(err))}\n`);
     }

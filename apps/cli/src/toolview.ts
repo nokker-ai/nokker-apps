@@ -83,6 +83,11 @@ export function toolTarget(name: string, args: Record<string, unknown>): string 
     const v = args[key];
     if (typeof v === "string" && v) return v;
   }
+  // `delegate {tasks: [{goal}]}` : aucun champ texte à plat — la carte affichait « Cible : » vide.
+  if (Array.isArray(args.tasks)) {
+    const goals = args.tasks.map((x) => (x && typeof x === "object" ? (x as { goal?: unknown }).goal : null)).filter((g): g is string => typeof g === "string" && g !== "");
+    if (goals.length) return (goals.length > 1 ? `${goals[0]!.slice(0, 70)} (+${goals.length - 1})` : goals[0]!).slice(0, 90);
+  }
   const first = Object.values(args).find((v) => typeof v === "string") as string | undefined;
   return first ? first.slice(0, 80) : "";
 }

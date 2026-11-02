@@ -129,3 +129,18 @@ describe("streamChatCompletion — jetons en direct", () => {
     expect(text).toBe("Bonjour.");
   });
 });
+
+describe("streamChatCompletion — metadata", () => {
+  it("envoie `metadata` (cli_control) dans le corps seulement s'il est donné", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchImpl: FetchLike = vi.fn(async (_url: string, init?: { body?: string }) => {
+      bodies.push(JSON.parse(init?.body ?? "{}"));
+      return { ok: true, status: 200, body: body("data: [DONE]\n\n") };
+    }) as unknown as FetchLike;
+    const c = new NokkerClient({ baseUrl: "http://mock", token: "tok", fetchImpl });
+    await c.streamChatCompletion("th_1", [{ role: "user", content: "x" }], () => {}, "nokker", { metadata: { cli_control: "goal_check" } });
+    await c.streamChatCompletion("th_1", [{ role: "user", content: "y" }], () => {});
+    expect(bodies[0]!.metadata).toEqual({ cli_control: "goal_check" });
+    expect("metadata" in bodies[1]!).toBe(false);
+  });
+});

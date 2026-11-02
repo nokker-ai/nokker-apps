@@ -208,6 +208,14 @@ export function registerAction(key: string, handler: ActionHandler): void {
   handlers.set(key, handler);
 }
 
+/** Done BEFORE the turn of an action (core `_pointer_action`: state `waiting`, or closed on the last step); its fields
+ * join the 202 body. */
+type ActionPrelude = (state: MockState, b: Bubble, actionId: string) => Record<string, unknown>;
+const preludes = new Map<string, ActionPrelude>();
+export function registerActionPrelude(kind: string, fn: ActionPrelude): void {
+  preludes.set(kind, fn);
+}
+
 export function registerNotifyAction(actionId: string, handler: NotifyHandler): void {
   notifyHandlers.set(actionId, handler);
 }
@@ -249,12 +257,13 @@ export function runAction(state: MockState, id: string, actionId: string): { sta
   if (!action) throw new MockHttpError(404, `action inconnue : ${actionId}`);
   if (!b.thread_id) throw new MockHttpError(400, "bulle sans fil");
   const text = `[Action « ${action.label || actionId} » demandée sur la bulle « ${b.title} » (${b.id})]`;
+  const extra = preludes.get(b.kind)?.(state, b, actionId) ?? {};
   const handler = handlers.get(`${b.kind}:${actionId}`);
   backgroundTurn(state, b.thread_id, text, () => (handler ? handler(state, b) : `Action “${action.label}” noted (demo).`), {
     channel: "web",
     delayMs: 700,
   });
-  return { status: 202, body: { accepted: true, thread_id: b.thread_id } };
+  return { status: 202, body: { accepted: true, thread_id: b.thread_id, ...extra } };
 }
 
 /** Crée un agent du Crew (BUBBLES.md §9.4) : `status` toujours `armed`, `agent.created` diffusé à tous. */

@@ -36,6 +36,7 @@ import {
 } from "@nokker-apps/sdk";
 import { choiceLabel, strongText } from "../approval-model.js";
 import { costLang, t } from "../i18n/index.js";
+import { checkpointReason, reasonCodeOf } from "../localtools.js";
 import { RPC, RpcFailure, type JsonRpcId, type RpcPeer } from "./rpc.js";
 
 /** Version du protocole ACP parlée ici (schéma v1 du SDK officiel `@agentclientprotocol/sdk`, entrée stable). */
@@ -531,7 +532,7 @@ export class AcpAgent {
         const list = Array.isArray(raw) ? raw : (raw?.checkpoints ?? []);
         say(
           list.length
-            ? list.map((c, i) => t("{0}. `{1}` {2} — {3} ({4} file(s))", i + 1, c.short_hash, c.timestamp, c.reason, c.files_changed)).join("\n")
+            ? list.map((c, i) => t("{0}. `{1}` {2} — {3} ({4} file(s))", i + 1, c.short_hash, c.timestamp, checkpointReason(reasonCodeOf(r.reason_codes, c), c.reason), c.files_changed)).join("\n")
             : t("No checkpoints on this thread."),
         );
       }

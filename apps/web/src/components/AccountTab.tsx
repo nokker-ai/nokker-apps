@@ -2,6 +2,10 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { AccountExport, AccountInfo, AccountUsage, BillingStatus, Device, NokkerClient } from "@nokker-apps/sdk";
 import { deleteOutcome, exportIssue, fmtSize, fmtWhen, signOutDevice, suspendedError, type ExportIssue } from "../account/lifecycle.js";
 import { forgetDevice, readStoredDeviceKey } from "../auth.js";
+import { DeletingScreen } from "./DeletingScreen.js";
+import { GlassesCard } from "../glance/GlassesCard.js";
+import { BudgetsCard } from "../payments/BudgetsCard.js";
+import { KnockCard } from "../knock/KnockCard.js";
 import { billingView, fmtReset, monthTurns, planCaps, planLabel, softOver, STATUS_KEYS, todayRows, usageLevel, usagePct, weekRows, type UsageRow } from "../account/usage.js";
 import { ConnectorsStep, TelegramStep } from "../onboarding/Connectors.js";
 import { errorCode, errorKey } from "../onboarding/errors.js";
@@ -220,6 +224,18 @@ function DevicesCard({ client, lang }: { client: NokkerClient; lang: Lang }): Re
 /** Déconnexion de CET appareil : il est retiré du compte (sa clé ne vaut plus rien) puis oublié ici ; retour à l'accueil. */
 function SignOutCard({ client, lang, onSignOut }: { client: NokkerClient; lang: Lang; onSignOut: () => void }): React.ReactElement {
   const [busy, setBusy] = useState(false);
+  // Se déconnecter de CET appareil ne révoque pas les lunettes (décision de dev, 02.11) : on le dit quand il y en a.
+  const [glasses, setGlasses] = useState(0);
+  useEffect(() => {
+    let live = true;
+    client.listGlanceDevices().then(
+      (r) => live && setGlasses(r.devices.filter((d) => d.paired && !d.revoked).length),
+      () => undefined, // 404 : pas de lunettes servies, rien à dire
+    );
+    return () => {
+      live = false;
+    };
+  }, [client]);
   const go = async (): Promise<void> => {
     setBusy(true);
     await signOutDevice(client, readStoredDeviceKey, forgetDevice);
@@ -229,6 +245,7 @@ function SignOutCard({ client, lang, onSignOut }: { client: NokkerClient; lang: 
     <section className="ob-conn" aria-labelledby="acc-signout">
       <h3 id="acc-signout">{t(lang, "accSignOut")}</h3>
       <p className="ob-muted">{t(lang, "accSignOutBody")}</p>
+      {glasses > 0 ? <p className="ob-muted">{t(lang, "accSignOutGlasses")}</p> : null}
       <button type="button" className="ob-btn" disabled={busy} onClick={() => void go()}>
         {t(lang, "accSignOutBtn")}
       </button>
@@ -514,21 +531,6 @@ function DeleteCard({
   );
 }
 
-/** Écran fixe après l'accord : le compte est suspendu, l'appareil est oublié (déconnexion) ; recharger mène à l'accueil. */
-export function DeletingScreen({ lang }: { lang: Lang }): React.ReactElement {
-  useEffect(() => {
-    void forgetDevice().catch(() => undefined);
-  }, []);
-  return (
-    <div className="ob ob-embedded">
-      <div className="ob-card" role="status">
-        <h2 className="ob-title">{t(lang, "accDeletingTitle")}</h2>
-        <p>{t(lang, "accDeletingBody")}</p>
-      </div>
-    </div>
-  );
-}
-
 export function AccountTab({
   client,
   lang,
@@ -577,6 +579,9 @@ export function AccountTab({
         {billing ? <SubscriptionCard client={client} lang={lang} billing={billing} /> : null}
         {usage ? <UsageCard lang={lang} usage={usage} /> : null}
         <DevicesCard client={client} lang={lang} />
+        <GlassesCard client={client} />
+        <BudgetsCard client={client} />
+        <KnockCard />
         {onSignOut ? <SignOutCard client={client} lang={lang} onSignOut={onSignOut} /> : null}
         <h3 className="ob-sub">{t(lang, "tabConnectors")}</h3>
         <ConnectorsStep client={client} lang={lang} embedded />
@@ -587,3 +592,6 @@ export function AccountTab({
     </div>
   );
 }
+
+// Kept here for existing imports; the shell imports it from its own file so it never waits for the account chunk.
+export { DeletingScreen };

@@ -463,9 +463,10 @@ describe("déclencheurs en anglais (le mock parle anglais, les demandes des deux
     const ev = collect(client);
     await say(general, "disk");
     const created = await ev.waitFor<{ type: "bubble.created"; bubble: Bubble }>((e) => e.type === "bubble.created" && e.bubble.kind === "monitor");
-    expect(await say(general, "copy bubble disk to Infra")).toBe("Copy of “Disk host-1 /” sent to Infra: it is in its context now.");
+    // The title gains the measured value (« — 91% (stable) ») when the demo measurement ends: either form is right.
+    expect(await say(general, "copy bubble disk to Infra")).toMatch(/^Copy of “Disk host-1 \/[^”]*” sent to Infra: it is in its context now\.$/);
     expect((await client.getBubble(created.bubble.id)).thread_id).toBe(general);
-    expect(await say(general, "send the disk bubble to Infra")).toBe("Bubble “Disk host-1 /” moved to Infra: it leaves this thread and enters its context.");
+    expect(await say(general, "send the disk bubble to Infra")).toMatch(/^Bubble “Disk host-1 \/[^”]*” moved to Infra: it leaves this thread and enters its context\.$/);
     expect((await client.getBubble(created.bubble.id)).thread_id).toBe(infra);
     expect(await say(general, "send the nothing bubble to Infra")).toBe("I can't find an open “nothing” bubble here.");
     ev.close();

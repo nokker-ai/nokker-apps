@@ -6,6 +6,7 @@
  */
 import { createHmac, randomBytes, timingSafeEqual, createHash } from "node:crypto";
 import type {
+  Agent,
   AlertSource,
   Approval,
   BriefDelivery,
@@ -19,7 +20,7 @@ import type {
   PlanChildProposal,
   PlanProposal,
 } from "@nokker-apps/sdk";
-import { createAgentFull, fireAgentEvent } from "./agents.js";
+import { createAgentFull, fireAgentEvent, seedBriefRun } from "./agents.js";
 import { closeBubble, createBubble, updateBubble } from "./bubbles.js";
 import { MockHttpError } from "./errors.js";
 import { MOCK_USER, finalizeDecision, hexId, type MockState } from "./state.js";
@@ -519,6 +520,7 @@ export async function handleOps(state: MockState, user: string, method: string, 
       }
       const a = createAgentFull(state, { name: "Brief du matin", role: "Résume le plan, les incidents vivants et l'agenda du jour.", tools: ["plan_brief"], trigger: { kind: "schedule", cron, tz } }, user);
       a.status = "armed"; // le POST est la décision : aucune écriture
+      seedBriefRun(state, a);
       o.brief = a.id;
       state.publish({ type: "agent.updated", agent: structuredClone(a) });
       return send(201, { agent: structuredClone(a) }), true;
@@ -575,4 +577,12 @@ function deliveryView(state: MockState, o: Ops): BriefDelivery {
   const fp = d.email && d.sender ? createHash("sha256").update(`${MOCK_USER}|${d.email}|${d.sender}`).digest("hex") : null;
   const st: BriefDelivery["email"]["state"] = !d.email ? "off" : d.armed && d.armed === fp ? "armed" : card?.status === "pending" ? "pending" : "not_armed";
   return { telegram: { enabled: d.telegram, chats: d.chats }, email: { address: d.email, from: d.sender, state: st, approval_id: st === "pending" ? d.approval : null }, last: d.last };
+}
+
+/** For the glance view (AMBIENT.md §6): the brief agent and the live incidents, as their own routes give them. */
+export function glanceOps(state: MockState): { briefAgent: Agent | null; liveIncidents: unknown[] } {
+  const o = ops(state);
+  const briefAgent = o.brief ? (state.agents.get(o.brief) ?? null) : null;
+  const live = [...o.incidents.values()].filter((x) => x.i.state !== "resolved").sort((a, b) => b.i.last_seen_at.localeCompare(a.i.last_seen_at));
+  return { briefAgent: briefAgent ? structuredClone(briefAgent) : null, liveIncidents: live.slice(0, 20).map((x) => incJson(x, false)) };
 }

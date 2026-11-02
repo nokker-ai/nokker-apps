@@ -95,4 +95,6 @@ export type CodeToolName =
   | "skill_view"
   /** Sous-agents (§7.28.14) : `delegate_status` SANS `wait_s` (400 `bad_arguments`), `delegate_cancel {ids?}`. */
   | "delegate_status"
-  | "delegate_cancel";
+  | "delegate_cancel"
+  /** The session's plan, read only (no arguments): `TodoResult`. */
+  | "todo";

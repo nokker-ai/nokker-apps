@@ -6,13 +6,16 @@ import { Markdown } from "../Markdown.js";
 import { liveTail, strongCardText } from "@nokker-apps/sdk";
 import { gatewayContext, remoteApprovalUrl } from "../auth.js";
 import React, { useEffect, useRef, useState } from "react";
-import { NokkerApiError, type Approval, type Bubble, type BubbleBase } from "@nokker-apps/sdk";
+import { NokkerApiError, isPayApproval, type Approval, type Bubble, type BubbleBase } from "@nokker-apps/sdk";
+import { PayBlock } from "../payments/PayBlock.js";
 import { useStore } from "../context.js";
 import { Icon } from "../icons.js";
 import { shellLang, tr } from "../i18n/index.js";
 import { approvalStatusLabel } from "../ops/model.js";
 import { PublishPanel } from "../publish/PublishPanel.js";
 import { PackAgents } from "../packs/PackAgents.js";
+import { showMeEnabled } from "../showme/model.js";
+import { PointerBody, pointerStatusLabel } from "../showme/PointerBody.js";
 
 type B<K extends Bubble["kind"]> = BubbleBase<K>;
 
@@ -61,6 +64,10 @@ export function bubbleLabel(kind: string): string {
       return tr("Brief");
     case "pack_agents":
       return tr("Pack agents");
+    case "cast":
+      return tr("Screen");
+    case "pointer":
+      return showMeEnabled() ? tr("Show me") : tr("Bubble");
     default:
       return tr("Bubble");
   }
@@ -95,6 +102,10 @@ export function statusLabel(b: Bubble, now: number): string {
       return splitLabel(b.state.state);
     case "brief":
       return b.state.date ? new Date(b.state.date).toLocaleDateString(locale(), { weekday: "short", day: "numeric", month: "short" }) : tr("brief");
+    case "cast":
+      return castStatusLabel(b.state.status);
+    case "pointer":
+      return showMeEnabled() ? pointerStatusLabel(b) : b.status;
     default:
       return (b as { status: string }).status;
   }
@@ -557,22 +568,28 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
   const gwHost = viaGateway ? gatewayContext() : null;
   const local = store.authMode === "local";
   const canSign = store.authMode !== "demo" && store.authMode !== null && !viaGateway && !local;
+  // Carte « à payer » (PAYMENTS §5) : le détail de l'achat remplace outil/effet ; seule une passkey l'approuve.
+  const pays = isPayApproval(a);
   return (
     <div className="bubble-body">
       <p className="notify-text">{a.reason}</p>
-      <dl className="kv">
-        <dt>{tr("Tool")}</dt>
-        <dd className="mono">{a.tool_name}</dd>
-        <dt>{tr("Effect")}</dt>
-        <dd>{tr("{0} · level {1}", a.effect ?? "", a.strength)}</dd>
-      </dl>
+      {pays ? (
+        <PayBlock client={store.client} approvalId={a.id} rev={reload + (rev ?? 0)} />
+      ) : (
+        <dl className="kv">
+          <dt>{tr("Tool")}</dt>
+          <dd className="mono">{a.tool_name}</dd>
+          <dt>{tr("Effect")}</dt>
+          <dd>{tr("{0} · level {1}", a.effect ?? "", a.strength)}</dd>
+        </dl>
+      )}
       {a.advice ? <p className="fine">{a.advice}</p> : null}
       {pending ? (
         <>
           {canSign ? (
             <div className="bubble-actions">
               <button type="button" className="btn btn-brass" disabled={busy} onClick={() => void go("approve", false)}>
-                <Icon name="shield" /> {tr("Approve (device)")}
+                <Icon name="shield" /> {pays ? tr("Approve with my passkey") : tr("Approve (device)")}
               </button>
               <button type="button" className="btn" disabled={busy} onClick={() => void go("reject", false)}>
                 {tr("Reject")}
@@ -602,7 +619,7 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
               </a>
             </p>
           ) : null}
-          {a.strength === "standard" && !viaGateway && store.authMode !== "local" ? (
+          {a.strength === "standard" && !pays && !viaGateway && store.authMode !== "local" ? (
             <form
               className="totp"
               onSubmit={(e) => {
@@ -765,6 +782,74 @@ function Handoff({ b }: { b: B<"handoff"> }) {
   );
 }
 
+/** SCREEN-CAST §7: what the bubble says about a display on a screen of the home. */
+export function castStatusLabel(status: B<"cast">["state"]["status"]): string {
+  switch (status) {
+    case "pending":
+      return tr("to approve");
+    case "showing":
+      return tr("on screen");
+    case "stopped":
+      return tr("stopped");
+    case "expired":
+      return tr("expired");
+    case "refused":
+      return tr("refused");
+    case "failed":
+      return tr("failed");
+    default:
+      return String(status);
+  }
+}
+
+/** The page shown on the screen, in a sandbox WITHOUT allow-same-origin (opaque origin: no cookie, no storage, no DOM of
+ * the app), as SCREEN-CAST §7 requires; actions come from `state.actions` (approve / refuse while pending, stop while
+ * showing). The screen's link, token or address never reach the web. */
+function CastBody({ b, readOnly }: { b: B<"cast">; readOnly: boolean }) {
+  const store = useStore();
+  const st = b.state;
+  const screen = st.screen;
+  const where = screen ? (screen.room ? `${screen.name} · ${screen.room}` : screen.name) : tr("a screen");
+  const ask =
+    st.status === "pending"
+      ? st.request?.reason === "new_screen"
+        ? tr("First time on {0}: nothing is shown before you approve.", where)
+        : st.request?.reason === "consent"
+          ? tr("This shows another member's content: only that member can approve.")
+          : tr("Waiting for a decision before anything is shown on {0}.", where)
+      : null;
+  return (
+    <div className="bubble-body cast">
+      <p className="cast-where">
+        <Icon name="screen" size={14} /> {where}
+        {screen?.personal ? <span className="chip">{tr("personal")}</span> : null}
+      </p>
+      {st.view?.title ? <p className="cast-title">{st.view.title}</p> : null}
+      {ask ? <p className="fine cast-ask">{ask}</p> : null}
+      {st.html ? (
+        <iframe className="cast-frame" title={tr("What the screen shows: {0}", st.view?.title ?? where)} sandbox="allow-scripts" srcDoc={st.html} referrerPolicy="no-referrer" />
+      ) : st.html_too_large ? (
+        <p className="fine">{tr("The page is too large to preview here: look at the screen.")}</p>
+      ) : null}
+      {st.masked > 0 ? <p className="fine">{st.masked === 1 ? tr("1 private item is masked.") : tr("{0} private items are masked.", st.masked)}</p> : null}
+      {st.error ? (
+        <p className="error" role="alert">
+          {st.error}
+        </p>
+      ) : null}
+      {!readOnly && st.actions?.length ? (
+        <div className="bubble-actions">
+          {st.actions.map((a) => (
+            <button key={a.id} type="button" className={`btn ${a.primary ? "btn-brass" : ""}`} onClick={() => void store.runAction(b, a.id)}>
+              {a.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function BubbleBody({ b, readOnly }: { b: Bubble; readOnly: boolean }): React.ReactElement {
   switch (b.kind) {
     case "monitor":
@@ -791,6 +876,10 @@ export function BubbleBody({ b, readOnly }: { b: Bubble; readOnly: boolean }): R
       return <PlanSplit b={b} readOnly={readOnly} />;
     case "pack_agents":
       return <PackAgentsBody b={b} />;
+    case "cast":
+      return <CastBody b={b} readOnly={readOnly} />;
+    case "pointer":
+      return showMeEnabled() ? <PointerBody b={b} readOnly={readOnly} /> : <UnknownBody />;
     case "brief":
       return (
         <div className="bubble-body brief">
@@ -798,10 +887,14 @@ export function BubbleBody({ b, readOnly }: { b: Bubble; readOnly: boolean }): R
         </div>
       );
     default:
-      return (
-        <div className="bubble-body">
-          <p className="fine">{tr("This bubble type is not handled by this version of the app.")}</p>
-        </div>
-      );
+      return <UnknownBody />;
   }
+}
+
+function UnknownBody(): React.ReactElement {
+  return (
+    <div className="bubble-body">
+      <p className="fine">{tr("This bubble type is not handled by this version of the app.")}</p>
+    </div>
+  );
 }

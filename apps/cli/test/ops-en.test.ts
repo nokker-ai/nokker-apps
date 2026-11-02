@@ -150,9 +150,10 @@ describe("pont ACP en anglais", () => {
       const ask = await until(() => sent.find((m) => m.method === "session/request_permission"));
       const names = (ask.params!.options as Array<{ name: string }>).map((o) => o.name);
       // Commande de test : la session d'abord (mêmes règles que le client terminal), puis « une fois ».
-      expect(names.slice(0, 2)).toEqual(["For this session", "Once"]);
+      // Libellés d'après `suggested_rule_kinds` (noyau du 01.11) : commande exacte, puis préfixe.
+      expect(names.slice(0, 2)).toEqual(["This exact command for this session", "Once"]);
       expect(names[names.length - 1]).toBe("Reject");
-      expect(names.some((n) => /^Always this command: \S/.test(n))).toBe(true);
+      expect(names.some((n) => /^Always this exact command: \S/.test(n))).toBe(true);
       expect(names).not.toContain("Pour cette session");
 
       const cmds = sent.find((m) => (m.params?.update as { sessionUpdate?: string } | undefined)?.sessionUpdate === "available_commands_update");

@@ -20,13 +20,23 @@ export type SlashCommand =
   | { kind: "agents"; action: "list" | "view" | "cancel"; id: string | null }
   | { kind: "memory"; action: "list" | "view" | "forget"; name: string | null }
   | { kind: "cost" }
+  | { kind: "mode"; name: string | null }
+  | { kind: "diagnostics"; path: string | null }
   | { kind: "cancel" }
+  | { kind: "queue"; clear: boolean }
+  | { kind: "init" }
+  | { kind: "export"; format: "md" | "html"; file: string | null }
   | { kind: "out" }
   | { kind: "confirm"; totp: string }
   | { kind: "bubbles" }
   | { kind: "bubble"; id: string }
   | { kind: "send"; bubble: string; session: string; copy: boolean }
   | { kind: "ask"; session: string; text: string }
+  | { kind: "btw"; question: string }
+  | { kind: "goal"; action: "show" | "set" | "clear"; text: string }
+  | { kind: "loop"; action: "list" }
+  | { kind: "loop"; action: "stop"; id: number | null }
+  | { kind: "loop"; action: "start"; interval: string; prompt: string }
   | { kind: "approvals" }
   | { kind: "login" }
   | { kind: "tools" }
@@ -63,18 +73,27 @@ function helpRows(): Array<[string, string]> {
     ["/agents cancel <id|all>", t("stop a background sub-agent (all: every sub-agent of the thread)")],
     ["/memory [note]", t("what the project memory knows: learned notes and instruction file sections; with a name, the note")],
     ["/memory forget <note>", t("forget a learned note (after confirmation)")],
+    ["/diagnostics [path]", t("language diagnostics: last state per file; with a path, ask the core's language server")],
     ["/cost", t("session and day cost: tokens, and the amount when the model has a price")],
-    ["", t("(diff, checkpoints, rollback, skills, plan, agents, memory: code session only)")],
-    ["/cancel", t("cancel the turn in progress (Esc too)")],
+    ["/mode [name]", t("permission mode of this session (chosen, in effect, available); with a name, change it for this session only")],
+    ["", t("(diff, checkpoints, rollback, skills, plan, agents, memory, diagnostics, mode: code session only)")],
+    ["/cancel", t("cancel the turn in progress and empty the queue (Esc too); /pause and /stop do the same")],
+    ["/queue [clear]", t("messages typed during a turn wait in a queue and leave one by one; clear empties it")],
+    ["/init", t("have the agent write or complete AGENTS.md for this repository (code session only)")],
+    ["/export [md|html] [file]", t("write the whole thread to a Markdown or HTML file (default: nokker-session-<id>-<date>.md in the folder)")],
     ["/out", t("expand/collapse the preview of the last tool call (key o too)")],
     ["/tools", t("expand/collapse all previews")],
     ["/bubbles", t("open bubbles of this thread")],
     ["/bubble <id|title>", t("bubble details")],
     ["/send <bubble> <session> [--copy]", t("move (or copy with --copy) a bubble to another thread")],
     ["/ask <session> <text>", t("ask another session a question (answer here, as a notify bubble)")],
+    ["/btw <question>", t("side question in a separate thread (only the folder and thread title as context); this thread keeps no trace")],
+    ["/goal [objective|clear]", t("session goal: after each turn the agent is asked whether it is reached and continues if not (10 automatic turns at most; stops on a card, Esc or an error)")],
+    ["/loop <interval> <prompt>", t("send the prompt again every interval (s or m, 30s at least, 50 runs at most), never during a turn; /loop lists, /loop stop [#id] stops")],
     ["/approvals", t("approval cards")],
     ["/confirm <TOTP code>", t("confirm this device while it is pending")],
     ["/login", t("sign in again")],
+    ["@<path|url>", t("in a message: inline a file or folder, attach an image, or have the URL read (Tab completes the path)")],
     ["/help", t("this help")],
     ["/quit", t("quit")],
   ];
@@ -85,7 +104,7 @@ export function helpText(): string {
   const rows = helpRows();
   const width = Math.max(...rows.map(([c]) => c.length)) + 2;
   const lines = rows.map(([c, d]) => (c ? `  ${c.padEnd(width)}${d}` : `  ${d}`));
-  return [t("Commands:"), ...lines, t("Esc cancels the turn in progress; Ctrl+C rejects the card on screen (and cancels the turn), otherwise quits.")].join("\n");
+  return [t("Commands:"), ...lines, t("Esc cancels the turn in progress and empties the queue; Ctrl+C rejects the card on screen (and cancels the turn), otherwise quits.")].join("\n");
 }
 
 /** `line` commence par `/` (vérifié par l'appelant, comme pour tout texte libre démarrant par `/`). */
@@ -131,8 +150,28 @@ export function parseSlashCommand(line: string): SlashCommand {
     }
     case "cost":
       return { kind: "cost" };
+    case "mode":
+      return { kind: "mode", name: rest.split(/\s+/)[0] || null };
+    case "diagnostics":
+    case "diag":
+      return { kind: "diagnostics", path: tokenize(rest)[0] || null };
     case "cancel":
+    case "pause":
+    case "stop":
       return { kind: "cancel" };
+    case "queue":
+      return { kind: "queue", clear: /^(clear|reset)$/i.test(rest.split(/\s+/)[0] ?? "") };
+    case "export": {
+      const tokens = tokenize(rest);
+      const fmt = tokens[0]?.toLowerCase();
+      const explicit = fmt === "md" || fmt === "html" ? fmt : null;
+      const file = (explicit ? tokens[1] : tokens[0]) ?? null;
+      // Sans format explicite, l'extension du fichier tranche (`out.html`), sinon Markdown.
+      const format = explicit ?? (file && /\.html?$/i.test(file) ? "html" : "md");
+      return { kind: "export", format, file };
+    }
+    case "init":
+      return { kind: "init" };
     case "out":
       return { kind: "out" };
     case "confirm":
@@ -155,6 +194,20 @@ export function parseSlashCommand(line: string): SlashCommand {
       const [session, ...words] = rest.split(/\s+/).filter(Boolean);
       return { kind: "ask", session: session ?? "", text: words.join(" ") };
     }
+    case "btw":
+      return { kind: "btw", question: rest };
+    case "loop": {
+      const [a, ...more] = rest.split(/\s+/).filter(Boolean);
+      if (!a) return { kind: "loop", action: "list" };
+      if (/^(stop|clear|off)$/i.test(a)) {
+        const n = more[0] ? Number(more[0].replace(/^#/, "")) : NaN;
+        return { kind: "loop", action: "stop", id: Number.isInteger(n) ? n : null };
+      }
+      return { kind: "loop", action: "start", interval: a, prompt: rest.slice(rest.indexOf(a) + a.length).trim() };
+    }
+    case "goal":
+      if (!rest) return { kind: "goal", action: "show", text: "" };
+      return /^(clear|stop|off)$/i.test(rest) ? { kind: "goal", action: "clear", text: "" } : { kind: "goal", action: "set", text: rest };
     case "approvals":
       return { kind: "approvals" };
     case "login":

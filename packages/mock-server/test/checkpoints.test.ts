@@ -81,7 +81,13 @@ describe("points de retour automatiques et retour par fichier", () => {
     expect(added[0]!.reason).toBe("avant patch");
     // Lié au tour qui l'a pris, annoncé par checkpoint.created ; les points de démo d'avant n'ont pas de lien.
     expect(added[0]).toMatchObject({ thread_id: th, turn_index: 0, tool: "patch" });
-    expect(events.find((e) => e.type === "checkpoint.created" && e.hash === added[0]!.hash)).toEqual({ type: "checkpoint.created", thread_id: th, turn_index: 0, hash: added[0]!.hash, tool: "patch" });
+    expect(events.find((e) => e.type === "checkpoint.created" && e.hash === added[0]!.hash)).toEqual({ type: "checkpoint.created", thread_id: th, turn_index: 0, hash: added[0]!.hash, tool: "patch", reason_code: "before_patch" });
+    // D8 : la réponse de checkpoint_list porte `reason_codes` (le contenu, texte du modèle, ne change pas).
+    const raw = (await client.callLocalTool(th, "checkpoint_list", {})) as { content: string; reason_codes?: Record<string, string> };
+    expect(raw.reason_codes?.[added[0]!.hash]).toBe("before_patch");
+    expect(raw.content).not.toContain("reason_code");
+    const demo = before.find((c) => c.reason === "session start");
+    if (demo) expect(raw.reason_codes?.[demo.hash]).toBe("session_start");
     expect(before.every((c) => c.turn_index === undefined)).toBe(true);
     expect(added[0]!.timestamp).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00$/);
     expect(await readFile(join(proj, "src", "app.py"), "utf-8")).toBe("def add(a, b):\n    return a + b\n");

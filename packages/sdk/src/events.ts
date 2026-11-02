@@ -32,6 +32,8 @@ export interface ResponseLike {
   ok: boolean;
   status: number;
   body: AsyncIterableBytes | null;
+  /** Optional: a fetch Response has it; a test double may not. */
+  headers?: { get(name: string): string | null };
 }
 
 /** Un corps de réponse qu'on peut lire soit comme flux (ReadableStream-like), soit déjà itérable. */

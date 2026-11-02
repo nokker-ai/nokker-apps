@@ -3,14 +3,17 @@
  * mock-server) ; `ui/App.tsx` n'est qu'une vue par-dessus ces mêmes méthodes. Séparer les deux
  * évite de tester un rendu de terminal (fragile, peu utile) pour vérifier le contrat réseau.
  */
+import type { CliControl } from "./prompts.js";
 import { randomBytes } from "node:crypto";
 import {
+  NokkerApiError,
   NokkerClient,
   applyChatChunk,
   type Approval,
   type LocalApprovalResult,
   type Bubble,
   type ApprovalScope,
+  type ChatAttachment,
   type ChatCompletionChunk,
   type CancelResult,
   type LocalCostTotals,
@@ -22,6 +25,8 @@ import {
   type EventSubscription,
   type NokkerEvent,
   type SessionMessageResult,
+  type PermissionMode,
+  type SessionModeState,
   type Thread,
   type ThreadView,
   type TransferMode,
@@ -50,6 +55,9 @@ export class CliSession {
   /** Dossier de la session locale (`null` = fil ordinaire). */
   public cwd: string | null = null;
   private turn: AbortController | null = null;
+  /** `/btw` : fil séparé (créé à la première question, réutilisé ensuite) et sa requête, distincte de celle du tour. */
+  public btwThreadId: string | null = null;
+  private aside: AbortController | null = null;
   /** Utilisateur résolu par la connexion (`SessionToken.user`) — requis pour `totp_user`
    * (APPROVALS.md §3.5) ; `setUser` est appelé après `login()`/`loadSession()` par l'appelant. */
   private user: string | null = null;
@@ -88,12 +96,20 @@ export class CliSession {
     const opened = existing ? null : await this.client.createLocalSession({ cwd });
     this.threadId = existing ? existing.thread_id : opened!.thread_id;
     this.cwd = cwd;
-    // Skills du dépôt (§7.21.3) : seulement dans la réponse d'ouverture ; une session reprise n'en sait rien.
+    // Skills du dépôt (§7.21.3) : dans la réponse d'ouverture ; une session reprise les relit par
+    // `GET /v1/local/sessions/{id}/skills` (§7.21.4) — sans cela, un dépôt non fiable (ou modifié depuis) n'affichait aucune
+    // carte à la reprise. 404 (drapeau éteint, noyau ancien) : « inconnu ».
     if (!existing) return { resumed: false, messages: [], skills: opened!.skills ?? "off" };
+    let skills: ProjectSkillsState = "unknown";
     try {
-      return { resumed: true, messages: (await this.client.getThread(this.threadId)).messages, skills: "unknown" };
+      skills = (await this.client.getLocalSessionSkills(this.threadId)).skills;
     } catch {
-      return { resumed: true, messages: [], skills: "unknown" }; // fil sans tour encore (404 côté noyau)
+      // drapeau éteint (404) ou noyau sans la route : l'état reste inconnu
+    }
+    try {
+      return { resumed: true, messages: (await this.client.getThread(this.threadId)).messages, skills };
+    } catch {
+      return { resumed: true, messages: [], skills }; // fil sans tour encore (404 côté noyau)
     }
   }
 
@@ -116,8 +132,8 @@ export class CliSession {
     }
   }
 
-  /** Arrête un sous-agent de fond : `delegate_cancel {ids}` par la route d'appel d'outil. Le noyau ne l'appelle pas
-   * directement aujourd'hui (403) : l'appelant replie alors sur `cancelAllSubagents`. */
+  /** Arrête un sous-agent de fond : `delegate_cancel {ids}` par la route d'appel d'outil. Le noyau l'accepte depuis 03c3164 ;
+   * un noyau plus ancien répond 403 et l'appelant replie alors sur `cancelAllSubagents`. */
   cancelSubagent(id: string): Promise<LocalToolOutcome> {
     return this.client.callLocalTool(this.threadId, "delegate_cancel", { ids: [id] });
   }
@@ -136,10 +152,31 @@ export class CliSession {
     return this.client.listLocalSessions();
   }
 
-  /** Échap / `/cancel` : demande au noyau d'arrêter le tour ; le flux se ferme par `turn.done {cancelled}`. */
+  /** Mode de la session locale (`GET /v1/local/sessions/{fil}/mode`, noyau du 01.11) ; `null` si le noyau ne le donne pas
+   * (404 : noyau plus ancien ou fil sans session locale ; 405). Les autres erreurs remontent. */
+  async getMode(): Promise<SessionModeState | null> {
+    try {
+      return await this.client.getLocalSessionMode(this.threadId);
+    } catch (err) {
+      if (err instanceof NokkerApiError && (err.status === 404 || err.status === 405)) return null;
+      throw err;
+    }
+  }
+
+  /** `/mode <nom>` : `PUT …/mode` ; 400 `bad_mode` / `mode_above_project` remontent (`NokkerApiError.code`). */
+  setMode(mode: string): Promise<SessionModeState> {
+    // Nom tapé tel quel : c'est le noyau qui juge (`bad_mode`), le CLI ne filtre pas d'avance.
+    return this.client.setLocalSessionMode(this.threadId, mode as PermissionMode);
+  }
+
+  /** Échap / `/cancel` : demande au noyau d'arrêter le tour ; le flux se ferme par `turn.done {cancelled}`. Vrai si un
+   * tour a été arrêté. */
   async cancel(): Promise<boolean> {
     const r = await this.client.cancelTurn(this.threadId);
-    return r.cancelled === true || r.approvals_cancelled > 0 || (r.subagents_cancelled ?? 0) > 0;
+    // Noyau du 01.11 : `cancelled` n'est qu'un accusé de réception (toujours l'id du fil), `running` dit si un tour tournait.
+    if (typeof r.running === "boolean") return r.running;
+    // Repli (noyau plus ancien, sans `running`) : l'id du fil (chaîne) ou un booléen (anciens mocks) = prise en compte.
+    return r.cancelled === true || (typeof r.cancelled === "string" && r.cancelled !== "") || r.approvals_cancelled > 0 || (r.subagents_cancelled ?? 0) > 0;
   }
 
   /** Coupe la connexion du tour en cours (dernier recours, p. ex. au départ). */
@@ -161,6 +198,7 @@ export class CliSession {
   async sendMessage(
     text: string,
     onChunk: (chunk: ChatCompletionChunk, fullText: string) => void,
+    opts: { attachments?: ChatAttachment[]; control?: CliControl } = {},
   ): Promise<string> {
     // Le noyau ne lit que le DERNIER message utilisateur (l'historique vit côté serveur).
     let full = "";
@@ -174,12 +212,47 @@ export class CliSession {
           onChunk(chunk, full);
         },
         "nokker",
-        { signal: this.turn.signal },
+        { signal: this.turn.signal, ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
+          ...(opts.control ? { metadata: { cli_control: opts.control } } : {}) },
       );
     } finally {
       this.turn = null;
     }
     return full;
+  }
+
+  /** `/btw` : envoie `text` dans le fil séparé (créé au premier appel, titre `title`) ; le fil courant n'est pas touché.
+   * Requête à part (son propre AbortController) : elle peut partir pendant un tour du fil courant. */
+  async sendAside(text: string, title: string, onChunk: (fullText: string) => void): Promise<string> {
+    if (!this.btwThreadId) {
+      try {
+        this.btwThreadId = (await this.client.createThread(title)).id;
+      } catch {
+        this.btwThreadId = newThreadId(); // noyau sans création de fil nommé : le fil naît au premier message
+      }
+    }
+    let full = "";
+    this.aside = new AbortController();
+    try {
+      await this.client.streamChatCompletion(
+        this.btwThreadId,
+        [{ role: "user", content: text }],
+        (chunk) => {
+          full = applyChatChunk(full, chunk);
+          onChunk(full);
+        },
+        "nokker",
+        { signal: this.aside.signal, metadata: { cli_control: "btw" } },
+      );
+    } finally {
+      this.aside = null;
+    }
+    return full;
+  }
+
+  /** Coupe la question `/btw` en cours (départ). */
+  abortAside(): void {
+    this.aside?.abort();
   }
 
   listThreads(): Promise<Thread[]> {

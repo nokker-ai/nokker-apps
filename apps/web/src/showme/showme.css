@@ -1,0 +1,212 @@
+/* « Show me » mode (core docs/SHOW-ME.md): the big arrow, the sign, the ring around an element of the app. */
+
+.showme-arrow {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: var(--accent);
+  stroke: #ffffff;
+  stroke-width: 3;
+  stroke-linejoin: round;
+  paint-order: stroke;
+  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.35));
+  overflow: visible;
+}
+.side-sw .showme-arrow {
+  transform: scaleX(-1);
+}
+.side-ne .showme-arrow {
+  transform: scaleY(-1);
+}
+.side-nw .showme-arrow {
+  transform: scale(-1, -1);
+}
+
+.showme-caption {
+  margin: 0;
+  font: 600 17px/1.35 var(--display);
+  color: var(--strong);
+  overflow-wrap: anywhere;
+}
+.showme-where {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 0;
+  color: var(--soft);
+  overflow-wrap: anywhere;
+}
+.showme-label {
+  color: var(--strong);
+}
+.showme-replay {
+  margin-left: auto;
+}
+.showme-wait {
+  margin: 8px 0 0;
+}
+
+/* image of the thread with the arrow on the point */
+.showme-shot {
+  position: relative;
+  margin: 10px 0 0;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  background: var(--code-bg);
+}
+.showme-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: min(320px, 34vh);
+  object-fit: contain;
+}
+.showme-shot-wait {
+  display: block;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+}
+.showme-at {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.showme-at .showme-arrow {
+  position: absolute;
+  width: 48px;
+  height: 48px;
+  left: 2px;
+  top: 2px;
+}
+.showme-at.side-sw .showme-arrow {
+  left: -50px;
+}
+.showme-at.side-ne .showme-arrow {
+  top: -50px;
+}
+.showme-at.side-nw .showme-arrow {
+  left: -50px;
+  top: -50px;
+}
+.showme-dot {
+  position: absolute;
+  left: -9px;
+  top: -9px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 3px solid var(--accent);
+  box-shadow: 0 0 0 2px #ffffff;
+  animation: showme-pulse 1.4s ease-out infinite;
+}
+
+/* over the app itself */
+.showme-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 105; /* au-dessus des bulles et des tiroirs, sous les toasts (110) */
+  pointer-events: none;
+}
+.showme-ring {
+  position: fixed;
+  border-radius: 12px;
+  box-shadow: 0 0 0 3px var(--accent), 0 0 0 7px rgba(var(--accent-rgb), 0.25);
+  animation: showme-pulse-ring 1.4s ease-out infinite;
+}
+.showme-float {
+  position: fixed;
+  animation: showme-nudge-h 1.1s ease-in-out infinite alternate;
+}
+
+@keyframes showme-pulse {
+  from {
+    transform: scale(0.8);
+    opacity: 1;
+  }
+  to {
+    transform: scale(1.6);
+    opacity: 0.2;
+  }
+}
+@keyframes showme-pulse-ring {
+  from {
+    box-shadow: 0 0 0 3px var(--accent), 0 0 0 4px rgba(var(--accent-rgb), 0.45);
+  }
+  to {
+    box-shadow: 0 0 0 3px var(--accent), 0 0 0 12px rgba(var(--accent-rgb), 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .showme-dot,
+  .showme-ring,
+  .showme-float {
+    animation: none;
+  }
+}
+
+/* Phone: the bubble strip is short (28vh). A guide keeps its answers in view: a taller strip while a pointer is
+   open, a smaller caption; the answers come right after it. */
+.app.narrow .bubble-inline:has(.bubble-body.pointer) {
+  max-height: 46vh;
+}
+.app.narrow .showme-caption {
+  font-size: 15px;
+}
+.bubble-body.pointer .bubble-actions {
+  margin-top: 8px;
+}
+
+/* Over the app: the arrow and a pill BESIDE the target, on its row, so nothing covers the conversation. */
+.showme-float.compact.dir-e .showme-arrow {
+  transform: rotate(-45deg);
+}
+.showme-float.compact.dir-w .showme-arrow {
+  transform: rotate(135deg);
+}
+.showme-float.compact.dir-w {
+  --nudge-x: 5px;
+}
+@keyframes showme-nudge-h {
+  from {
+    translate: 0 0;
+  }
+  to {
+    translate: var(--nudge-x, -5px) 0;
+  }
+}
+.showme-pill-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.showme-pill {
+  position: fixed;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  height: 32px;
+  padding: 0 4px 0 12px;
+  border-radius: 999px;
+  font: 600 13px/1 var(--display);
+  white-space: nowrap;
+  color: var(--on-accent);
+  background: var(--accent);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+}
+.showme-pill .showme-x {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}

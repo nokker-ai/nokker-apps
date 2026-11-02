@@ -28,6 +28,35 @@ describe("ApprovalCard locale", () => {
     expect(f).toMatch(/↑\/↓ or 1-4 · Enter validates · expires in \d/);
   });
 
+  it("libellés d'après suggested_rule_kinds (noyau du 01.11) : terminal, fichier, delegate (outil seulement)", () => {
+    const term = render(<ApprovalCard approval={{ ...base, suggested_rule_kinds: ["exact", "prefix"] }} local busy={false} message={null} />).lastFrame()!;
+    expect(term).toContain("2. This exact command for this session");
+    expect(term).toContain("3. Always this exact command");
+    expect(term).toContain("3b. Always commands starting with “rm -rf”");
+    const file = { ...base, tool_name: "write_file", arguments: { path: "src/a.py" }, effect: "write", suggested_rules: ["write_file(src/a.py)", "write_file(src/**)"], suggested_rule_kinds: ["file", "dir"] as Approval["suggested_rule_kinds"] };
+    const ff = render(<ApprovalCard approval={file} local busy={false} message={null} />).lastFrame()!;
+    expect(ff).toContain("2. This file for this session");
+    expect(ff).toContain("3. Always this file");
+    expect(ff).toContain("3b. Always this folder");
+    const del = { ...base, tool_name: "delegate", arguments: { goal: "audit" }, effect: "write", suggested_rules: ["delegate"], suggested_rule_kinds: ["tool"] as Approval["suggested_rule_kinds"] };
+    const df = render(<ApprovalCard approval={del} local busy={false} message={null} />).lastFrame()!;
+    expect(df).toContain("2. This tool for this session");
+    expect(df).toContain("3. Always this tool");
+    expect(df).not.toContain("file");
+    expect(df).not.toContain("3b.");
+    // Sans le champ (noyau plus ancien) : « Always this file (rule) » d'avant pour un outil autre que terminal.
+    const old = render(<ApprovalCard approval={{ ...del, suggested_rule_kinds: undefined }} local busy={false} message={null} />).lastFrame()!;
+    expect(old).toContain("3. Always this file (rule)");
+    setLang("fr");
+    try {
+      const fr = render(<ApprovalCard approval={del} local busy={false} message={null} />).lastFrame()!;
+      expect(fr).toContain("2. Cet outil pour cette session");
+      expect(fr).toContain("3. Toujours cet outil");
+    } finally {
+      setLang("en");
+    }
+  });
+
   it("en français (langue posée par le test)", () => {
     setLang("fr");
     try {
@@ -85,7 +114,7 @@ describe("ApprovalCard locale", () => {
     await tick();
     stdin.write("\r");
     await tick();
-    expect(onLocalDecision).toHaveBeenCalledWith("approve", "session", undefined);
+    expect(onLocalDecision).toHaveBeenCalledWith("approve", "session", "terminal(rm -rf build)");
   });
 
   it("carte forte d'une session locale : seulement Une fois / Refuser (le noyau répond 400 sinon)", () => {
@@ -121,7 +150,7 @@ describe("ApprovalCard locale", () => {
     expect(f).toMatch(/1\. For this session[\s\S]*2\. Once[\s\S]*3\. Always[\s\S]*4\. Reject/);
     r.stdin.write("1");
     await tick();
-    expect(onLocalDecision).toHaveBeenLastCalledWith("approve", "session", undefined);
+    expect(onLocalDecision).toHaveBeenLastCalledWith("approve", "session", "terminal(pytest -q tests/)");
     r.stdin.write("2");
     await tick();
     expect(onLocalDecision).toHaveBeenLastCalledWith("approve", "once", undefined);
@@ -135,7 +164,7 @@ describe("ApprovalCard locale", () => {
     expect(r.lastFrame()).toMatch(/1\. Once[\s\S]*2\. For this session/);
     r.stdin.write("2");
     await tick();
-    expect(onLocalDecision).toHaveBeenLastCalledWith("approve", "session", undefined);
+    expect(onLocalDecision).toHaveBeenLastCalledWith("approve", "session", "terminal(make build)");
   });
 
   it("isTestCommand : motifs reconnus, faux amis non", async () => {

@@ -6,7 +6,7 @@ import { StoreContext } from "../context.js";
 import { useNokker } from "../store.js";
 import { uiLang } from "../components/ConnectorsTab.js";
 import { Welcome } from "../welcome/Welcome.js";
-import { DeletingScreen } from "../components/AccountTab.js";
+import { DeletingScreen } from "../components/DeletingScreen.js";
 
 
 export function ApprovalPage({ id }: { id: string }): React.ReactElement {

@@ -12,7 +12,9 @@
  * (skills du dépôt et sous-agents : voir `code-skills.ts`).
  */
 import { createHash, randomBytes } from "node:crypto";
-import type { Approval, CheckpointInfo, CodeCredential, CodeSession } from "@nokker-apps/sdk";
+import type { Approval, CheckpointInfo, CodeCredential, CodeSession, PermissionMode } from "@nokker-apps/sdk";
+import { todoResult, todosFor } from "./localtools.js";
+import { setSessionMode } from "./session-mode.js";
 import { devExtras, extrasFor, extraTool, liveCount, MAX_SUBAGENTS, SkillsErr, stopKids, trustSkills, type SessionExtras } from "./code-skills.js";
 import { householdMinor } from "./household.js";
 import { LOCAL_OWNER, randomId, type MockState } from "./state.js";
@@ -49,7 +51,7 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SECRET_KEYS = ["token", "password", "value", "secret", "auth", "username"];
 const MAX_VALUE_BYTES = 64 * 1024;
 const IDLE_TTL_S = 1800;
-const TOOLS_CALL = ["checkpoint_list", "checkpoint_diff", "checkpoint_restore", "skill_list", "skill_view", "delegate_status", "delegate_cancel"];
+const TOOLS_CALL = ["checkpoint_list", "checkpoint_diff", "checkpoint_restore", "skill_list", "skill_view", "delegate_status", "delegate_cancel", "todo"];
 
 function point(reason: string, minutesAgo: number, files: number): CheckpointInfo {
   const hash = createHash("sha1").update(randomBytes(8)).digest("hex");
@@ -190,7 +192,7 @@ export async function handleCode(state: MockState, user: string | null, method: 
   if (!user) return send(401, { error: { code: "unauthorized", message: "unauthorized" } }), true;
   if (user === LOCAL_OWNER) return send(403, { error: { code: "account_required", message: "sessions de code : compte requis" } }), true;
   const c = code(state);
-  const b = method === "POST" || method === "PUT" ? await readBody() : {};
+  const b = method === "POST" || method === "PUT" || method === "PATCH" ? await readBody() : {};
   try {
     const out = dispatch(state, c, user, method, path, url, b);
     if (!out) return send(404, { error: { code: "not_found", message: "not found" } }), true;
@@ -222,6 +224,17 @@ function dispatch(state: MockState, c: C, user: string, method: string, path: st
     }
     if (ms[2]) return method === "POST" ? (own(c, user, id), [404, { error: { code: "not_found", message: "hooks désactivés (code.hooks) ou pas de hooks de dépôt" } }]) : null;
     if (method === "GET") return [200, sync(own(c, user, id))];
+    if (method === "PATCH") {
+      const r = own(c, user, id);
+      try {
+        const out = setSessionMode(state, r.s.thread_id, b.mode, MODES as PermissionMode[]);
+        r.s.mode = out.mode;
+        return [200, out];
+      } catch (e) {
+        if (Array.isArray(e)) throw new CodeErr(e[0] as number, e[1] as string, e[2] as string);
+        throw e;
+      }
+    }
     if (method === "DELETE") {
       stopKids(state, id, own(c, user, id).x);
       c.sessions.delete(id);
@@ -267,6 +280,10 @@ function toolCall(state: MockState, c: C, r: Rec, b: Record<string, unknown>): [
   const a = args as Record<string, unknown>;
   const out = (payload: unknown, is_error = false): [number, unknown] => [200, { content: typeof payload === "string" ? payload : JSON.stringify(payload), is_error }];
   if (name === "checkpoint_list") return out(r.points);
+  if (name === "todo") {
+    if (Object.keys(a).length) throw new CodeErr(400, "bad_arguments", "todo : lecture seule, sans argument");
+    return out(todoResult(todosFor(state, r.s.thread_id)));
+  }
   const extra = extraTool(state, r.s.id, r.x, name, a);
   if (extra) return out(extra.payload, extra.error);
   const find = (h: unknown): CheckpointInfo | undefined => r.points.find((p) => typeof h === "string" && h.length >= 4 && p.hash.startsWith(h));

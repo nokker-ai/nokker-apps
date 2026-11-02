@@ -4,6 +4,8 @@ import { BRAND } from "@nokker-apps/brand";
 import { Icon } from "../icons.js";
 import { tr } from "../i18n/index.js";
 import { NewCodeSession } from "../lokkal/NewCodeSession.js";
+import type { NavView, ViewId } from "../nav/views.js";
+import { anchor } from "../showme/model.js";
 
 /** Tiroir gauche : les sessions (fils permanents). Chaque ligne est aussi une cible de dépôt de bulle. Sur téléphone, il
  * glisse par-dessus le chat (App : bouton en bas à gauche). */
@@ -20,6 +22,11 @@ export function Drawer({
   codeSessions = {},
   roots = null,
   onCreateCode,
+  places = [],
+  view = "chat",
+  onOpenView,
+  crewPulse = false,
+  crewTarget = true,
 }: {
   id?: string;
   /** Téléphone, tiroir rentré : hors de l'ordre de tabulation et de l'arbre d'accessibilité. */
@@ -36,6 +43,15 @@ export function Drawer({
   /** Racines où ouvrir une session de code ; `null` hors Lokkal (le « + » crée une conversation, comme avant). */
   roots?: string[] | null;
   onCreateCode?: (cwd: string) => Promise<void>;
+  /** Vues de travail (Crew, Code, Incidents, Plan) : sous la marque, au-dessus des sessions. */
+  places?: NavView[];
+  /** Vue affichée : une session n'est « la page courante » que dans le chat. */
+  view?: ViewId;
+  onOpenView?: (id: ViewId) => void;
+  /** Un agent vient d'être créé : l'entrée Crew s'illumine. */
+  crewPulse?: boolean;
+  /** L'entrée Crew est la cible du vol de la carte d'agent (`data-crew-tab`) ; au téléphone c'est le bouton du tiroir. */
+  crewTarget?: boolean;
 }): React.ReactElement {
   // Lokkal : le « + » propose d'abord le choix (conversation ou session de code).
   const [creating, setCreating] = useState<false | "choose" | "chat" | "code">(false);
@@ -52,9 +68,33 @@ export function Drawer({
         <img className="drawer-mark only-dark" src="/brand/nokker-emblem-dark.svg" alt="" />
       </div>
 
+      {places.length && onOpenView ? (
+        <nav className="drawer-places" aria-label={tr("Views")}>
+          {places.map((v) => (
+            <button
+              key={v.id}
+              type="button"
+              className={`place ${view === v.id ? "on" : ""} ${v.id === "crew" && crewPulse ? "pulse" : ""} ${v.attention ? "attention" : ""}`}
+              aria-current={view === v.id ? "page" : undefined}
+              data-view={v.id}
+              {...(v.id === "crew" && crewTarget ? { "data-crew-tab": "" } : {})}
+              onClick={() => onOpenView(v.id)}
+            >
+              <Icon name={v.icon} size={18} />
+              <span className="place-label">{v.label}</span>
+              {v.count ? (
+                <span className="nav-count" aria-label={v.countLabel}>
+                  {v.count}
+                </span>
+              ) : null}
+            </button>
+          ))}
+        </nav>
+      ) : null}
+
       <div className="drawer-head">
         <span className="eyebrow">{tr("Sessions")}</span>
-        <button type="button" className="icon-btn" aria-label={tr("New session")} aria-expanded={!!creating} onClick={() => setCreating((c) => (c ? false : roots !== null && onCreateCode ? "choose" : "chat"))}>
+        <button type="button" className="icon-btn" aria-label={tr("New session")} {...anchor("new_session")} aria-expanded={!!creating} onClick={() => setCreating((c) => (c ? false : roots !== null && onCreateCode ? "choose" : "chat"))}>
           <Icon name="plus" size={18} />
         </button>
       </div>
@@ -110,12 +150,13 @@ export function Drawer({
         </form>
       ) : null}
 
-      <nav className="drawer-list" aria-label={tr("Session list")}>
+      <nav className="drawer-list" aria-label={tr("Session list")} {...anchor("sessions")}>
         {threads.filter(isSessionThread).map((t) => {
-          const current = t.id === currentId;
-          const unread = t.unread || (current ? 0 : unseen[t.id] ?? 0);
+          const selected = t.id === currentId;
+          const current = selected && view === "chat";
+          const unread = t.unread || (selected ? 0 : unseen[t.id] ?? 0);
           const cwd = codeSessions[t.id];
-          const cls = ["session-row", current ? "current" : "", t.working ? "working" : "", dropTargetId === t.id ? "drop" : "", cwd ? "code" : ""].join(" ");
+          const cls = ["session-row", selected ? "current" : "", selected && !current ? "behind" : "", t.working ? "working" : "", dropTargetId === t.id ? "drop" : "", cwd ? "code" : ""].join(" ");
           const label = [
             cwd ? tr("Code session {0}, folder {1}", t.title, cwd) : tr("Session {0}", t.title),
             current ? tr("current") : "",

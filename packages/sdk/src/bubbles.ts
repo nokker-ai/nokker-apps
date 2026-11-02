@@ -90,7 +90,7 @@ export interface SessionMessageResult {
 // §2 — Bulle
 // ---------------------------------------------------------------------------
 
-export const BUBBLE_KINDS = ["monitor", "search", "notify", "timer", "script", "media", "artifact", "agent_draft", "approval", "handoff", "plan_split", "brief", "pack_agents"] as const;
+export const BUBBLE_KINDS = ["monitor", "search", "notify", "timer", "script", "media", "artifact", "agent_draft", "approval", "handoff", "plan_split", "brief", "pack_agents", "cast", "pointer"] as const;
 export type BubbleKind = (typeof BUBBLE_KINDS)[number];
 
 export const BUBBLE_STATUSES = ["idle", "working", "done", "failed"] as const;
@@ -284,6 +284,59 @@ export interface BubbleStateByKind {
   handoff: HandoffState;
   plan_split: PlanSplitState;
   brief: BriefState;
+  cast: CastState;
+  pointer: PointerState;
+}
+
+/**
+ * Showing something on a screen of the home (core docs/SCREEN-CAST.md §7, Lokkal, flag `local.cast.enabled`). One bubble
+ * per `cast_id`, updated by the hub. The web never sees the screen's link, token or address. `html` is shown in
+ * `<iframe sandbox="allow-scripts" srcdoc>` — never `allow-same-origin`; `null` with `html_too_large` beyond 256 KB.
+ * Decisions: `POST /v1/bubbles/{id}/actions/{action}` (approve | refuse while pending, stop while showing) → `{cast}`.
+ */
+export interface CastState {
+  cast_id: string;
+  status: "pending" | "showing" | "stopped" | "expired" | "refused" | "failed";
+  bubble_status?: BubbleStatus;
+  screen: { id: string; name: string; room: string | null; kind: "chromecast" | "airplay" | "dlna"; caps: ("page" | "image")[]; approved: boolean; personal: boolean };
+  /** Why a decision is asked: a screen used for the first time, or showing another member's content. */
+  request: { id: string; reason: "new_screen" | "consent" } | null;
+  view: { kind: "diagram" | "table" | "image" | "map" | "slides" | "web"; title: string };
+  html: string | null;
+  html_too_large: boolean;
+  /** Number of items masked as private in the page. */
+  masked: number;
+  version: number;
+  expires_at: string | null;
+  error: string | null;
+  actions: BubbleAction[];
+}
+
+/** Element of the Nokker interface a pointer can aim at (core docs/SHOW-ME.md §2, closed list). */
+export const POINTER_UI_TARGETS = ["composer", "attach", "send", "new_session", "sessions", "account", "bubbles"] as const;
+export type PointerUiTarget = (typeof POINTER_UI_TARGETS)[number];
+
+/** What the pointer aims at. `label`, `name` and `caption` are untrusted text (never HTML). */
+export type PointerTarget =
+  /** Element of the thread's browser snapshot: no shared view of the browser, so no position on screen. */
+  | { kind: "browser"; ref: string; label: string }
+  | { kind: "ui"; ui: PointerUiTarget | (string & {}) }
+  /** Image attached to the thread (`GET /v1/threads/{id}/images/{sha256}`), point in % of width and height. */
+  | { kind: "image"; sha256: string; media_type: string; name: string; x: number; y: number };
+
+/**
+ * « Show me » mode (core docs/SHOW-ME.md, flag `show_me`, off by default): Nina points instead of clicking. ONE open
+ * `pointer` bubble per thread, updated at each step. Answers: `POST /v1/bubbles/{id}/actions/done|lost` → 202
+ * `{accepted, thread_id, closed}` (a turn of the thread; `done` on the last announced step closes the bubble).
+ */
+export interface PointerState {
+  target: PointerTarget;
+  caption: string;
+  step: number | null;
+  steps: number | null;
+  /** `true` after an answer, until Nina posts the next step. */
+  waiting: boolean;
+  answer: "done" | "lost" | null;
 }
 
 /** X21 (LOKKAL §7.16) : relais d'une session web vers une machine Lokkal. Actions `accept`/`refuse` = décision de
@@ -385,7 +438,7 @@ export interface ShareRequest {
  */
 export type BubbleActionResult =
   | { closed: true; goto: string | null }
-  | { accepted: true; thread_id: string }
+  | { accepted: true; thread_id: string; /** `pointer` : the answer closed the guide (last step done). */ closed?: boolean }
   /** `agent_draft` → `activate` (§9.4) : exécutée en direct (200), la bulle est fermée, `agent.created` publié. */
   | { activated: true; agent: Agent };
 

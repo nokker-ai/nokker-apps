@@ -1,0 +1,137 @@
+/* Payments « à payer » + budgets (PAYMENTS §5). Tokens of theme.css only. */
+.pay-block {
+  display: grid;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+.pay-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.pay-merchant {
+  font-weight: 600;
+}
+.pay-amount {
+  font-size: 1.25rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.pay-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pay-items li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 0;
+  border-top: 1px solid var(--line-strong);
+}
+.pay-items li:first-child {
+  border-top: 0;
+}
+.pay-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0;
+}
+.pay-note,
+.pay-next {
+  margin: 0;
+}
+.pay-link a {
+  overflow-wrap: anywhere;
+}
+.pay-verify.ok::before {
+  content: "✓ ";
+}
+.pay-verify.ko::before {
+  content: "✗ ";
+}
+.pay-lines li {
+  align-items: flex-start;
+}
+.pay-line {
+  display: grid;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.pay-line-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.pay-line-head strong {
+  overflow-wrap: anywhere;
+}
+.pay-meter-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.85rem;
+}
+.pay-meter[data-level="warn"] .acc-bar-fill {
+  background: var(--hot);
+}
+.pay-meter[data-level="full"] .acc-bar-fill {
+  background: var(--ko);
+}
+.pay-editor {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+}
+.pay-fields {
+  display: grid;
+  grid-template-columns: 5.5rem repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+@media (max-width: 480px) {
+  .pay-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.pay-field {
+  display: grid;
+  gap: 2px;
+  font-size: 0.85rem;
+}
+.pay-field input {
+  min-width: 0;
+  min-height: 36px;
+}
+.pay-check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.pay-sub {
+  margin: 12px 0 0;
+  font-size: 0.95rem;
+}
+.pay-history li > span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pay-num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+@media (max-width: 480px) {
+  .pay-lines li {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .pay-lines li > .ob-btn {
+    align-self: flex-start;
+  }
+}

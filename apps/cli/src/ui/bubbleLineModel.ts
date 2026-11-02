@@ -22,6 +22,8 @@ const ICON_GLYPH: Record<BubbleKindTheme["icon"], string> = {
   page: "▤",
   bot: "✦",
   shield: "◈",
+  screen: "▭",
+  pointer: "➚",
 };
 
 export interface BubbleLineModel {

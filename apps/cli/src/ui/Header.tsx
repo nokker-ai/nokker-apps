@@ -15,11 +15,20 @@ export function Header({
   threadLabel,
   folder,
   status,
+  goal = null,
+  loops = null,
+  permMode = null,
 }: {
   threadLabel: string;
   /** Nom du dossier de la session locale (`null` = fil ordinaire). */
   folder: string | null;
   status: string;
+  /** Objectif de session (`/goal`), ligne déjà formatée. */
+  goal?: string | null;
+  /** Boucles `/loop` en cours, ligne déjà formatée. */
+  loops?: string | null;
+  /** Mode de permission de la session (`modeStatus`), mis à jour par `session.mode`. */
+  permMode?: string | null;
 }): React.ReactElement {
   return (
     <Box flexDirection="column">
@@ -31,7 +40,12 @@ export function Header({
         {folder ? <Text bold> {folder}</Text> : null}
         <Text dimColor> — {t("thread {0} · model: auto routing", shortLabel(threadLabel))}</Text>
       </Box>
-      <Text dimColor>{t("status: {0}", status)}</Text>
+      <Text dimColor>
+        {t("status: {0}", status)}
+        {permMode ? ` · ${permMode}` : ""}
+      </Text>
+      {goal ? <Text color="cyan">◎ {goal}</Text> : null}
+      {loops ? <Text color="cyan">⟳ {loops}</Text> : null}
     </Box>
   );
 }

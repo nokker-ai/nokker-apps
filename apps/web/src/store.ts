@@ -4,6 +4,8 @@
  */
 import { deletionGranted } from "./account/lifecycle.js";
 import { messageContent } from "./composer/images.js";
+import { userErrorText } from "./errors/userError.js";
+import { refusalText } from "./payments/model.js";
 import { applyLiveInputEvent, formatCostLine, type LiveInputs } from "@nokker-apps/sdk";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -117,7 +119,8 @@ export interface NokkerStore {
   missingThread: string | null;
   deleteThread(id: string): Promise<void>;
   /** `images` : `data:` des images jointes (X7) ; le message part alors en parties texte + image. */
-  send(text: string, images?: string[]): Promise<void>;
+  /** `false` when the message could not be sent (the composer puts it back). */
+  send(text: string, images?: string[]): Promise<boolean>;
   closeBubble(b: Bubble): Promise<void>;
   transfer(b: Bubble, toThread: string, mode: TransferMode): Promise<void>;
   share(b: Bubble, req: ShareRequest): Promise<void>;
@@ -131,13 +134,7 @@ export interface NokkerStore {
   toast(text: string, tone?: Toast["tone"]): void;
 }
 
-function errText(err: unknown): string {
-  if (err instanceof NokkerApiError) {
-    const m = (err.body as { error?: { message?: string } } | undefined)?.error?.message;
-    return m ? `${m} (${err.status})` : err.message;
-  }
-  return String(err instanceof Error ? err.message : err);
-}
+const errText = userErrorText;
 
 function sortThreads(list: Thread[]): Thread[] {
   return [...list].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
@@ -301,7 +298,8 @@ export function useNokker(): NokkerStore {
 
   const onEvent = useCallback(
     (e: NokkerEvent) => {
-      if (e.type.startsWith("subagent.") || e.type === "skill.untrusted") for (const fn of codeListeners.current) fn(e);
+      if (e.type.startsWith("subagent.") || e.type === "skill.untrusted" || e.type === "session.mode" || e.type === "todo.updated" || e.type.startsWith("house.") || e.type === "presence.changed" || e.type === "turn.done" || (e.type === "tool.result" && !!e.reason))
+        for (const fn of codeListeners.current) fn(e);
       // X22 : accumulation pure (SDK) ; la même fonction clôt un bloc au tool.result ou au turn.done.
       if (e.type === "tool.input.delta" || e.type === "tool.result" || e.type === "turn.done") setLiveInputs((l) => applyLiveInputEvent(l, e));
       switch (e.type) {
@@ -382,6 +380,11 @@ export function useNokker(): NokkerStore {
         case "session.message":
           if (e.to_thread === currentRef.current || e.from_thread === currentRef.current) scheduleRefresh();
           return;
+        // Paiements (PAYMENTS §5) : la carte arrive par `approval.requested` (une seule bulle) ; un refus AVANT toute
+        // carte (budget, mineur) n'a pas de carte : il se dit ici.
+        case "payment.refused":
+          toast(refusalText(e), "error");
+          return;
         default:
           return;
       }
@@ -398,6 +401,9 @@ export function useNokker(): NokkerStore {
         const isMock = await isMockServer(SERVER_URL);
         if (cancelled) return;
         setMock(isMock);
+        // Each (re)connection starts not ready: the probes gated on `ready` (team, household, learning…) stop while signed
+        // out and run again with the new key once the session is back.
+        setReady(false);
         setAccess("booting");
         const a = await restoreLogin(client, isMock);
         if (cancelled) return;
@@ -573,9 +579,10 @@ export function useNokker(): NokkerStore {
   );
 
   const send = useCallback(
-    async (text: string, images: string[] = []) => {
+    async (text: string, images: string[] = []): Promise<boolean> => {
       const id = currentRef.current;
-      if (!id || (!text.trim() && images.length === 0)) return;
+      if (!id || (!text.trim() && images.length === 0)) return false;
+      let sent = true;
       sendingRef.current.add(id);
       setSendingIds(new Set(sendingRef.current));
       const shown = images.length ? `${text}${text ? "\n\n" : ""}_${images.length === 1 ? tr("1 image attached") : tr("{0} images attached", images.length)}_` : text;
@@ -594,7 +601,10 @@ export function useNokker(): NokkerStore {
           }
         });
       } catch (err) {
-        toast(errText(err), "error");
+        sent = false;
+        // The message went nowhere: the composer puts it back (`false`), the toast says why in plain words.
+        const why = errText(err);
+        toast(`${why}${/[.!?…]$/.test(why) ? "" : "."} ${tr("Your message is back in the box.")}`, "error");
       } finally {
         sendingRef.current.delete(id);
         setSendingIds(new Set(sendingRef.current));
@@ -603,6 +613,7 @@ export function useNokker(): NokkerStore {
           setStreaming(null);
         }
       }
+      return sent;
     },
     [client, loadThread, toast],
   );
@@ -638,7 +649,8 @@ export function useNokker(): NokkerStore {
         if (b.kind === "agent_draft" && actionId === "activate") setFlying((s) => new Set(s).add(b.id));
         const res = await client.bubbleAction(b.id, actionId);
         // Une action d'une bulle non-notify devient un tour du fil (202) : ses effets arrivent par les événements.
-        if ("accepted" in res && b.kind !== "agent_draft") toast(tr("Action “{0}” handed to Nina.", b.actions.find((a) => a.id === actionId)?.label ?? actionId), "ok");
+        // `pointer` (show me): the bubble itself says « Nina prepares the next step », no toast.
+        if ("accepted" in res && b.kind !== "agent_draft" && b.kind !== "pointer") toast(tr("Action “{0}” handed to Nina.", b.actions.find((a) => a.id === actionId)?.label ?? actionId), "ok");
       }),
     [client, guard, toast],
   );
@@ -719,6 +731,10 @@ export function useNokker(): NokkerStore {
       } catch (err) {
         if (err instanceof NokkerApiError && err.status === 403 && (err.serverMessage === "strong_device_required" || (err.body as { error?: unknown } | undefined)?.error === "strong_device_required")) {
           throw new Error(t(uiLang(), "strongRequired"));
+        }
+        // Carte « à payer » : seule une passkey scelle le mandat ; une clé d'appareil brute est refusée (403).
+        if (err instanceof NokkerApiError && err.status === 403 && decision === "approve" && !proof.webauthn && /passkey/i.test(err.serverMessage ?? "")) {
+          throw new Error(tr("A “to pay” card is approved with a passkey only, and this browser signs with a device key: approve it from a device with a passkey."));
         }
         throw err;
       }

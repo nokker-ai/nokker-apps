@@ -1,7 +1,7 @@
 /**
  * Routes locales de démo (jeton local) : processus et aperçu (X6, LOKKAL §7.7), coffre (X4, §7.10), confiance des
  * hooks (X3, §7.9). Réglage : `POST /v1/dev/local-machine-mock {process?, hooks_thread?, memory_thread?,
- * restart_subagents?}` pose un
+ * restart_subagents?, lsp_thread?, lsp_path?, lsp_errors?}` pose un
  * processus de démo, émet `hook.untrusted` / `memory.noted` sur un fil. Les valeurs de secrets sont gardées en mémoire
  * et ne ressortent jamais.
  */
@@ -10,6 +10,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { LocalProcess } from "@nokker-apps/sdk";
 import { LOCAL_OWNER, type MockState } from "./state.js";
 import { addDemoNote, restartSubagents } from "./project.js";
+import { MOCK_CALC_ERRORS, publishLspDiagnostics } from "./lsp.js";
 
 type Send = (status: number, payload: unknown) => void;
 
@@ -48,6 +49,13 @@ export async function handleLocalMachineDev(state: MockState, method: string, pa
     const note = { name: "rule-tests-before-commit-1a2b", kind: "rule", scope: "project", title: "Run the tests before every commit", derived_from: "user" } as const;
     addDemoNote(state, b.memory_thread, { ...note, origin: `${b.memory_thread}#0`, created: new Date().toISOString(), links: [], locality: "local", in_core: true, text: "The user wants the full test suite before every commit." });
     state.publish({ type: "memory.noted", thread_id: b.memory_thread, turn_index: 0, ...note });
+  }
+  // Générateur `lsp.diagnostics` (lot 13) : `lsp_thread`, `lsp_path` (défaut src/calc.py), `lsp_errors` (défaut 2 ; 0 = réparé).
+  if (typeof b.lsp_thread === "string") {
+    const errors = typeof b.lsp_errors === "number" ? b.lsp_errors : 2;
+    const errs = MOCK_CALC_ERRORS.filter((i) => i.severity === "error");
+    const items = Array.from({ length: errors }, (_, k) => ({ ...errs[k % errs.length]!, line: errs[k % errs.length]!.line + k }));
+    publishLspDiagnostics(state, b.lsp_thread, typeof b.lsp_path === "string" ? b.lsp_path : "src/calc.py", items);
   }
   if (typeof b.sealed === "boolean") m.sealed = b.sealed;
   if (b.restart_subagents === true) restartSubagents(state); // redémarrage simulé du noyau (§7.22.9)

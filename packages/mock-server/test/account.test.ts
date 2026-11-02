@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NokkerClient } from "@nokker-apps/sdk";
 import { accountMock, startMockServer, type MockServerHandle } from "../src/index.js";
+import { weekWindowUtc } from "../src/account.js";
 
 let mock: MockServerHandle;
 let c: NokkerClient;
@@ -28,6 +29,18 @@ describe("mon compte (contrat final de Nokker dev)", () => {
     expect(u.today.browser).toBeUndefined();
     expect(u).not.toHaveProperty("today.deep");
     expect(u.plan).toBeNull();
+  });
+
+  it("fenêtre de la semaine juste avant, à et après lundi 06:00 UTC", () => {
+    const at = (iso: string) => weekWindowUtc(new Date(iso));
+    const w = { starts: "2026-10-26T06:00:00.000Z", resets_at: "2026-11-02T06:00:00.000Z" };
+    const next = { starts: "2026-11-02T06:00:00.000Z", resets_at: "2026-11-09T06:00:00.000Z" };
+    expect(at("2026-11-02T00:30:00Z")).toEqual(w);
+    expect(at("2026-11-02T05:59:59Z")).toEqual(w);
+    expect(at("2026-11-02T06:00:00Z")).toEqual(next);
+    expect(at("2026-11-02T12:00:00Z")).toEqual(next);
+    expect(at("2026-11-08T23:59:00Z")).toEqual(next);
+    expect(at("2026-10-31T10:00:00Z")).toEqual(w);
   });
 
   it("locataire interne : cap null", async () => {

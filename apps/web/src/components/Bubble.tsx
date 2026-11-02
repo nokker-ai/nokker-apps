@@ -1,6 +1,7 @@
 import React, { useLayoutEffect, useRef } from "react";
 import type { Bubble as BubbleT, Thread, TransferMode } from "@nokker-apps/sdk";
 import { bubbleTheme } from "@nokker-apps/brand";
+import { displayTitle } from "../showme/model.js";
 import { Icon } from "../icons.js";
 import { BubbleBody, bubbleLabel, statusLabel, useNow } from "../bubbles/kinds.js";
 import { tr } from "../i18n/index.js";
@@ -37,6 +38,8 @@ export interface BubbleProps {
 export function Bubble(p: BubbleProps): React.ReactElement {
   const b = p.bubble;
   const theme = bubbleTheme(b.kind);
+  // `pointer` (show me): the title is written here, in the interface language, from the step (the core's title is French).
+  const title = displayTitle(b);
   const working = b.status === "working";
   const now = useNow(b.kind === "timer" && b.status !== "done");
   const ref = useRef<HTMLElement>(null);
@@ -78,7 +81,7 @@ export function Bubble(p: BubbleProps): React.ReactElement {
   const fromTitle = readOnly ? p.threads.find((t) => t.id === b.thread_id)?.title : null;
 
   return (
-    <article ref={ref} className={cls} style={style} aria-label={tr("Bubble {0}: {1}, {2}", bubbleLabel(b.kind), b.title, statusLabel(b, now))} data-bubble-id={b.id} onPointerDownCapture={p.onActivate}>
+    <article ref={ref} className={cls} style={style} aria-label={tr("Bubble {0}: {1}, {2}", bubbleLabel(b.kind), title, statusLabel(b, now))} data-bubble-id={b.id} onPointerDownCapture={p.onActivate}>
       <div className={`bubble-head ${p.draggable ? "grab" : ""}`} onPointerDown={p.draggable ? p.onGripDown : undefined}>
       <div className="bubble-bar">
         {p.draggable ? (
@@ -124,7 +127,7 @@ export function Bubble(p: BubbleProps): React.ReactElement {
           </button>
         </div>
       </div>
-      <h3 className="bubble-title">{b.kind === "notify" ? tr("{0} is writing to you", b.title) : b.title}</h3>
+      <h3 className="bubble-title">{b.kind === "notify" ? tr("{0} is writing to you", b.title) : title}</h3>
       </div>
 
       {p.popover === "share" ? (

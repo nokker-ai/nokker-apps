@@ -1,6 +1,7 @@
 /**
  * Route locale d'appel d'outil du mock : `POST /v1/local/tools/call {thread_id, name, arguments}` (PROPOSÉE au noyau).
- * Liste blanche checkpoint_* / skill_* / todo, `memory` (drapeau mémoire de projet) et `delegate_status` (autre nom :
+ * Liste blanche checkpoint_* / skill_* / todo, `memory` (drapeau mémoire de projet), `lsp_diagnostics` (drapeau
+ * `local.lsp.enabled`, `state.lsp`) et `delegate_status` (autre nom :
  * 403, `delegate_cancel` compris) ; fil non local : 404 ; `todo` avec des arguments : 400 ;
  * tour en cours sur le fil : 409 ; refus par règle / mode plan : 200 `{content, is_error: true}` ; 200 `{content, is_error}` sinon ;
  * 202 `{approval_id}` si l'effet exige une carte (puis UN `tool.result {thread_id, approval_id, content, is_error}`, rien d'autre,
@@ -19,9 +20,10 @@
  */
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { LOCAL_TOOL_NAMES, decide, parseTurnId, type CheckpointInfo, type LocalToolEffect, type LocalToolName, type SkillInfo, type TodoItem } from "@nokker-apps/sdk";
+import { LOCAL_TOOL_NAMES, decide, parseTurnId, type CheckpointInfo, type LocalToolEffect, type LocalToolName, type SkillInfo, type TodoItem, type TodoResult } from "@nokker-apps/sdk";
 import { askLocalApproval } from "./local.js";
 import { delegateStatus, memoryTool, visibleProjectSkills } from "./project.js";
+import { lspTool } from "./lsp.js";
 import { randomId, type MockState } from "./state.js";
 
 const EFFECTS: Record<LocalToolName, LocalToolEffect> = {
@@ -35,6 +37,7 @@ const EFFECTS: Record<LocalToolName, LocalToolEffect> = {
   memory: "read",
   delegate_status: "read",
   delegate_cancel: "read",
+  lsp_diagnostics: "read",
 };
 
 /** Effet de CET appel : `memory {action: forget}` écrit (WRITE), le reste lit. */
@@ -61,6 +64,21 @@ interface ThreadTools {
   links: Map<string, { thread_id: string; turn_index: number; tool: string }>;
 }
 const store = new WeakMap<MockState, Map<string, ThreadTools>>();
+
+/** Plan (`todo`) of a thread, shared by the local and code session routes and `POST /v1/dev/todo`. */
+export function todosFor(state: MockState, threadId: string): TodoItem[] {
+  return toolsFor(state, threadId).todos;
+}
+
+/** `content` of the read-only `todo` tool. */
+export function todoResult(todos: TodoItem[]): TodoResult {
+  const count = (st: string): number => todos.filter((x) => x.status === st).length;
+  return { todos, revision: 1, summary: { total: todos.length, pending: count("pending"), in_progress: count("in_progress"), completed: count("completed"), cancelled: count("cancelled") } };
+}
+
+export function setTodos(state: MockState, threadId: string, todos: TodoItem[]): void {
+  toolsFor(state, threadId).todos = todos;
+}
 
 function toolsFor(state: MockState, threadId: string): ThreadTools {
   let m = store.get(state);
@@ -136,6 +154,41 @@ export function autoCheckpoint(state: MockState, threadId: string, turnId: strin
   return takeCheckpoint(state, root, `avant ${toolName}`, { thread_id: threadId, turn_index: parseTurnId(turnId)?.index ?? 0, tool: toolName });
 }
 
+/** Code STABLE d'une raison de point de retour (noyau du 01.11, `nokker/tools/checkpoints.py::reason_code`) : l'outil du
+ * lien point ↔ tour prime ; sinon la raison texte du noyau (« avant <outil> », « avant retour à … », « manuel »…). */
+export function reasonCode(reason: string, tool?: string | null): string {
+  if (tool === "checkpoint_restore") return "before_rollback";
+  if (tool === "checkpoint_create") return "manual";
+  if (tool) return `before_${tool}`;
+  const r = (reason || "").trim();
+  if (r.startsWith("avant retour à ") || /^pre-rollback/.test(r)) return "before_rollback";
+  const known: Record<string, string> = { automatique: "auto", auto: "auto", manuel: "manual", manual: "manual", "début de session": "session_start", "session start": "session_start" };
+  if (known[r]) return known[r]!;
+  const m = /^avant ([a-z][a-z0-9_]*)$/.exec(r);
+  return m ? `before_${m[1]}` : "other";
+}
+
+/** `{hash: code}` des points nommés dans le résultat d'un outil de points de retour (`reason_codes` de la réponse d'un
+ * appel direct) ; `null` si aucun. Le `content` (texte vu par le modèle) n'est pas touché. */
+export function reasonCodes(name: string, content: string): Record<string, string> | null {
+  if (!name.startsWith("checkpoint_")) return null;
+  let data: unknown;
+  try {
+    data = JSON.parse(content);
+  } catch {
+    return null;
+  }
+  const entries = Array.isArray(data) ? data : data && typeof data === "object" ? [data] : [];
+  const out: Record<string, string> = {};
+  for (const e of entries as Array<Record<string, unknown>>) {
+    if (!e || typeof e !== "object") continue;
+    const h = (e.hash || e.restored_to) as unknown;
+    if (typeof h === "string" && h && typeof e.reason === "string") out[h] = reasonCode(e.reason, typeof e.tool === "string" ? e.tool : null);
+    if (typeof e.snapshot === "string" && e.snapshot) out[e.snapshot] = "before_rollback";
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 /** Index du prochain tour du fil (appel direct sans tour modèle, §7.4.7). */
 function nextTurn(state: MockState, threadId: string): number {
   return state.threads.get(threadId)?.turns.length ?? 0;
@@ -157,7 +210,7 @@ function takeCheckpoint(state: MockState, threadId: string, reason: string, link
   t.checkpoints.unshift(cp);
   if (photo) t.snapshots.set(hash, photo);
   t.links.set(hash, link);
-  state.publish({ type: "checkpoint.created", ...link, hash });
+  state.publish({ type: "checkpoint.created", ...link, hash, reason_code: reasonCode("", link.tool) });
   return cp;
 }
 
@@ -234,7 +287,7 @@ function execute(state: MockState, threadId: string, name: LocalToolName, args: 
       t.checkpoints.unshift(cp);
       const link = { thread_id: threadId, turn_index: nextTurn(state, threadId), tool: "checkpoint_create" };
       t.links.set(hash, link);
-      state.publish({ type: "checkpoint.created", ...link, hash });
+      state.publish({ type: "checkpoint.created", ...link, hash, reason_code: reasonCode("", link.tool) });
       return ok({ created: true, ...cp, ...link });
     }
     case "checkpoint_restore": {
@@ -246,7 +299,7 @@ function execute(state: MockState, threadId: string, name: LocalToolName, args: 
         t.checkpoints.unshift({ hash, short_hash: hash.slice(0, 8), timestamp: new Date().toISOString(), reason: `avant retour à ${cp.short_hash}`, files_changed: 0 });
         const link = { thread_id: threadId, turn_index: nextTurn(state, threadId), tool: "checkpoint_restore" };
         t.links.set(hash, link);
-        state.publish({ type: "checkpoint.created", ...link, hash });
+        state.publish({ type: "checkpoint.created", ...link, hash, reason_code: reasonCode("", link.tool) });
       }
       return ok({ success: true, restored_files: ["src/app.py", "tests/test_app.py"], skipped_user_edits: ["notes.md"] });
     }
@@ -270,18 +323,27 @@ function execute(state: MockState, threadId: string, name: LocalToolName, args: 
       return { status: 200, body: delegateStatus(state, threadId, args) };
     case "delegate_cancel":
       return fail("outil non appelable directement : delegate_cancel");
-    case "todo": {
-      const count = (st: string): number => t.todos.filter((x) => x.status === st).length;
-      return ok({ todos: t.todos, revision: 1, summary: { total: t.todos.length, pending: count("pending"), in_progress: count("in_progress"), completed: count("completed"), cancelled: count("cancelled") } });
-    }
+    case "lsp_diagnostics":
+      return { status: 200, body: lspTool(state, threadId, args) };
+    case "todo":
+      return ok(todoResult(t.todos));
   }
+}
+
+/** Réponse 200 d'un outil de points de retour : `reason_codes` en plus (noyau du 01.11, `direct_result_body`). */
+function withReasonCodes(name: string, reply: Reply): Reply {
+  const b = reply.body as { content?: unknown; is_error?: unknown };
+  if (reply.status !== 200 || b.is_error || typeof b.content !== "string") return reply;
+  const codes = reasonCodes(name, b.content);
+  return codes ? { ...reply, body: { ...b, reason_codes: codes } } : reply;
 }
 
 export async function handleLocalToolCall(state: MockState, body: Record<string, unknown>): Promise<Reply> {
   const threadId = typeof body.thread_id === "string" ? body.thread_id : "";
   const name = body.name as LocalToolName;
-  // Liste blanche du noyau : `memory` seulement drapeau `local.project_memory` allumé ; `delegate_cancel` jamais.
-  if (!LOCAL_TOOL_NAMES.includes(name) || (name === "memory" && !state.projectMemory)) return forbidden(`outil non appelable directement : ${String(body.name)}`);
+  // Liste blanche du noyau : `memory` seulement drapeau `local.project_memory` allumé ; `delegate_cancel` refusé ici (ancien noyau simulé).
+  // Le mock simule un noyau ANTÉRIEUR à 03c3164 pour `delegate_cancel` (403) : c'est ce qui exerce le repli de la CLI.
+  if (!LOCAL_TOOL_NAMES.includes(name) || name === "delegate_cancel" || (name === "memory" && !state.projectMemory) || (name === "lsp_diagnostics" && !state.lsp)) return forbidden(`outil non appelable directement : ${String(body.name)}`);
   if (!state.localSessions.has(threadId)) return { status: 404, body: { error: { message: "session locale inconnue" } } };
   const args = body.arguments && typeof body.arguments === "object" ? (body.arguments as Record<string, unknown>) : {};
   if (name === "todo" && Object.keys(args).length > 0) return { status: 400, body: { error: { message: "arguments invalides (todo : lecture seule, sans argument)" } } };
@@ -291,7 +353,7 @@ export async function handleLocalToolCall(state: MockState, body: Record<string,
   // checkpoint_create : le noyau réel répond encore 202 (carte) ; il passera à 200 en accept_edits — la CLI gère les deux.
   const verdict = name === "checkpoint_create" ? "ask" : decide(state.effectiveSettings(threadId), name, args, effect);
   if (verdict === "deny") return fail("refusé par une règle ou par le mode plan");
-  if (verdict === "allow") return execute(state, threadId, name, args);
+  if (verdict === "allow") return withReasonCodes(name, execute(state, threadId, name, args));
 
   // Carte : même chemin que n'importe quel effet (approval.requested, GET /v1/local/approvals, decide).
   const turnId = `${threadId}:tools`;

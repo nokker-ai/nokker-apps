@@ -9,6 +9,7 @@ import { loadPositions, loadViews, savePositions, saveViews, type BubblePosition
 import { arrange, placeNew, type Rect } from "../placement.js";
 import { Bubble, type Popover } from "./Bubble.js";
 import { DropMenu } from "./DropMenu.js";
+import { anchor, displayTitle } from "../showme/model.js";
 
 interface Rendered {
   b: BubbleT;
@@ -326,6 +327,33 @@ export function BubbleLayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unplaced.join(","), inline]);
 
+  // Une bulle posée qui GRANDIT ensuite (image d'un « montre-moi », réponses, étapes) remonte pour rester dans la
+  // fenêtre : la pose ne connaît que sa taille d'origine, et une bulle plus bas que le bord ne se lit plus.
+  useEffect(() => {
+    const layer = layerRef.current;
+    if (inline || !layer || typeof ResizeObserver === "undefined") return;
+    const fit = (): void => {
+      const b = usable();
+      const bottom = b.y + b.h;
+      const patch: Record<string, { x: number; y: number }> = {};
+      layer.querySelectorAll<HTMLElement>("[data-bubble-id]").forEach((el) => {
+        const id = el.dataset.bubbleId ?? "";
+        const p = posOf(id);
+        if (!p) return;
+        const over = p.y + el.offsetHeight - bottom;
+        if (over > 1) {
+          const y = Math.max(b.y, Math.round(p.y - over));
+          if (y !== p.y) patch[id] = { x: p.x, y };
+        }
+      });
+      if (Object.keys(patch).length) setPos(patch);
+    };
+    const ro = new ResizeObserver(fit);
+    layer.querySelectorAll("[data-bubble-id]").forEach((el) => ro.observe(el));
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rendered.length, positions, inline, threadKey]);
+
   // « Ranger » : colonnes depuis la droite, la plus récente en haut.
   useEffect(() => {
     if (!arrangeTick || inline || !layerRef.current) return;
@@ -385,9 +413,9 @@ export function BubbleLayer({
     const top = visible.find((r) => !r.leaving)!.b;
     return (
       <section className="bubble-inline folded" aria-label={tr("Session bubbles")}>
-        <button type="button" className="bubble-fold" aria-expanded={false} aria-label={tr("Show the {0} bubble(s), latest: {1}", liveCount, top.title)} onClick={() => setFolded(false)}>
+        <button type="button" className="bubble-fold" aria-expanded={false} aria-label={tr("Show the {0} bubble(s), latest: {1}", liveCount, displayTitle(top))} onClick={() => setFolded(false)}>
           <Icon name={bubbleTheme(top.kind).icon} size={14} />
-          <span className="bubble-fold-title">{top.title}</span>
+          <span className="bubble-fold-title">{displayTitle(top)}</span>
           <span className="tab-count">{liveCount}</span>
           <Icon name="chevronDown" size={16} />
         </button>
@@ -399,7 +427,7 @@ export function BubbleLayer({
     const chips = visible.filter((r) => isCollapsed(r.b.id) && !r.leaving);
     const open = visible.filter((r) => !isCollapsed(r.b.id) || r.leaving);
     return (
-      <section className="bubble-inline" aria-label={tr("Session bubbles")}>
+      <section className="bubble-inline" aria-label={tr("Session bubbles")} {...anchor("bubbles")}>
         {chips.length ? (
           <div className="chip-row" aria-label={tr("Collapsed bubbles")}>
             {chips.map(({ b }) => {
@@ -410,7 +438,7 @@ export function BubbleLayer({
                   type="button"
                   className={`bubble-chip ${b.status === "working" ? "working" : ""}`}
                   style={{ "--k-l": t.light, "--krgb-l": t.lightRgb, "--k-d": t.color, "--krgb-d": t.rgb } as React.CSSProperties}
-                  aria-label={tr("Expand the bubble {0} {1}, {2}", bubbleLabel(b.kind), b.title, statusLabel(b, Date.now()))}
+                  aria-label={tr("Expand the bubble {0} {1}, {2}", bubbleLabel(b.kind), displayTitle(b), statusLabel(b, Date.now()))}
                   onClick={() => setViews((v) => ({ ...v, [b.id]: { ...v[b.id], collapsed: false } }))}
                 >
                   <Icon name={t.icon} size={14} />
@@ -427,7 +455,7 @@ export function BubbleLayer({
   }
 
   return (
-    <div className={`bubble-layer ${arranging ? "arranging" : ""}`} ref={layerRef}>
+    <div className={`bubble-layer ${arranging ? "arranging" : ""}`} ref={layerRef} {...anchor("bubbles")}>
       {visible.map((r) => {
         const placed = drag?.id === r.b.id ? drag : posOf(r.b.id);
         const z = 10 + Math.max(0, order.indexOf(r.b.id)) + (drag?.id === r.b.id ? 500 : 0) + (r.b.kind === "notify" ? 200 : 0);
@@ -441,7 +469,7 @@ export function BubbleLayer({
       })}
       {dropMenu ? (
         <DropMenu
-          bubbleTitle={dropMenu.bubble.title}
+          bubbleTitle={displayTitle(dropMenu.bubble)}
           threadTitle={threads.find((t) => t.id === dropMenu.threadId)?.title ?? "?"}
           top={dropMenu.top}
           left={dropMenu.left}

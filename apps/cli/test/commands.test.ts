@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSlashCommand, tokenize } from "../src/commands.js";
+import { helpText, parseSlashCommand, tokenize } from "../src/commands.js";
 
 describe("tokenize", () => {
   it("découpe sur les espaces", () => {
@@ -63,7 +63,12 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/memory forget rule-x-1")).toEqual({ kind: "memory", action: "forget", name: "rule-x-1" });
     expect(parseSlashCommand("/skills trust")).toEqual({ kind: "skillsTrust" });
     expect(parseSlashCommand("/cost")).toEqual({ kind: "cost" });
+    expect(parseSlashCommand("/mode")).toEqual({ kind: "mode", name: null });
+    expect(parseSlashCommand("/mode  plan ")).toEqual({ kind: "mode", name: "plan" });
     expect(parseSlashCommand("/cancel")).toEqual({ kind: "cancel" });
+    expect(parseSlashCommand("/pause")).toEqual({ kind: "cancel" });
+    expect(parseSlashCommand("/STOP")).toEqual({ kind: "cancel" });
+    expect(helpText()).toContain("/pause");
     expect(parseSlashCommand("/out")).toEqual({ kind: "out" });
     expect(parseSlashCommand("/confirm 123456")).toEqual({ kind: "confirm", totp: "123456" });
   });

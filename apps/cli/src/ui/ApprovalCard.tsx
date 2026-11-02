@@ -95,7 +95,7 @@ function LocalCard({
 
   function validate(c: LocalChoice): void {
     const { decision, scope } = choiceToDecision(c.id);
-    onDecision(decision, scope, c.rule);
+    onDecision(decision, scope, c.rule ?? c.scopeRule);
   }
 
   useInput((input, key) => {

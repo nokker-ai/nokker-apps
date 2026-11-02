@@ -1,7 +1,7 @@
 // Couleurs, icônes et libellés des bulles — côté client UNIQUEMENT (BUBBLES.md §2 : « couleurs côté client
 // (packages/brand), jamais dans l'API »). Couleur + icône + libellé ensemble : la couleur n'est jamais le seul signal.
 
-export type BubbleKindName = "monitor" | "search" | "notify" | "timer" | "script" | "media" | "artifact" | "agent_draft" | "approval" | "handoff" | "plan_split" | "brief" | "pack_agents";
+export type BubbleKindName = "monitor" | "search" | "notify" | "timer" | "script" | "media" | "artifact" | "agent_draft" | "approval" | "handoff" | "plan_split" | "brief" | "pack_agents" | "cast" | "pointer";
 
 export interface BubbleKindTheme {
   label: string;
@@ -14,7 +14,7 @@ export interface BubbleKindTheme {
   light: string;
   lightRgb: string;
   /** Nom d'icône (le client fournit le dessin) */
-  icon: "disk" | "search" | "bell" | "timer" | "terminal" | "play" | "page" | "bot" | "shield";
+  icon: "disk" | "search" | "bell" | "timer" | "terminal" | "play" | "page" | "bot" | "shield" | "screen" | "pointer";
 }
 
 export const BUBBLE_THEME: Record<BubbleKindName, BubbleKindTheme> = {
@@ -31,6 +31,8 @@ export const BUBBLE_THEME: Record<BubbleKindName, BubbleKindTheme> = {
   plan_split: { label: "Split", color: "#7FD1FF", rgb: "127,209,255", light: "#0B5F8A", lightRgb: "11,95,138", icon: "page" },
   brief: { label: "Brief", color: "#F2C94C", rgb: "242,201,76", light: "#7A5A00", lightRgb: "122,90,0", icon: "bell" },
   pack_agents: { label: "Pack agents", color: "#5FD4C8", rgb: "95,212,200", light: "#0B6E67", lightRgb: "11,110,103", icon: "bot" },
+  cast: { label: "Screen", color: "#8FB8FF", rgb: "143,184,255", light: "#2A5DB0", lightRgb: "42,93,176", icon: "screen" },
+  pointer: { label: "Show me", color: "#FF6B57", rgb: "255,107,87", light: "#B3261E", lightRgb: "179,38,30", icon: "pointer" },
 };
 
 /** Thème neutre d'un `kind` que ce client ne connaît pas (le noyau peut en ajouter avant nous). */
@@ -64,6 +66,8 @@ export const BUBBLE_LABEL_FR: Record<BubbleKindName, string> = {
   plan_split: "Découpage",
   brief: "Brief",
   pack_agents: "Agents d'un pack",
+  cast: "Écran",
+  pointer: "Montre-moi",
 };
 
 /** Libellé d'un `kind` de bulle dans la langue du client (inconnu : « Bubble » / « Bulle »). */

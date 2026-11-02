@@ -87,6 +87,9 @@ describe("lignes d'outil", () => {
 
   it("cible : la commande pour terminal", () => {
     expect(toolTarget("terminal", { command: "ls -la" })).toBe("ls -la");
+    // delegate : le but des tâches (sinon la carte affiche « Cible : » vide)
+    expect(toolTarget("delegate", { tasks: [{ goal: "count lines" }], background: true })).toBe("count lines");
+    expect(toolTarget("delegate", { tasks: [{ goal: "a" }, { goal: "b" }] })).toBe("a (+1)");
     expect(toolTarget("search_files", { pattern: "def add", path: "src" })).toBe("src");
   });
 });
