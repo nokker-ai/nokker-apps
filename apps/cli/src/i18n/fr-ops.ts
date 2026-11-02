@@ -14,6 +14,18 @@ export const FR_OPS: Record<string, string> = {
   "repair": "réparation",
   "server (after)": "serveur (après)",
   "vault": "coffre",
+  "model": "modèle",
+
+  // doctor : premier réglage (Lokkal)
+  "first setup not finished": "premier réglage pas terminé",
+  "no default model chosen": "aucun modèle par défaut choisi",
+  "default model is the nokker.ai Router but this machine is not linked": "le modèle par défaut est le Router de nokker.ai, mais cette machine n'est pas reliée",
+  "default model {0} no longer exists": "le modèle par défaut {0} n'existe plus",
+  "default model {0} has no key": "le modèle par défaut {0} n'a pas de clé",
+  "default model {0} has no model name": "le modèle par défaut {0} n'a pas de nom de modèle",
+  "{0} — open {1}": "{0} — ouvre {1}",
+  "default {0}": "par défaut {0}",
+  "setup unreadable ({0})": "réglage illisible ({0})",
 
   // doctor : mémoire longue
   "long-term memory ({0}) is down — {1}": "mémoire longue ({0}) en panne — {1}",

@@ -8,10 +8,11 @@ import { writeJson } from "../viewState.js";
 import { ConnectorsStep, ErrorLine, TelegramStep } from "./Connectors.js";
 import { localErrorKey, testErrorKind } from "./errors.js";
 import { t, type Key } from "./i18n.js";
-import { takeLocalToken } from "./localToken.js";
+import { forgetLocalToken, takeLocalToken } from "./localToken.js";
 import { StepsNav } from "./Onboarding.js";
 import { DefaultPicker, optionLabel, RouterCard } from "./SetupParts.js";
 import { ImportCard } from "./ImportCard.js";
+import { LocalKeyHelp } from "./LocalKey.js";
 import {
   byokName,
   canContinueModels,
@@ -48,7 +49,7 @@ function linkFailure(err: unknown): LocalAction {
 export function Setup(): React.ReactElement {
   useEffect(applyStoredTheme, []);
   // Le jeton local sert à tout : routes /v1/local/*, connecteurs, Telegram. Sans lui, rien ne s'ouvre.
-  const [localToken] = useState(takeLocalToken);
+  const [localToken] = useState(() => takeLocalToken());
   const client = useMemo(() => {
     const c = createClient();
     if (localToken) c.setToken(localToken);
@@ -76,7 +77,12 @@ export function Setup(): React.ReactElement {
     client
       .getLocalSetup()
       .then((setup) => !off && dispatch({ type: "setup_loaded", setup }))
-      .catch((err) => !off && dispatch({ type: err instanceof NokkerApiError && err.status === 401 ? "setup_locked" : "setup_failed" }));
+      .catch((err) => {
+        if (off) return;
+        const refused = err instanceof NokkerApiError && err.status === 401;
+        if (refused) forgetLocalToken(localToken); // revoked key: forgotten, the page asks for it again
+        dispatch({ type: refused ? "setup_locked" : "setup_failed" });
+      });
     return () => {
       off = true;
     };
@@ -167,7 +173,8 @@ export function Setup(): React.ReactElement {
         {s.step === "locked" && (
           <section aria-live="polite">
             <h1 id="ob-title" className="ob-title">{t(L, "lkLockedTitle")}</h1>
-            <p>{t(L, "lkLockedBody")}</p>
+            <p>{t(L, "lkKeyIntro")}</p>
+            <LocalKeyHelp lang={L} origin={location.origin} onOpened={() => location.assign("/setup")} />
           </section>
         )}
         {s.step === "models" && <ModelsStep s={s} client={client} keys={keys.current} dispatch={dispatch} onStartLink={startLink} onSave={() => void saveModels()} />}

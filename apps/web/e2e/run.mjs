@@ -1080,6 +1080,69 @@ async function knockSetting(page, base, t) {
   await shot(page, "knock-unsupported-dark");
 }
 
+/** Lokkal opened without its local key (LOKKAL §7.1): on 127.0.0.1 served by a Lokkal core, the page explains how to
+ * open it (installer link, key file) and never shows the nokker.ai sign-in; a wrong key is refused, the right one opens
+ * this core and is kept in localStorage: a NEW tab opens the app without the key page. A revoked key (401) is forgotten
+ * and the key page comes back. `/setup` without the key says the same. On the mock (`localhost`) the sign-in is unchanged. */
+async function lokkalKey(page, base, t, local) {
+  if (!local?.token) throw new StepError("no local key from the mock");
+  const lk = base.replace("//localhost:", "//127.0.0.1:");
+  const ctx = page.context();
+  // A real core answers /healthz without `mock: true`: the page then asks the core whether it is a Lokkal.
+  await ctx.route("**/healthz", (r) => r.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' }));
+  const keyPage = async (p, what) => {
+    await p.locator("[data-local-key-page]").waitFor({ timeout: STEP_MS }).catch(() => {
+      throw new StepError(`no key page: ${what}`);
+    });
+    if (await p.locator("#wl-email").count()) throw new StepError(`the nokker.ai sign-in shows: ${what}`);
+  };
+  const t0 = Date.now();
+  await page.goto(`${lk}/`);
+  await keyPage(page, "Lokkal without key");
+  t.lokkalPageMs = Date.now() - t0;
+  const text = await page.locator("main").innerText();
+  if (/private beta|Apply\b/i.test(text)) throw new StepError("the private beta / Apply shows on a Lokkal");
+  if (!text.includes(`${lk}/setup`) || !text.includes("~/.nokker/state/local-token")) throw new StepError("the page does not say where the key is");
+  await noOverflow(page, "lokkal without key");
+  await shot(page, "lokkal-key-light");
+  // `/setup` without the key: locked, with the same help.
+  const setup = await ctx.newPage();
+  await setup.goto(`${lk}/setup`);
+  await setup.locator("[data-local-key]").waitFor({ timeout: STEP_MS });
+  if (await setup.locator("#wl-email").count()) throw new StepError("the sign-in shows on /setup without the key");
+  await noOverflow(setup, "setup without key");
+  await shot(setup, "lokkal-setup-locked");
+  await setup.close();
+  await page.fill("#lk-key-input", "not-this-machine");
+  await page.locator("[data-local-key] button[type=submit]").click();
+  await page.locator('[data-local-key-error="wrong"]').waitFor({ timeout: STEP_MS });
+  await shot(page, "lokkal-key-wrong");
+  await page.fill("#lk-key-input", local.token);
+  await page.locator("[data-local-key] button[type=submit]").click();
+  await until(page, "the key opens this Lokkal", () => (location.pathname === "/setup" || location.pathname === "/") && !document.querySelector("[data-local-key]"));
+  if ((await page.evaluate(() => localStorage.getItem("nokker.local-token"))) !== local.token) throw new StepError("the key is not kept in localStorage");
+  // A new tab on the same machine: the kept key opens the app, no key page.
+  const tab = await ctx.newPage();
+  await tab.goto(`${lk}/`);
+  await tab.waitForSelector("#nk-composer", { timeout: STEP_MS }).catch(() => {
+    throw new StepError("a new tab with a kept key does not open the app");
+  });
+  if (await tab.locator("[data-local-key-page]").count()) throw new StepError("the key page shows with a kept key");
+  // Revoked key (401): forgotten, the key page comes back.
+  await tab.evaluate(() => localStorage.setItem("nokker.local-token", "revoked-key"));
+  await tab.reload();
+  await keyPage(tab, "revoked key");
+  if ((await tab.evaluate(() => localStorage.getItem("nokker.local-token"))) !== null) throw new StepError("the revoked key is not forgotten");
+  await tab.close();
+  // Cloud mode unchanged: the mock (demo) on localhost keeps the nokker.ai sign-in.
+  await ctx.unroute("**/healthz");
+  const cloud = await ctx.newPage();
+  await cloud.goto(base);
+  await cloud.waitForSelector("#wl-email", { timeout: STEP_MS });
+  if (await cloud.locator("[data-local-key-page]").count()) throw new StepError("the Lokkal page shows in cloud mode");
+  await cloud.close();
+}
+
 // ---------- main ----------
 
 async function main() {
@@ -1111,6 +1174,7 @@ async function main() {
     ["budgets", SMALL_PHONE, budgets],
     ["glance-pair", PHONE, glancePair],
     ["knock", PHONE, knockSetting],
+    ["lokkal-key", PHONE, lokkalKey],
     ["showme", DESKTOP, (p, b, t) => showMe(p, b, t, "desktop-en")],
     ["showme-phone", PHONE, (p, b, t) => showMe(p, b, t, "phone-dark-en")],
     ["showme-fr", { ...DESKTOP, locale: "fr-CH" }, (p, b, t) => showMe(p, b, t, "desktop-fr")],

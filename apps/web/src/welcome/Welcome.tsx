@@ -4,6 +4,7 @@ import { BRAND } from "@nokker-apps/brand";
 import { loginWithEmailCode, loginWithGoogleTicket } from "../auth.js";
 import { t, type Lang } from "../onboarding/i18n.js";
 import { takeLinkReturn } from "../link/code.js";
+import { LocalKeyPage } from "../onboarding/LocalKey.js";
 import { InstallCard } from "../pwa/InstallCard.js";
 import { SsoLogin } from "../sso/SsoLogin.js";
 import type { NokkerStore } from "../store.js";
@@ -33,7 +34,12 @@ function readGoogleReturn(): { ticket?: string; error?: string } | null {
 
 /** Écran d'un visiteur sans session, connexion par code e-mail. Pas de création de compte :
  * le code ne part que pour une adresse déjà invitée, et la réponse est la même dans tous les cas. */
-export function Welcome({ client, access, status, retryAccess, deviceStatus, forgetDeviceAndRetry, lang: L }: Props): React.ReactElement {
+export function Welcome(props: Props): React.ReactElement {
+  // A Lokkal opened without its local key: its own page, never the nokker.ai sign-in (private beta, « Apply »).
+  return props.access === "lokkal-no-key" ? <LocalKeyPage /> : <CloudWelcome {...props} />;
+}
+
+function CloudWelcome({ client, access, status, retryAccess, deviceStatus, forgetDeviceAndRetry, lang: L }: Props): React.ReactElement {
   const [step, setStep] = useState<"email" | "code">("email");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");

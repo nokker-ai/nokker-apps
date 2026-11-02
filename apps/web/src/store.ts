@@ -26,7 +26,8 @@ import type { SignaturePrefs } from "@nokker-apps/brand";
 import { SERVER_URL, createClient } from "./api.js";
 import { t } from "./onboarding/i18n.js";
 import { uiLang } from "./components/ConnectorsTab.js";
-import { DeviceNotApprovedError, forgetDevice, isMockServer, restoreLogin, type AuthResult } from "./auth.js";
+import { forgetLocalToken } from "./onboarding/localToken.js";
+import { DeviceNotApprovedError, forgetDevice, isMockServer, lokkalWithoutKey, restoreLogin, type AuthResult } from "./auth.js";
 import { knock, loadSignaturePrefs, saveSignaturePrefs } from "./sound.js";
 import { readJson, writeJson } from "./viewState.js";
 import { shellLang, tr } from "./i18n/index.js";
@@ -43,7 +44,8 @@ export interface Toast {
 /** `booting` : reprise de session ; `signed-out` : aucun appareil reconnu (écran de connexion) ; `error` : serveur
  * injoignable (réessayer) ; `device-refused` : appareil rangé mais refusé par le noyau (en attente, retiré : voir
  * `deviceStatus`) ; `ready` : connecté. */
-export type Access = "booting" | "signed-out" | "error" | "device-refused" | "ready";
+/** `lokkal-no-key`: a Lokkal (loopback, real core) opened without its local key — never the nokker.ai sign-in. */
+export type Access = "booting" | "signed-out" | "lokkal-no-key" | "error" | "device-refused" | "ready";
 
 export interface NokkerStore {
   client: NokkerClient;
@@ -396,6 +398,7 @@ export function useNokker(): NokkerStore {
   useEffect(() => {
     let sub: { close(): void } | undefined;
     let cancelled = false;
+    let localKey: string | null = null;
     (async () => {
       try {
         const isMock = await isMockServer(SERVER_URL);
@@ -408,9 +411,11 @@ export function useNokker(): NokkerStore {
         const a = await restoreLogin(client, isMock);
         if (cancelled) return;
         if (!a) {
-          setAccess("signed-out");
+          const lokkal = await lokkalWithoutKey(isMock, SERVER_URL);
+          if (!cancelled) setAccess(lokkal ? "lokkal-no-key" : "signed-out");
           return;
         }
+        localKey = a.mode === "local" ? (a.localKey ?? null) : null;
         if (cancelled) return;
         setAuth(a);
         let list = sortThreads(await client.listThreads());
@@ -476,6 +481,12 @@ export function useNokker(): NokkerStore {
         setReady(true);
       } catch (err) {
         if (cancelled) return;
+        if (localKey && err instanceof NokkerApiError && err.status === 401) {
+          // Local key refused (revoked, or another install's): forgotten, the key page takes over.
+          forgetLocalToken(localKey);
+          setAccess("lokkal-no-key");
+          return;
+        }
         if (err instanceof DeviceNotApprovedError) {
           setDeviceStatus(err.deviceStatus);
           setAccess("device-refused");

@@ -19,6 +19,8 @@ export type AuthMode = "device-key" | "passkey" | "demo" | "gateway" | "local";
 
 export interface AuthResult {
   mode: AuthMode;
+  /** Mode `local`: the local key used, so a 401 forgets THIS key only (not a newer one pasted meanwhile). */
+  localKey?: string;
   /** Identité vérifiée portée par le jeton : réponse de `POST /v1/sessions` (`user`, APPROVALS.md §3.6). Le noyau
    * n'expose pas de route « qui suis-je » : c'est la seule source, et elle suffit (on se reconnecte à chaque
    * chargement). Sert de `totp_user` (§3.5). */
@@ -355,21 +357,48 @@ async function gatewayLogin(client: NokkerClient, host: string): Promise<AuthRes
   }
 }
 
-/** Servi par un Lokkal en boucle locale (127.0.0.1 / localhost) avec son jeton local (§7.1, `/setup#token=…`). */
-export function localTokenContext(): string | null {
-  const h = location.hostname;
-  if (h !== "127.0.0.1" && h !== "localhost" && h !== "[::1]") return null;
-  return takeLocalToken();
+/** Loopback host: where a Lokkal serves its web (127.0.0.1 / localhost, never a public name). */
+export function isLoopbackHost(h: string): boolean {
+  return h === "127.0.0.1" || h === "localhost" || h === "[::1]";
+}
+
+/** Servi par un Lokkal en boucle locale (127.0.0.1 / localhost) avec son jeton local (§7.1, `/setup#token=…`). Hors
+ * mock, la clé est gardée en localStorage (nouvel onglet sans la recoller) ; sur le mock, le temps de l'onglet. */
+export function localTokenContext(mock = false): string | null {
+  if (!isLoopbackHost(location.hostname)) return null;
+  return takeLocalToken({ persistent: !mock });
+}
+
+/**
+ * The core says it is a Lokkal: its local routes exist and want the local key (`GET /v1/local/setup` without a key →
+ * 401). A core without them (cloud core run locally for development) answers 404: it keeps the sign-in.
+ */
+export async function isLokkalCore(baseUrl: string, f: typeof fetch = fetch): Promise<boolean> {
+  try {
+    return (await f(`${baseUrl}/v1/local/setup`, { headers: { Accept: "application/json" } })).status === 401;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * No session restored on a loopback host served by a Lokkal core (not the mock, not a gateway, the core's local routes
+ * answer): a Lokkal opened without its local key. Its page says how to open it with the key; the nokker.ai sign-in
+ * (private beta) is never shown there. Cloud hosts (app.nokker.ai) and a cloud core run locally keep the sign-in.
+ */
+export async function lokkalWithoutKey(isMock: boolean, baseUrl: string, host: string = location.hostname, f: typeof fetch = fetch): Promise<boolean> {
+  if (isMock || !isLoopbackHost(host) || gatewayContext() !== null) return false;
+  return isLokkalCore(baseUrl, f);
 }
 
 export async function restoreLogin(client: NokkerClient, mock: boolean): Promise<AuthResult | null> {
   const gw = gatewayContext();
   if (gw) return gatewayLogin(client, gw);
   // Lokkal local : le jeton local vaut session (pas d'appareil à enrôler sur sa propre machine).
-  const local = localTokenContext();
+  const local = localTokenContext(mock);
   if (local) {
     client.setToken(local);
-    return { mode: "local", user: "local-owner" };
+    return { mode: "local", user: "local-owner", localKey: local };
   }
   if (isSecure()) {
     const stored = await readStoredDeviceKey();

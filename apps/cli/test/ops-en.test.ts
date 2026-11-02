@@ -11,7 +11,7 @@ import { startMockServer, type MockServerHandle } from "@nokker-apps/mock-server
 import { AcpAgent, toolTitle } from "../src/acp/agent.js";
 import { RpcPeer } from "../src/acp/rpc.js";
 import { nodeFs } from "../src/acp/run.js";
-import { formatChecks, memoryCheck, runDoctor } from "../src/doctor.js";
+import { formatChecks, memoryCheck, runDoctor, setupCheck } from "../src/doctor.js";
 import { setLang } from "../src/i18n/index.js";
 import { SOURCE_DEFAULT, lokkalProblem, resolveServer, sourceLabel, validateLokkal } from "../src/lokkal.js";
 import { clientHint } from "../src/update.js";
@@ -41,6 +41,25 @@ describe("doctor en anglais", () => {
     expect(table).toBe("✓ memory  direct, 3 note(s), embeddings 384 dim in 12 ms, last recall 40 ms\n✗ server  unreachable");
     setLang("fr");
     expect(memoryCheck({ ok: true, mode: "direct", store: { notes: 3 } } as unknown as LocalMemoryStatus)).toEqual({ name: "mémoire", status: "ok", detail: "directe, 3 note(s)" });
+  });
+
+  it("doctor : premier réglage — avertit avec le lien du setup, sans jamais écrire le jeton", () => {
+    const base = { done: true, models: { router: { linked: false, account: null }, byok: [], local: [] }, default: null, connectors: [], channels: [] };
+    const W = "http://127.0.0.1:7420/", P = "/home/u/.nokker/state/local-token";
+    const link = "http://127.0.0.1:7420/setup#token=$(cat /home/u/.nokker/state/local-token)";
+    const notDone = setupCheck({ ...base, done: false } as never, W, P);
+    expect(notDone).toEqual({ name: "model", status: "warn", detail: `first setup not finished — open ${link}` });
+    expect(setupCheck(base as never, W, P).detail).toBe(`no default model chosen — open ${link}`);
+    expect(setupCheck({ ...base, default: "router" } as never, W, P).detail).toContain("not linked");
+    const byok = (b: object) => ({ ...base, default: "byok:k", models: { ...base.models, byok: [{ name: "k", base_url: "https://x/v1", has_key: true, ...b }] } });
+    expect(setupCheck(byok({ model: null }) as never, W, P).detail).toContain("byok:k has no model name");
+    expect(setupCheck(byok({ model: "m", has_key: false }) as never, W, P).detail).toContain("byok:k has no key");
+    expect(setupCheck({ ...base, default: "byok:gone" } as never, W, P).detail).toContain("byok:gone no longer exists");
+    expect(setupCheck(byok({ model: "m" }) as never, W, P)).toEqual({ name: "model", status: "ok", detail: "default byok:k (m)" });
+    expect(setupCheck({ ...base, default: "local:http://o:11434|qwen3:4b" } as never, W, P).status).toBe("ok");
+    setLang("fr");
+    expect(setupCheck({ ...base, done: false } as never, W, P)).toEqual({ name: "modèle", status: "warn", detail: `premier réglage pas terminé — ouvre ${link}` });
+    setLang("en");
   });
 
   describe("sans noyau ni docker", () => {
