@@ -37,6 +37,7 @@ import {
 import { choiceLabel, strongText } from "../approval-model.js";
 import { costLang, t } from "../i18n/index.js";
 import { checkpointReason, reasonCodeOf } from "../localtools.js";
+import { localPathFor, serverCwdFor, type ServerCwd, type WslContext } from "../wslcwd.js";
 import { RPC, RpcFailure, type JsonRpcId, type RpcPeer } from "./rpc.js";
 
 /** Version du protocole ACP parlée ici (schéma v1 du SDK officiel `@agentclientprotocol/sdk`, entrée stable). */
@@ -60,6 +61,9 @@ export interface AcpAgentDeps {
   log?: (level: "info" | "warn" | "error", msg: string) => void;
   /** Ligne de coût sous chaque tour (défaut : oui). */
   costLine?: boolean;
+  /** Windows + Lokkal dans WSL (lokkal.json `wsl_distro`) : l'éditeur parle en chemins Windows (UNC, C:\…), le noyau en
+   * chemins Linux (wslcwd.ts). Absent : chemins tels quels. */
+  wsl?: WslContext;
 }
 
 /** Commandes annoncées à l'éditeur (calculées à l'annonce : la langue peut être choisie après le chargement du module). */
@@ -99,12 +103,12 @@ export function toolKind(name: string, effect: string | null): string {
   return "other";
 }
 
-export function toolTitle(name: string, args: Record<string, unknown>, cwd: string): string {
+export function toolTitle(name: string, args: Record<string, unknown>, cwd: string, serverCwd?: string): string {
   if (name === "terminal" && typeof args.command === "string") return t("terminal: {0}", args.command);
   for (const key of ["path", "pattern", "query", "url", "goal"]) {
     const v = args[key];
     if (typeof v === "string" && v) {
-      const host = key === "path" ? hostPathOf(v, cwd) : null;
+      const host = key === "path" ? hostPathOf(v, cwd, serverCwd) : null;
       const shown = host ? host.slice(cwd.replace(/[\\/]+$/, "").length + 1) || v : v;
       return `${name} ${shown.length > 120 ? `${shown.slice(0, 120)}…` : shown}`;
     }
@@ -271,18 +275,40 @@ export class AcpAgent {
     return s;
   }
 
+  private wslCtx(): WslContext {
+    return this.deps.wsl ?? { platform: process.platform, wslDistro: null };
+  }
+
+  /** Dossier de l'éditeur → dossier du noyau ; une autre distro WSL que celle de Lokkal est refusée avec la marche à suivre. */
+  private target(cwd: string): ServerCwd {
+    const target = serverCwdFor(cwd, this.wslCtx());
+    if (target.kind === "other-distro") {
+      throw new RpcFailure(RPC.invalidParams, t("folder {0} is in the WSL distribution {1}, but Lokkal runs in {2}: open the project in {2}", cwd, target.distro, this.wslCtx().wslDistro ?? ""));
+    }
+    return target;
+  }
+
+  /** 403 sur un dossier d'un disque Windows (essayé en /mnt/<lettre>) : dire quoi faire plutôt que « hors des racines ». */
+  private failure(err: unknown, cwd: string, target: ServerCwd): RpcFailure {
+    if (target.kind === "drive" && err instanceof NokkerApiError && err.status === 403) {
+      return new RpcFailure(RPC.invalidParams, t("folder {0} is on the Windows drive {1} ({2} in WSL), outside the roots declared in Lokkal: open the project inside WSL (\\\\wsl.localhost\\{3}\\home\\<you>\\<project>)", cwd, target.drive, target.cwd, this.wslCtx().wslDistro ?? ""));
+    }
+    return apiFailure(err, target.kind === "same" ? cwd : target.cwd);
+  }
+
   private async newSession(params: unknown): Promise<unknown> {
     const { cwd, mcpServers } = (params ?? {}) as { cwd?: unknown; mcpServers?: unknown[] };
     if (typeof cwd !== "string" || !cwd) throw new RpcFailure(RPC.invalidParams, t("cwd missing"));
     if (Array.isArray(mcpServers) && mcpServers.length) this.log("info", `${mcpServers.length} MCP server(s) from the editor ignored (connectors live in the kernel)`);
+    const target = this.target(cwd);
     const { client, hub } = await this.ensureClient();
     try {
-      const core = await EditorSession.open(client, hub, cwd, this.deps.fs, { texts: editorTexts() });
+      const core = await EditorSession.open(client, hub, cwd, this.deps.fs, { texts: editorTexts(), serverCwd: target.cwd });
       this.register(core);
-      this.log("info", `session ${core.threadId} sur ${cwd}`);
+      this.log("info", `session ${core.threadId} sur ${cwd}${target.kind === "same" ? "" : ` (${target.cwd})`}`);
       return { sessionId: core.threadId };
     } catch (err) {
-      throw apiFailure(err, cwd);
+      throw this.failure(err, cwd, target);
     }
   }
 
@@ -298,7 +324,9 @@ export class AcpAgent {
     }
     if (!known) throw new RpcFailure(RPC.resourceNotFound, t("unknown local session: {0}", sessionId));
     this.sessions.get(sessionId)?.core.dispose();
-    const core = await EditorSession.open(client, hub, known.cwd, this.deps.fs, { threadId: sessionId, texts: editorTexts() });
+    // Dossier côté éditeur : celui qu'il annonce s'il désigne le dossier du noyau, sinon le dossier du noyau vu de l'hôte.
+    const hostCwd = serverCwdFor(cwd, this.wslCtx()).cwd === known.cwd ? cwd : localPathFor(known.cwd, this.wslCtx());
+    const core = await EditorSession.open(client, hub, hostCwd, this.deps.fs, { threadId: sessionId, texts: editorTexts(), serverCwd: known.cwd });
     // L'historique est rejoué AVANT la réponse (ACP : session/load).
     for (const m of await core.history().catch(() => [])) {
       this.update(sessionId, {
@@ -313,12 +341,14 @@ export class AcpAgent {
   private async listSessions(params: unknown): Promise<unknown> {
     const { cwd } = (params ?? {}) as { cwd?: unknown };
     const { client } = await this.ensureClient();
+    // Filtre sur le dossier du noyau ; chaque session est rendue avec le dossier vu de l'éditeur.
+    const wanted = typeof cwd === "string" && cwd ? serverCwdFor(cwd, this.wslCtx()).cwd : null;
     try {
       const all = await client.listLocalSessions();
       return {
         sessions: all
-          .filter((s) => typeof cwd !== "string" || !cwd || s.cwd === cwd)
-          .map((s) => ({ sessionId: s.thread_id, cwd: s.cwd, ...(s.title ? { title: s.title } : {}), ...(s.last_turn_at ? { updatedAt: s.last_turn_at } : {}) })),
+          .filter((s) => wanted === null || s.cwd === wanted)
+          .map((s) => ({ sessionId: s.thread_id, cwd: wanted !== null ? cwd : localPathFor(s.cwd, this.wslCtx()), ...(s.title ? { title: s.title } : {}), ...(s.last_turn_at ? { updatedAt: s.last_turn_at } : {}) })),
       };
     } catch (err) {
       throw apiFailure(err);
@@ -377,7 +407,7 @@ export class AcpAgent {
     this.update(sid, {
       sessionUpdate: "tool_call",
       toolCallId: t.callId,
-      title: `${t.depth ? "↳ " : ""}${toolTitle(t.name, t.args, this.sessions.get(sid)?.core.cwd ?? "")}`,
+      title: `${t.depth ? "↳ " : ""}${toolTitle(t.name, t.args, this.sessions.get(sid)?.core.cwd ?? "", this.sessions.get(sid)?.core.serverCwd)}`,
       kind: toolKind(t.name, t.effect),
       status: "in_progress",
       rawInput: t.args,
@@ -408,7 +438,7 @@ export class AcpAgent {
         this.update(sid, {
           sessionUpdate: "tool_call",
           toolCallId,
-          title: toolTitle(a.tool_name, a.arguments, s.core.cwd),
+          title: toolTitle(a.tool_name, a.arguments, s.core.cwd, s.core.serverCwd),
           kind: toolKind(a.tool_name, a.effect),
           status: "pending",
           rawInput: a.arguments,
@@ -430,7 +460,7 @@ export class AcpAgent {
       sessionId: sid,
       toolCall: {
         toolCallId,
-        title: toolTitle(a.tool_name, a.arguments, s.core.cwd),
+        title: toolTitle(a.tool_name, a.arguments, s.core.cwd, s.core.serverCwd),
         kind: toolKind(a.tool_name, a.effect),
         status: "pending",
         rawInput: a.arguments,

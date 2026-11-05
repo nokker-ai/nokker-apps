@@ -11,6 +11,8 @@ import {
   secondsLeft,
 } from "./flow.js";
 import { t, type Key, type Lang } from "./i18n.js";
+import { capability } from "../capabilities.js";
+import { ConnectorsMulti } from "../connectors/ConnectorsMulti.js";
 
 /** Étapes Connecteurs et Telegram, partagées par le parcours `/invite` et l'onglet « Connecteurs » de l'App. */
 
@@ -22,8 +24,7 @@ export function ErrorLine({ id, lang, k }: { id?: string; lang: Lang; k?: string
 
 type Busy = "save" | "test" | "revoke" | null;
 
-/** `embedded` : dans l'App (onglet Connecteurs), sans parcours — titre h2, pas de bouton « Passer/Continuer ». */
-export function ConnectorsStep(props: {
+type ConnectorsStepProps = {
   client: NokkerClient;
   lang: Lang;
   embedded?: boolean;
@@ -32,7 +33,17 @@ export function ConnectorsStep(props: {
   onStartNow?: () => void;
   onLinked?: (kind: ConnectorKind, linked: boolean) => void;
   onNext?: () => void;
-}): React.ReactElement {
+};
+
+/** `embedded` : dans l'App (onglet Connecteurs, Mon compte), sans parcours — titre h2, pas de bouton « Passer/Continuer ».
+ * Noyau `connectors_multi` : plusieurs boîtes et agendas par profil (`ConnectorsMulti`) ; le parcours `/invite` garde
+ * l'écran par nature (les routes d'avant visent le connecteur par défaut). */
+export function ConnectorsStep(props: ConnectorsStepProps): React.ReactElement {
+  if (props.embedded && capability("connectors_multi") === true) return <ConnectorsMulti client={props.client} lang={props.lang} />;
+  return <ConnectorsByKind {...props} />;
+}
+
+function ConnectorsByKind(props: ConnectorsStepProps): React.ReactElement {
   const { client, lang: L } = props;
   const onLinked = useRef(props.onLinked);
   onLinked.current = props.onLinked;
@@ -83,7 +94,7 @@ export function ConnectorsStep(props: {
               </button>
             ) : null}
             <button type="button" className={"ob-btn" + (props.onStartNow ? "" : " primary")} onClick={props.onNext}>
-              {props.anyLinked || props.onStartNow ? t(L, "next") : t(L, "skip")}
+              {props.onStartNow ? t(L, "nextTelegram") : props.anyLinked ? t(L, "next") : t(L, "skip")}
             </button>
           </div>
           {props.onStartNow ? <p className="ob-note">{t(L, "startNowNote")}</p> : null}

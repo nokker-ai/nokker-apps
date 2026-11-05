@@ -23,7 +23,9 @@ import { MockHttpError } from "./errors.js";
 import { createAgentFull, seedRuns } from "./agents.js";
 import { proposeHandoff } from "./handoff.js";
 import { createPage, updatePage } from "./pages.js";
-import { payDemo } from "./payments.js";
+import { ownCardOf } from "./owncard.js";
+import { ownCardDemo, payAgentDemo, payDemo } from "./payments.js";
+import { autoReviewDemo } from "./auto-review.js";
 import { MOCK_USER, hexId, normalize, randomId, type MockState } from "./state.js";
 
 export interface DemoIds {
@@ -220,24 +222,28 @@ registerAction("monitor:purge", (state, b) => {
   return "Purge prepared: ~120 GB (demo). It is waiting for your approval — brass card alongside.";
 });
 
-/** Bulle `approval` (laiton) qui porte une carte d'approbation dans le fil — la carte elle-même se lit
- * par `/v1/approvals/{id}` (BUBBLES.md §2). */
-export function approvalBubble(state: MockState, approval: Approval): Bubble {
+/** Bulle `approval` posée par le noyau quand une carte part aux humains (drapeau `approval_bubbles`, noyau
+ * p2/approval-bubble) : titre = outil, état `{approval_id, tool_name, status: "pending"}`, « working ». La carte se lit
+ * toujours par `/v1/approvals/{id}` (BUBBLES.md §2). Drapeau éteint : aucune bulle, comme le noyau. */
+export function approvalBubble(state: MockState, approval: Approval): Bubble | null {
+  if (!state.approvalBubbles) return null;
   return createBubble(state, approval.thread_id || null, {
     kind: "approval",
-    title: `Approve: ${approval.tool_name}`,
+    title: approval.tool_name,
     status: "working",
-    state: { approval_id: approval.id },
+    state: { approval_id: approval.id, tool_name: approval.tool_name, status: "pending" },
   });
 }
 
-/** Après décision : la bulle passe à done/failed puis se ferme. */
+/** Décision, exécution, expiration : `bubble.updated` (état précédent + statut de la carte + vrai moyen de décision).
+ * « done » pour approved / executed / rejected (une décision n'est pas un échec), « failed » pour expired / failed.
+ * Jamais fermée : la carte reste lisible dans l'historique. */
 export function settleApprovalBubbles(state: MockState, approval: Approval): void {
   for (const b of state.bubbles.values()) {
     if (b.kind !== "approval" || b.closed_at || b.state.approval_id !== approval.id) continue;
-    const ok = approval.status === "executed" || approval.status === "approved";
-    updateBubble(state, b.id, { status: ok ? "done" : "failed", title: ok ? `Approved: ${approval.tool_name}` : `Rejected: ${approval.tool_name}` });
-    state.later(2_500, () => !b.closed_at && closeBubble(state, b.id));
+    const failed = approval.status === "expired" || approval.status === "failed";
+    const st = approval.status === "pending" ? "working" : failed ? "failed" : "done";
+    updateBubble(state, b.id, { status: st, state: { ...b.state, status: approval.status, ...(approval.decided_via ? { decided_via: approval.decided_via } : {}) } });
   }
 }
 
@@ -388,6 +394,14 @@ export function interpretDemo(
   // 0) Paiements (drapeau `payments`) : « achète … » → carte « à payer », ou refus avant toute carte.
   const paid = payDemo(state, threadId, n);
   if (paid !== null) return { reply: paid };
+  const agentPaid = payAgentDemo(state, n);
+  if (agentPaid !== null) return { reply: agentPaid };
+  const ownPaid = ownCardDemo(state, n, ownCardOf(state)?.cvv_kept === true);
+  if (ownPaid !== null) return { reply: ownPaid };
+
+  // 0b) Relecteur automatique (APPROVALS.md §8) : carte décidée seule, révocable, fichiers restaurables.
+  const reviewed = autoReviewDemo(state, threadId, n);
+  if (reviewed !== null) return { reply: reviewed };
 
   // 1) Transfert / partage demandé dans le chat (§3) — AVANT la démo d'approbation « envoie ».
   const trFr = n.match(/^(?:peux-tu |tu peux )?(envoie|envoyer|deplace|deplacer|copie|copier|partage|partager|mets|mettre)\s+(?:la |cette )?bulle\s+(.+?)\s+(?:a|vers|dans|avec|sur)\s+(?:la session |le fil |la |le |l )?(.+?)\s*[.!]?$/);

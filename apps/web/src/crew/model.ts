@@ -3,6 +3,7 @@
 import type { AgentRun, AgentRunStatus, AgentTrigger } from "@nokker-apps/sdk";
 import { trIn } from "../i18n/index.js";
 import { DAYS, cw, type Lang } from "./i18n.js";
+import { formatAmount } from "@nokker-apps/sdk";
 
 const pad = (n: string): string => n.padStart(2, "0");
 const locale = (lang: Lang): string => (lang === "fr" ? "fr-CH" : "en-GB");
@@ -80,7 +81,8 @@ export function runDuration(r: Pick<AgentRun, "started_at" | "ended_at">): strin
 
 export function runCost(r: Pick<AgentRun, "cost">, lang: Lang = "fr"): string | null {
   if (!r.cost) return null;
-  const money = (amount: number, cur: string): string => `${amount.toFixed(amount < 0.1 ? 3 : 2)} ${cur}`;
+  // Format monétaire commun ; un passage peut coûter moins d'un centime : « < 0.01 CHF », comme la ligne de coût.
+  const money = (amount: number, cur: string): string => formatAmount(amount, cur, lang === "en" ? "en" : "fr");
   // Plusieurs devises : `amounts` (jamais de conversion côté client).
   const amounts = r.cost.amounts && Object.keys(r.cost.amounts).length > 1
     ? Object.keys(r.cost.amounts).sort().map((c) => money(r.cost!.amounts![c]!, c)).join(" + ")

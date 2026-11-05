@@ -11,6 +11,7 @@ import { goSso } from "./browser.js";
 import { cleanMappings, ssoErrorCode } from "./flow.js";
 import { settingsError } from "./SsoSettings.js";
 import { maxAgeChoices, maxAgeLabel, ssoRoleLabel, ssoText } from "./text.js";
+import { off as offCap } from "../capabilities.js";
 
 type Toast = (text: string, tone?: "ok" | "error") => void;
 
@@ -21,6 +22,7 @@ export function ProjectSso({ client, projectId, toast }: { client: NokkerClient;
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    if (offCap("sso")) return;
     let live = true;
     (async () => {
       let list: SsoConnection[];

@@ -112,6 +112,12 @@ export function Markdown({ text }: { text: string }): React.ReactElement {
       );
       continue;
     }
+    // Règle horizontale (« --- », « *** », « ___ ») : un trait, pas trois tirets.
+    if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      blocks.push(<hr key={key++} className="md-rule" />);
+      i += 1;
+      continue;
+    }
     const header = line.match(/^(#{1,6})\s+(.*)$/);
     if (header) {
       blocks.push(<p key={key++} style={{ fontWeight: 700 }}>{header[2]}</p>);

@@ -399,6 +399,9 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.session-row.current .session-snippet {
+  color: var(--soft);
+}
 .session-meta {
   display: flex;
   align-items: center;
@@ -600,6 +603,11 @@ button:disabled {
   overflow-wrap: normal;
   border-radius: 10px;
   background: rgba(var(--ov), 0.06);
+}
+.md-rule {
+  border: 0;
+  border-top: 1px solid var(--line-strong);
+  margin: 8px 0;
 }
 .md-table {
   max-width: 100%;
@@ -820,6 +828,7 @@ button:disabled {
 }
 .bubble-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 4px 4px 0 12px;
@@ -858,11 +867,10 @@ button:disabled {
   color: var(--strong);
   overflow-wrap: anywhere;
 }
+/* Le statut n'est jamais coupé (« EN ATTE… ») : il garde sa largeur, les outils passent à la ligne s'il le faut. */
 .bubble-status {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: 1 0 auto;
+  min-width: max-content;
   font-size: 11px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -874,6 +882,7 @@ button:disabled {
 }
 .bubble-tools {
   display: flex;
+  margin-left: auto;
 }
 .tool {
   width: 44px;
@@ -1614,6 +1623,13 @@ button:disabled {
 }
 .app.narrow .toasts {
   bottom: 76px;
+}
+/* Ligne de coût au-dessus du champ (Lokkal) : le toast monte d'autant au lieu de la recouvrir. */
+.app:has(.cost-totals) .toasts {
+  bottom: 112px;
+}
+.app.narrow:has(.cost-totals) .toasts {
+  bottom: 100px;
 }
 
 /* ── Animations ──────────────────────────────────────────── */
@@ -2435,6 +2451,39 @@ button:disabled {
 .acc-usage[data-level="full"] .acc-bar-fill {
   background: var(--ko);
 }
+/* Code d'essai (voucher) : lien discret, puis champ + bouton sur une ligne (empilés en étroit). */
+.acc-code-open {
+  margin-top: 10px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--soft);
+  font: inherit;
+  font-size: 14px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.acc-code-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.acc-code-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+@media (max-width: 420px) {
+  .acc-code-row {
+    flex-direction: column;
+  }
+}
+.acc-price {
+  font-weight: 600;
+}
+
 .acc-list {
   list-style: none;
   margin: 8px 0 0;
@@ -2448,6 +2497,21 @@ button:disabled {
   padding: 8px 0;
   border-top: 1px solid var(--line-strong);
 }
+/* Formules : le bouton « Choisir … » garde sa largeur naturelle (une ligne). La description garde une largeur lisible
+ * (14em) ; quand la place manque (téléphone), le bouton passe dessous, aligné à droite. Un libellé plus large que
+ * toute la rangée (« Commencer l'essai Famille » sur un écran très étroit) se coupe au lieu de déborder. */
+.acc-list li[data-plan] {
+  flex-wrap: wrap;
+}
+.acc-list li[data-plan] > div {
+  flex: 1 1 14em;
+  min-width: 0;
+}
+.acc-list li[data-plan] > button {
+  flex: none;
+  margin-left: auto;
+  max-width: 100%;
+}
 .acc-list li:first-child {
   border-top: 0;
 }
@@ -2458,6 +2522,34 @@ button:disabled {
 }
 .acc-danger {
   border-color: rgba(var(--ko-rgb), 0.35);
+}
+.acc-models-default {
+  border: 0;
+  margin: 8px 0 12px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.acc-models-default legend {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.acc-radio {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  overflow-wrap: anywhere;
+}
+.acc-radio input {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  accent-color: var(--accent);
+}
+.acc-this-device {
+  margin-left: 8px;
+  vertical-align: 1px;
 }
 
 /* ---- Page /link (liaison d'une machine Lokkal) ---- */
@@ -4163,7 +4255,7 @@ code.wrap {
   top: calc(100% + 8px);
   right: 0;
   z-index: 100;
-  width: 280px;
+  width: 300px;
   max-width: calc(100vw - 16px);
   max-height: calc(100dvh - 90px);
   overflow-y: auto;

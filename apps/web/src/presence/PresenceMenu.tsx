@@ -8,6 +8,7 @@ import type { NokkerClient, NokkerEvent, PresenceView } from "@nokker-apps/sdk";
 import { tr } from "../i18n/index.js";
 import { Icon } from "../icons.js";
 import { activityText, applyChange, attentionCount, canOpen, destination, entryName, grouped, groupTitle, statusText, type Destination } from "./model.js";
+import { off as offCap } from "../capabilities.js";
 
 export function PresenceMenu({
   client,
@@ -27,6 +28,7 @@ export function PresenceMenu({
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(() => {
+    if (offCap("presence")) return setOn(false);
     client.getPresence().then(
       (v) => {
         setView(v);

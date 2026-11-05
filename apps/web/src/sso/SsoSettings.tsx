@@ -12,6 +12,7 @@ import "./sso.css";
 import { fmtWhen, teamError } from "../team/model.js";
 import { ssoErrorCode } from "./flow.js";
 import { auditLabel, settingsError as settingsErrorText } from "./text.js";
+import { off as offCap } from "../capabilities.js";
 
 type Toast = (text: string, tone?: "ok" | "error") => void;
 
@@ -23,6 +24,7 @@ export function settingsError(e: unknown): string {
 export function SsoEntry({ client, on, onOpen }: { client: NokkerClient; on: boolean; onOpen: () => void }): React.ReactElement | null {
   const [enabled, setEnabled] = useState(false);
   useEffect(() => {
+    if (offCap("sso")) return setEnabled(false);
     let live = true;
     client.listSsoConnections().then(
       () => live && setEnabled(true),

@@ -90,6 +90,10 @@ export const FR_SESSION: Record<string, string> = {
   "Esc cancels the turn in progress and empties the queue; Ctrl+C rejects the card on screen (and cancels the turn), otherwise quits.": "Échap annule le tour en cours et vide la file ; Ctrl+C refuse la carte affichée (et annule le tour), sinon quitte.",
   "Failed: {0}": "Échec : {0}",
   "Fingerprint:": "Empreinte :",
+  "Folder {0} is in the WSL distribution {1}, but Lokkal runs in {2}: open the project in {2} (\\\\wsl.localhost\\{2}\\…). Plain thread opened instead.":
+    "Le dossier {0} est dans la distribution WSL {1}, mais Lokkal tourne dans {2} : ouvrez le projet dans {2} (\\\\wsl.localhost\\{2}\\…). Fil ordinaire ouvert à la place.",
+  "Folder {0} is on the Windows drive {1} ({2} in WSL), outside the roots declared by the server. Open the project inside WSL instead: \\\\wsl.localhost\\{3}\\home\\<you>\\<project>, or run: wsl -d {3} --cd <folder> -- ~/.nokker/bin/nokker. Plain thread opened instead.":
+    "Le dossier {0} est sur le disque Windows {1} ({2} dans WSL), hors des racines déclarées par le serveur. Ouvrez plutôt le projet dans WSL : \\\\wsl.localhost\\{3}\\home\\<vous>\\<projet>, ou lancez : wsl -d {3} --cd <dossier> -- ~/.nokker/bin/nokker. Fil ordinaire ouvert à la place.",
   "Folder outside the roots declared by the server: {0}. Plain thread opened instead.": "Dossier hors des racines déclarées par le serveur : {0}. Fil ordinaire ouvert à la place.",
   "For this session": "Pour cette session",
   "Forget this note?": "Oublier cette note ?",
@@ -426,6 +430,10 @@ export const FR_SESSION: Record<string, string> = {
   "Interval raised to the 30s floor.": "Intervalle relevé au plancher de 30s.",
   "Loop #{0}: every {1}, {2} runs at most, never during a turn. /loop stop {0} stops it.": "Boucle #{0} : toutes les {1}, {2} relances au plus, jamais pendant un tour. /loop stop {0} l'arrête.",
   "(loop #{0}, {1}/{2}) {3}": "(boucle #{0}, {1}/{2}) {3}",
+  "(loop) {0}": "(boucle) {0}",
+  "(by the way) {0}": "(au fait) {0}",
+  "(goal) is the goal reached?": "(objectif) est-il atteint ?",
+  "(goal) continue toward the goal": "(objectif) on continue",
   "Loop #{0} finished: {1} runs.": "Boucle #{0} terminée : {1} relances.",
   "No loop running.": "Aucune boucle en cours.",
   "No loop #{0}.": "Pas de boucle #{0}.",

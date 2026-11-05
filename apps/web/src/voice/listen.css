@@ -1,0 +1,59 @@
+/* « Listen » button of a reply (speaker). Tokens of theme.css only. */
+.listen {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.listen-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font: 12px var(--display);
+  cursor: pointer;
+}
+.listen-btn:hover {
+  color: var(--text);
+  border-color: rgba(var(--ov), 0.2);
+}
+.listen-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.listen[data-listen="playing"] .listen-btn,
+.listen[data-listen="paused"] .listen-btn {
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.45);
+}
+.listen[data-listen="loading"] .listen-btn {
+  cursor: progress;
+}
+.listen[data-listen="loading"] .listen-btn svg {
+  animation: listen-pulse 1.1s ease-in-out infinite;
+}
+@keyframes listen-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .listen[data-listen="loading"] .listen-btn svg {
+    animation: none;
+  }
+}
+.listen-error {
+  color: var(--ko);
+}
+@media (max-width: 640px) {
+  .listen-btn {
+    min-height: 36px;
+    padding: 0 12px;
+  }
+}

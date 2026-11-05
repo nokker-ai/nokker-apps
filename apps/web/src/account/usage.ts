@@ -1,4 +1,5 @@
-import type { AccountUsage, BillingStatus, UsageCounter } from "@nokker-apps/sdk";
+import type { AccountUsage, BillingPrice, BillingStatus, UsageCounter } from "@nokker-apps/sdk";
+import { formatMoney } from "@nokker-apps/sdk";
 
 export type UsageKey = "turns" | "browser";
 export type UsageLevel = "ok" | "warn" | "full";
@@ -78,7 +79,14 @@ export function planCaps(caps: Record<string, number>): { day: number | null; we
 }
 
 export function planLabel(id: string): string {
+  if (id === "byok") return "BYOK";
   return id ? id.charAt(0).toUpperCase() + id.slice(1) : id;
+}
+
+/** Prix d'un palier au format monétaire commun (`formatMoney` du SDK, décision du 05.11) : « 19 CHF » et « 9.50 CHF »
+ * (fr), « CHF 19 » et « CHF 9.50 » (en) — entier sans décimales, comme la page tarifs. */
+export function fmtAmount(lang: string, price: BillingPrice): string {
+  return formatMoney(price.amount, price.currency, lang === "en" ? "en" : "fr", { whole: true });
 }
 
 /** Statuts Stripe → clé de libellé ; un statut inconnu reste affiché tel quel. */
@@ -95,9 +103,25 @@ export const STATUS_KEYS = {
 
 export type BillingView =
   | { kind: "none" }
-  | { kind: "subscribed"; plan: string; status: string; periodEnd: string | null; cancelling: boolean };
+  | { kind: "subscribed"; plan: string; status: string; periodEnd: string | null; cancelling: boolean; trialEnd: string | null };
 
 export function billingView(b: BillingStatus): BillingView {
   if (!b.plan) return { kind: "none" };
-  return { kind: "subscribed", plan: b.plan, status: b.status ?? "active", periodEnd: b.current_period_end, cancelling: b.cancel_at_period_end };
+  return {
+    kind: "subscribed",
+    plan: b.plan,
+    status: b.status ?? "active",
+    periodEnd: b.current_period_end,
+    cancelling: b.cancel_at_period_end,
+    trialEnd: b.status === "trialing" ? (b.trial_end ?? null) : null,
+  };
+}
+
+/** Ligne d'échéance sous la formule. Essai résilié (`cancel_at_period_end` pendant l'essai) : il s'arrête à la fin de
+ * l'essai, sans débit — jamais « premier débit ce jour-là ». `zurich` : date de fin d'essai (23:59 heure de Zurich). */
+export function subscriptionNote(v: BillingView): { key: "accTrialUntil" | "accTrialCancelled" | "accCancelsAt" | "accPeriodEnd"; at: string; zurich: boolean } | null {
+  if (v.kind !== "subscribed") return null;
+  if (v.trialEnd) return { key: v.cancelling ? "accTrialCancelled" : "accTrialUntil", at: v.trialEnd, zurich: true };
+  if (v.periodEnd) return { key: v.cancelling ? "accCancelsAt" : "accPeriodEnd", at: v.periodEnd, zurich: false };
+  return null;
 }

@@ -42,6 +42,13 @@
   padding: 4px 6px;
   border-bottom: 1px solid var(--line);
 }
+/* L'adresse se coupe où il faut (320 px) ; un montant ne se coupe jamais de sa devise (espace insécable). */
+.budget-members td:first-child {
+  overflow-wrap: anywhere;
+}
+.budget-members td:not(:first-child) {
+  white-space: nowrap;
+}
 .budget-form label {
   display: inline-flex;
   gap: 6px;

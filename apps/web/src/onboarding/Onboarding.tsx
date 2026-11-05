@@ -10,6 +10,7 @@ import { ConnectorsStep, ErrorLine, TelegramStep } from "./Connectors.js";
 import { errorCode, errorKey, invitationFailure } from "./errors.js";
 import { canSubmit, initialState, reduce, type FlowState, type Step } from "./flow.js";
 import { normLang, t, type Key, type Lang } from "./i18n.js";
+import { BETA_URL } from "../welcome/Welcome.js";
 
 const STEPS: { step: Step; label: Key }[] = [
   { step: "terms", label: "stepTerms" },
@@ -111,6 +112,10 @@ export function Onboarding(): React.ReactElement {
           <section aria-live="polite">
             <h1 id="ob-title" className="ob-title">{t(L, "invalidTitle")}</h1>
             <p>{t(L, "invalidBody")}</p>
+            <div className="ob-actions">
+              <a className="ob-btn primary" href="/">{t(L, "invalidSignIn")}</a>
+              <a className="ob-btn" href={BETA_URL}>{t(L, "invalidApply")}</a>
+            </div>
           </section>
         )}
         {s.step === "unreachable" && (

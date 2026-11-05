@@ -12,7 +12,9 @@
     "e2e": "node e2e/run.mjs",
     "e2e:onboarding": "node e2e/onboarding.mjs",
     "e2e:guide": "node e2e/guide.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "e2e:connectors": "node e2e/connectors-multi.mjs",
+    "e2e:oauth": "node e2e/connectors-oauth.mjs"
   },
   "dependencies": {
     "@nokker-apps/brand": "workspace:*",

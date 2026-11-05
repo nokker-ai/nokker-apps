@@ -61,9 +61,10 @@ describe("CLI ↔ mock-server", () => {
     expect(decided.decided_via).toBe("signature");
 
     const view = await client.getThread(session.threadId);
+    // As the core: the block of the decision is the user's message of the turn that follows; the model answers it.
     const last = view.messages.at(-1);
     expect(last?.role).toBe("assistant");
-    expect(last?.content).toContain("[Approbation]");
+    expect(view.messages.at(-2)?.content).toContain("[Approbation]");
 
     const stillPending = await session.listApprovals("pending");
     expect(stillPending).toHaveLength(0);

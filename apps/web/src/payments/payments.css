@@ -135,3 +135,154 @@
     align-self: flex-start;
   }
 }
+
+/* Agent de paiement (PAY-AGENT §8) : moyen enregistré, Payment Element de Stripe (iframe, hauteur qu'il fixe). */
+.pay-method {
+  font-variant-numeric: tabular-nums;
+  margin: 4px 0;
+}
+.pay-element {
+  min-height: 120px;
+  padding: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+}
+.pay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Agent de paiement, émetteur wise (PAY-AGENT §10) : compte Wise, carte « Confirme ce paiement ». */
+.pay-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px 12px;
+}
+.pay-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.pay-field span {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.pay-field input,
+.pay-field select {
+  width: 100%;
+  min-width: 0;
+}
+.pay-balances {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.pay-3ds {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.pay-3ds-title {
+  margin: 0;
+  font-size: 1rem;
+}
+.pay-3ds-match.ok::before {
+  content: "✓ ";
+  color: var(--ok);
+}
+.pay-3ds-match.ko::before {
+  content: "! ";
+  color: var(--ko);
+  font-weight: 700;
+}
+.pay-3ds-match {
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.pay-3ds-left {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+/* Dock : au-dessus de tout (comme les toasts), en haut, centré ; pleine largeur moins 16 px sur un téléphone. */
+.pay-3ds-dock {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(440px, calc(100vw - 32px));
+  display: grid;
+  gap: 8px;
+  z-index: 115;
+}
+.pay-3ds-card {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-left: 4px solid var(--accent);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lift);
+  padding: 12px 40px 12px 14px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+.pay-3ds-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+}
+
+/* « Ta carte » (PAY-AGENT §11, Lokkal) : passkey de la machine, carte, CVV, demandes de la banque. */
+.pay-sub {
+  margin: 12px 0 4px;
+  font-size: 0.95rem;
+}
+.pay-advice {
+  border-left: 3px solid var(--accent);
+  padding-left: 8px;
+}
+.pay-passkeys {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.pay-passkeys li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pay-cvv-mode {
+  border: 0;
+  margin: 8px 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.pay-cvv-mode label,
+.pay-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.pay-inline {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.pay-inline input {
+  flex: 1 1 140px;
+  min-width: 0;
+  max-width: 220px;
+}

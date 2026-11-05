@@ -8,6 +8,8 @@ import { gatewayContext, remoteApprovalUrl } from "../auth.js";
 import React, { useEffect, useRef, useState } from "react";
 import { NokkerApiError, isPayApproval, type Approval, type Bubble, type BubbleBase } from "@nokker-apps/sdk";
 import { PayBlock } from "../payments/PayBlock.js";
+import { AutoReviewBlock, isAutoDecided } from "../approvals/AutoReviewBlock.js";
+import { LocalPasskeyDecision } from "../approvals/LocalPasskeyDecision.js";
 import { useStore } from "../context.js";
 import { Icon } from "../icons.js";
 import { shellLang, tr } from "../i18n/index.js";
@@ -95,6 +97,8 @@ export function statusLabel(b: Bubble, now: number): string {
     case "agent_draft":
       return b.status === "working" ? tr("Nina is filling it in") : tr("ready");
     case "approval":
+      // Display only (a bubble can be rewritten); the card itself is read again from GET /v1/approvals/{id}.
+      if (b.state.decided_via === "auto-review") return b.state.rollback_applied ? tr("restored") : b.state.revoked ? tr("revoked") : tr("approved");
       return b.status === "working" ? tr("pending") : b.status === "done" ? tr("approved") : b.status === "failed" ? tr("rejected") : b.status;
     case "handoff":
       return handoffLabel(b.state.state);
@@ -523,13 +527,16 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
   const [reload, setReload] = useState(0);
   useEffect(() => {
     let live = true;
-    // En local, `forwarded` est calculé par le noyau dans la liste des cartes locales (pas forcément sur la carte seule).
+    // En local, `forwarded` et `local_passkey` (own_card, PAY-AGENT §11) sont calculés par le noyau dans la liste des
+    // cartes locales (pas forcément sur la carte seule).
     const read = async (): Promise<Approval> => {
       const x = await store.getApproval(approvalId);
-      if (store.authMode !== "local" || x.forwarded !== undefined) return x;
+      if (store.authMode !== "local" || (x.forwarded !== undefined && x.local_passkey !== undefined)) return x;
       const l = await store.client.listLocalApprovals().catch(() => []);
-      const f = l.find((y) => y.id === approvalId)?.forwarded;
-      return f === undefined ? x : { ...x, forwarded: f };
+      const y = l.find((z) => z.id === approvalId);
+      const f = x.forwarded ?? y?.forwarded;
+      const lp = x.local_passkey ?? y?.local_passkey;
+      return { ...x, ...(f !== undefined ? { forwarded: f } : {}), ...(lp !== undefined ? { local_passkey: lp } : {}) };
     };
     read().then((x) => live && setA(x), (e) => live && setErr(e instanceof NokkerApiError && e.status === 404 ? tr("Card not found or reserved for another account.") : String(e)));
     return () => {
@@ -537,6 +544,14 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
     };
   }, [approvalId, rev, reload, store]);
   if (!a) return <div className="bubble-body">{err ? <span className="error">{err}</span> : <Skel />}</div>;
+  // Decided by the automatic review (APPROVALS.md §8): a compact card, never one that reads as waiting.
+  if (isAutoDecided(a)) {
+    return (
+      <div className="bubble-body">
+        <AutoReviewBlock a={a} client={store.client} readOnly={store.authMode === null} onRevoked={(next) => setA({ ...a, ...next })} />
+      </div>
+    );
+  }
   const pending = a.status === "pending";
   const guardLocal = async (decision: "approve" | "reject", scope: "once" | "session"): Promise<void> => {
     setBusy(true);
@@ -572,9 +587,10 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
   const pays = isPayApproval(a);
   return (
     <div className="bubble-body">
-      <p className="notify-text">{a.reason}</p>
+      {/* A « to pay » card: its reason is written for the model (third person); the purchase below says it to the person. */}
+      {pays ? null : <p className="notify-text">{a.reason}</p>}
       {pays ? (
-        <PayBlock client={store.client} approvalId={a.id} rev={reload + (rev ?? 0)} />
+        <PayBlock client={store.client} approvalId={a.id} rev={reload + (rev ?? 0)} ownCard={local && a.local_passkey === true} />
       ) : (
         <dl className="kv">
           <dt>{tr("Tool")}</dt>
@@ -584,6 +600,7 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
         </dl>
       )}
       {a.advice ? <p className="fine">{a.advice}</p> : null}
+      {a.auto_review ? <AutoReviewBlock a={a} client={store.client} readOnly={store.authMode === null} onRevoked={(next) => setA({ ...a, ...next })} /> : null}
       {pending ? (
         <>
           {canSign ? (
@@ -596,7 +613,10 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
               </button>
             </div>
           ) : null}
-          {local && a.strength !== "strong" ? (
+          {local && a.local_passkey === true && pays ? (
+            // « Ta carte » (own_card) : signée ICI avec la passkey locale, jamais déposée chez nokker.ai.
+            <LocalPasskeyDecision a={a} client={store.client} reject={() => guardLocal("reject", "once")} onDecided={() => setReload((n) => n + 1)} />
+          ) : local && a.strength !== "strong" ? (
             <div className="bubble-actions">
               <button type="button" className="btn btn-brass" disabled={busy} onClick={() => void guardLocal("approve", "once")}>
                 {tr("Approve once")}
@@ -639,7 +659,8 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
           ) : null}
         </>
       ) : (
-        <span className={`chip ${a.status === "executed" || a.status === "approved" ? "ok" : "ko"}`}>{approvalStatusLabel(a.status)}</span>
+        // A « to pay » card: the purchase block already says its state (one badge, not two).
+        pays ? null : <span className={`chip ${a.status === "executed" || a.status === "approved" ? "ok" : "ko"}`}>{approvalStatusLabel(a.status)}</span>
       )}
       {err ? <span className="error" role="alert">{err}</span> : null}
     </div>
@@ -802,6 +823,33 @@ export function castStatusLabel(status: B<"cast">["state"]["status"]): string {
   }
 }
 
+/** The preview frame (core p2/cast-frame): a SIGNED URL served by the core with its own CSP (sandbox allow-scripts,
+ * default-src 'none'), so the page's CSP never has to allow inline code; a new URL per version of the bubble (2 min
+ * validity). Fallback to srcdoc only for an older core (404 / 401 / 403 on frame-url): the Lokkal web has no CSP. 413:
+ * too large to preview. */
+function CastFrame({ castId, version, html, title }: { castId: string; version: number; html: string; title: string }) {
+  const store = useStore();
+  const [src, setSrc] = useState<{ v: number; url: string | null; fallback: boolean; tooLarge: boolean } | null>(null);
+  useEffect(() => {
+    let live = true;
+    store.client.castFrameUrl(castId).then(
+      (r) => live && setSrc({ v: version, url: store.client.resolveUrl(r.url), fallback: false, tooLarge: false }),
+      (e) => {
+        if (!live) return;
+        const status = e instanceof NokkerApiError ? e.status : 0;
+        setSrc({ v: version, url: null, fallback: status === 404 || status === 401 || status === 403, tooLarge: status === 413 });
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [store.client, castId, version]);
+  if (!src || src.v !== version) return null;
+  if (src.tooLarge) return <p className="fine">{tr("The page is too large to preview here: look at the screen.")}</p>;
+  if (src.url) return <iframe key={src.url} className="cast-frame" title={title} sandbox="allow-scripts" src={src.url} referrerPolicy="no-referrer" />;
+  return src.fallback ? <iframe className="cast-frame" title={title} sandbox="allow-scripts" srcDoc={html} referrerPolicy="no-referrer" /> : null;
+}
+
 /** The page shown on the screen, in a sandbox WITHOUT allow-same-origin (opaque origin: no cookie, no storage, no DOM of
  * the app), as SCREEN-CAST §7 requires; actions come from `state.actions` (approve / refuse while pending, stop while
  * showing). The screen's link, token or address never reach the web. */
@@ -827,7 +875,7 @@ function CastBody({ b, readOnly }: { b: B<"cast">; readOnly: boolean }) {
       {st.view?.title ? <p className="cast-title">{st.view.title}</p> : null}
       {ask ? <p className="fine cast-ask">{ask}</p> : null}
       {st.html ? (
-        <iframe className="cast-frame" title={tr("What the screen shows: {0}", st.view?.title ?? where)} sandbox="allow-scripts" srcDoc={st.html} referrerPolicy="no-referrer" />
+        <CastFrame castId={st.cast_id} version={st.version} html={st.html} title={tr("What the screen shows: {0}", st.view?.title ?? where)} />
       ) : st.html_too_large ? (
         <p className="fine">{tr("The page is too large to preview here: look at the screen.")}</p>
       ) : null}

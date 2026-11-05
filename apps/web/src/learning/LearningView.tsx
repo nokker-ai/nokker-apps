@@ -9,6 +9,7 @@ import { tr } from "../i18n/index.js";
 import type { Lang } from "../onboarding/i18n.js";
 import { diffRows, journalLine, learningError, when } from "./model.js";
 import { Consolidations } from "./Consolidations.js";
+import { capability } from "../capabilities.js";
 
 export type LearningSection = "pending" | "journal" | "skills" | "consolidations";
 
@@ -31,6 +32,8 @@ export function LearningView({
   // Consolidations: a tab only when the core serves them (flag memory_consolidation; off → 404).
   const [cx, setCx] = useState(false);
   useEffect(() => {
+    const known = capability("consolidation");
+    if (known !== null) return setCx(known);
     let live = true;
     client.listConsolidationRuns(1).then(
       () => live && setCx(true),

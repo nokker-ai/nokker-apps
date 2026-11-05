@@ -1,13 +1,12 @@
 /**
  * Mise en forme du coût par tour (LOKKAL.md §7.8) — partagée par le client terminal et le web pour qu'ils affichent la
- * MÊME ligne : « 12,4 k jetons · 0,03 € », jetons seuls quand aucun prix n'est connu. Aucun montant n'est recalculé
+ * MÊME ligne : « 12,4 k jetons · 0.03 CHF », jetons seuls quand aucun prix n'est connu. Aucun montant n'est recalculé
  * ni converti ici : les devises viennent telles quelles du noyau.
  *
- * `lang: "en"` (facultatif, extension VS Code en anglais) : « 12.4k tokens · €0.03 ». Défaut : français, inchangé.
+ * `lang: "en"` (facultatif, extension VS Code en anglais) : « 12.4k tokens · CHF 0.03 ». Défaut : français.
  */
 import type { CostByCurrency, CostTokens } from "./types.js";
-
-const SYMBOLS: Record<string, string> = { EUR: "€", USD: "$", CHF: "CHF", GBP: "£" };
+import { formatMoney } from "./money.js";
 
 export type CostLang = "fr" | "en";
 
@@ -38,19 +37,12 @@ export function formatTokens(n: number, lang: CostLang = "fr"): string {
   return lang === "en" ? `${en(v)}M` : `${v} M`;
 }
 
-/** 0,0312 € → « 0,03 € » ; sous le centime : « < 0,01 € » ; zéro exact : « 0 € » (`en` : « €0.03 », « < €0.01 »,
- * « CHF 0.03 »). */
+/** Coût affiché, au format monétaire commun (`formatMoney`) : « 0.03 CHF » ; sous le centime : « < 0.01 CHF » ; zéro :
+ * « 0.00 CHF » (`en` : « CHF 0.03 », « < CHF 0.01 »). */
 export function formatAmount(amount: number, currency: string, lang: CostLang = "fr"): string {
-  const sym = SYMBOLS[currency.toUpperCase()] ?? currency.toUpperCase();
-  if (lang === "en") {
-    const put = (v: string): string => (sym.length === 1 ? `${sym}${v}` : `${sym} ${v}`);
-    if (!Number.isFinite(amount) || amount <= 0) return put("0");
-    if (amount < 0.01) return `< ${put("0.01")}`;
-    return put(amount.toFixed(2));
-  }
-  if (!Number.isFinite(amount) || amount <= 0) return `0 ${sym}`;
-  if (amount < 0.01) return `< 0,01 ${sym}`;
-  return `${fr(amount, 2)} ${sym}`;
+  if (!Number.isFinite(amount) || amount <= 0) return formatMoney(0, currency, lang);
+  if (amount < 0.01) return `< ${formatMoney(0.01, currency, lang)}`;
+  return formatMoney(amount, currency, lang);
 }
 
 /** Les montants d'un coût par devise, joints par « + » (vide si aucun prix). */

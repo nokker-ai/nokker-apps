@@ -279,6 +279,8 @@ export class EditorSession {
     public readonly cwd: string,
     private readonly fs: EditorFs,
     private readonly texts: EditorTexts = EDITOR_TEXTS_FR,
+    /** Dossier vu par le noyau (`POST /v1/local/sessions {cwd}`), s'il diffère du dossier hôte `cwd` (Windows + WSL). */
+    public readonly serverCwd: string = cwd,
   ) {}
 
   /** Session de code sur `cwd` : `resume: true` reprend le fil le plus récent de ce dossier (comme le client terminal),
@@ -288,16 +290,17 @@ export class EditorSession {
     hub: LocalEventHub,
     cwd: string,
     fs: EditorFs,
-    opts: { resume?: boolean; threadId?: string; texts?: EditorTexts } = {},
+    opts: { resume?: boolean; threadId?: string; texts?: EditorTexts; serverCwd?: string } = {},
   ): Promise<EditorSession> {
+    const serverCwd = opts.serverCwd ?? cwd;
     let threadId = opts.threadId;
     if (!threadId && opts.resume) {
-      const mine = (await client.listLocalSessions()).filter((s) => s.cwd === cwd);
+      const mine = (await client.listLocalSessions()).filter((s) => s.cwd === serverCwd);
       const best = mine.length ? mine.reduce((b, s) => ((s.last_turn_at ?? "") >= (b.last_turn_at ?? "") ? s : b)) : undefined;
       threadId = best?.thread_id;
     }
-    if (!threadId) threadId = (await client.createLocalSession({ cwd })).thread_id;
-    const s = new EditorSession(client, hub, threadId, cwd, fs, opts.texts);
+    if (!threadId) threadId = (await client.createLocalSession({ cwd: serverCwd })).thread_id;
+    const s = new EditorSession(client, hub, threadId, cwd, fs, opts.texts, serverCwd);
     s.attach();
     return s;
   }
@@ -575,12 +578,12 @@ export class EditorSession {
         const depth = e.thread_id === this.threadId ? 0 : 1;
         const args = e.args ?? (e.args_preview ? { aperçu: e.args_preview } : {});
         const edits = fileEditsOf(e.name, args)
-          .map((edit) => ({ edit, host: hostPathOf(edit.path, this.cwd) }))
+          .map((edit) => ({ edit, host: hostPathOf(edit.path, this.cwd, this.serverCwd) }))
           .filter((x): x is { edit: FileEdit; host: string } => x.host !== null)
           // Lu tout de suite : le noyau n'a en général pas encore écrit (sinon `reconstructBefore` prend le relais).
           .map((x) => ({ ...x, before: this.fs.read(x.host) }));
         if (edits.length) this.edits.set(e.call_id, edits);
-        const path = typeof args.path === "string" ? hostPathOf(args.path, this.cwd) : null;
+        const path = typeof args.path === "string" ? hostPathOf(args.path, this.cwd, this.serverCwd) : null;
         const t: EditorToolCall = {
           callId: e.call_id,
           name: e.name,

@@ -15,7 +15,7 @@ export { isHardline } from "./local.js";
 export { costBook, MOCK_COST_MODEL, MOCK_PREFIX_TOKENS, MOCK_PRICES } from "./cost.js";
 export { localMock, LOCAL_TOKEN } from "./local-setup.js";
 export { seedDemo, sessionMessage, type DemoIds } from "./demo.js";
-import { seedDemo, type DemoIds } from "./demo.js";
+import { seedDemo, settleApprovalBubbles, type DemoIds } from "./demo.js";
 
 export interface MockServerHandle {
   url: string;
@@ -78,6 +78,8 @@ export async function startMockServer(
     cast?: boolean;
     /** Flag `show_me` (core docs/SHOW-ME.md) ; `MOCK_SHOW_ME=1`, otherwise off. */
     showMe?: boolean;
+    /** Reading a reply aloud ; `MOCK_TTS=1`. */
+    tts?: boolean;
     /** Flag `guide` (core docs/GUIDE.md) ; `MOCK_GUIDE=1`, otherwise off. */
     guide?: boolean;
     /** Flags `house_room` + `household` (HOUSE-ROOM §6) ; `MOCK_HOUSE_ROOM=1`, otherwise off. */
@@ -88,6 +90,10 @@ export async function startMockServer(
     consolidation?: boolean;
     /** Flag `payments` (PAYMENTS §5) ; `MOCK_PAYMENTS=1`, otherwise off. */
     payments?: boolean;
+    /** Flag `approval_bubbles` ; `MOCK_APPROVAL_BUBBLES=1`, otherwise off (like the core). */
+    approvalBubbles?: boolean;
+    /** Flag `pay_agent`, issuer wise (PAY-AGENT §10) ; `MOCK_PAY_AGENT=wise|wise-linked` (needs payments), otherwise off. */
+    payAgent?: "off" | "wise" | "wise-linked" | "own_card";
     /** Flag `local.folder_mode` (FOLDER-MODE §6) ; `MOCK_FOLDER=1`, otherwise off. */
     folder?: boolean;
     /** Relève du courrier du Crew : `MOCK_CREW_MAIL=off|nobox` (défaut `on`). */
@@ -114,16 +120,20 @@ export async function startMockServer(
     code: opts.code ?? process.env.MOCK_CODE === "1",
     cast: opts.cast ?? process.env.MOCK_CAST === "1",
     showMe: opts.showMe ?? process.env.MOCK_SHOW_ME === "1",
+    tts: opts.tts ?? process.env.MOCK_TTS === "1",
     guide: opts.guide ?? process.env.MOCK_GUIDE === "1",
     houseRoom: opts.houseRoom ?? process.env.MOCK_HOUSE_ROOM === "1",
     whoDoesWhat: opts.whoDoesWhat ?? process.env.MOCK_WHO_DOES_WHAT === "1",
     consolidation: opts.consolidation ?? process.env.MOCK_CONSOLIDATION === "1",
     payments: opts.payments ?? process.env.MOCK_PAYMENTS === "1",
+    approvalBubbles: opts.approvalBubbles ?? process.env.MOCK_APPROVAL_BUBBLES === "1",
+    payAgent: opts.payAgent ?? (["wise", "wise-linked", "own_card"].includes(process.env.MOCK_PAY_AGENT ?? "") ? (process.env.MOCK_PAY_AGENT as "wise" | "wise-linked" | "own_card") : "off"),
     folder: opts.folder ?? process.env.MOCK_FOLDER === "1",
     crewMail: opts.crewMail ?? (process.env.MOCK_CREW_MAIL === "off" || process.env.MOCK_CREW_MAIL === "nobox" ? process.env.MOCK_CREW_MAIL : "on"),
     household: opts.household ?? (["payer", "member", "minor", "none"].includes(process.env.MOCK_HOUSEHOLD ?? "") ? (process.env.MOCK_HOUSEHOLD as "payer" | "member" | "minor" | "none") : "off"),
   });
   if (state.payments) state.payDecided = (a, d, by) => payDecided(state, a, d, by);
+  state.expiredListeners.add((a) => settleApprovalBubbles(state, a));
   if (configDir) {
     mkdirSync(configDir, { recursive: true, mode: 0o700 });
     state.localToken = randomBytes(32).toString("base64url");

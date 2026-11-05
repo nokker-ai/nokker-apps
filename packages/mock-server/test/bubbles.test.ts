@@ -50,7 +50,7 @@ async function say(threadId: string, text: string): Promise<string> {
 }
 
 beforeEach(async () => {
-  mock = await startMockServer({ speed: 0.01 });
+  mock = await startMockServer({ speed: 0.01, approvalBubbles: true });
   client = new NokkerClient({ baseUrl: mock.url });
   await login(client);
 });

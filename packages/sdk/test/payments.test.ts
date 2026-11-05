@@ -26,6 +26,32 @@ describe("payments amounts (core to_minor / format_minor)", () => {
     expect(isPayApproval({ rule: "payments:to_pay", tool_name: "pay_request" })).toBe(true);
     expect(isPayApproval({ rule: "household:guardian", tool_name: "pay_request" })).toBe(true);
     expect(isPayApproval({ rule: "effect:destructive", tool_name: "infra_disk_purge" })).toBe(false);
-    for (const t of ["payment.to_pay", "payment.mandate_signed", "payment.rejected", "payment.refused", "payment.budget_changed"] as const) expect(NOKKER_EVENT_TYPES).toContain(t);
+    for (const t of ["payment.to_pay", "payment.mandate_signed", "payment.rejected", "payment.refused", "payment.budget_changed", "payment.agent"] as const) expect(NOKKER_EVENT_TYPES).toContain(t);
+  });
+});
+
+describe("payment agent routes (core PAY-AGENT §8)", () => {
+  it("calls the method and revoke routes with the contract's shapes", async () => {
+    const { NokkerClient } = await import("../src/index.js");
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : null });
+      return new Response(JSON.stringify({ challenge: "c", method: null, removed: true, publishable_key: "pk_test_x" }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    const c = new NokkerClient({ baseUrl: "http://core.example", fetchImpl });
+    await c.getPayMethod();
+    await c.payMethodChallenge("pm_1");
+    await c.putPayMethod("pm_1", { challenge: "c", device_id: "dev_1", client_data_json: "a", authenticator_data: "b", signature: "s" });
+    await c.deletePayMethod();
+    await c.revokeAgentPayment("md_0123456789abcdef");
+    expect(calls.map((x) => `${x.method} ${x.url.replace("http://core.example", "")}`)).toEqual([
+      "GET /v1/payments/method",
+      "POST /v1/payments/method/challenge",
+      "PUT /v1/payments/method",
+      "DELETE /v1/payments/method",
+      "POST /v1/payments/mandates/md_0123456789abcdef/revoke",
+    ]);
+    expect(calls[1]!.body).toEqual({ payment_method: "pm_1" });
+    expect(calls[2]!.body).toEqual({ payment_method: "pm_1", proof: { challenge: "c", device_id: "dev_1", client_data_json: "a", authenticator_data: "b", signature: "s" } });
   });
 });

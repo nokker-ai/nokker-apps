@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { AccountUsage, BillingStatus } from "@nokker-apps/sdk";
-import { billingView, fmtReset, monthTurns, planLabel, softOver, STATUS_KEYS, todayRows, usageLevel, usagePct, weekRows } from "../src/account/usage.js";
+import { billingView, subscriptionNote, fmtAmount, fmtReset, monthTurns, planLabel, softOver, STATUS_KEYS, todayRows, usageLevel, usagePct, weekRows } from "../src/account/usage.js";
 import { NokkerApiError } from "@nokker-apps/sdk";
 import { errorCode, keyForCode } from "../src/onboarding/errors.js";
 import { deletionGranted, suspendedError } from "../src/account/lifecycle.js";
 import { t } from "../src/onboarding/i18n.js";
 import { deleteOutcome, exportIssue, fmtSize, signOutDevice } from "../src/account/lifecycle.js";
+import { captureVoucher, cleanAccountUrl, forgetVoucher, recallVoucher } from "../src/account/links.js";
 
 const usage = (over: Partial<AccountUsage> = {}): AccountUsage => ({
   mode: "soft",
@@ -73,7 +74,44 @@ describe("abonnement", () => {
       status: "past_due",
       periodEnd: "2026-11-20T00:00:00Z",
       cancelling: true,
+      trialEnd: null,
     });
+  });
+
+  it("essai (voucher) : fin d'essai seulement en trialing", () => {
+    const trial = { ...base, plan: "solo", status: "trialing", current_period_end: "2026-12-05T22:59:59Z", trial_end: "2026-12-05T22:59:59Z" };
+    expect(billingView(trial)).toMatchObject({ kind: "subscribed", status: "trialing", trialEnd: "2026-12-05T22:59:59Z" });
+    expect(billingView({ ...trial, status: "active" })).toMatchObject({ trialEnd: null });
+  });
+
+  it("essai résilié : « il s'arrête le … », jamais « premier débit »", () => {
+    const trial = { ...base, plan: "solo", status: "trialing", current_period_end: "2026-12-05T22:59:59Z", trial_end: "2026-12-05T22:59:59Z" };
+    expect(subscriptionNote(billingView(trial))).toEqual({ key: "accTrialUntil", at: "2026-12-05T22:59:59Z", zurich: true });
+    expect(subscriptionNote(billingView({ ...trial, cancel_at_period_end: true }))).toEqual({ key: "accTrialCancelled", at: "2026-12-05T22:59:59Z", zurich: true });
+    expect(subscriptionNote(billingView({ ...trial, status: "active", cancel_at_period_end: true }))).toMatchObject({ key: "accCancelsAt", zurich: false });
+    expect(subscriptionNote(billingView(base))).toBeNull();
+  });
+
+  it("code d'essai : capturé depuis ?code=, gardé pour la session, retiré de l'adresse", () => {
+    const mem = new Map<string, string>();
+    Object.defineProperty(globalThis, "sessionStorage", {
+      configurable: true,
+      value: { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => mem.set(k, v), removeItem: (k: string) => mem.delete(k) },
+    });
+    captureVoucher("?t=abc&code=nk-ab12-cd34");
+    expect(recallVoucher()).toBe("NK-AB12-CD34");
+    captureVoucher("?code=<x>");
+    expect(recallVoucher()).toBe("NK-AB12-CD34");
+    expect(cleanAccountUrl("?code=NK-1&billing=success&x=1", "#f")).toBe("/?x=1#f");
+    forgetVoucher();
+    expect(recallVoucher()).toBe("");
+  });
+
+  it("textes de l'essai dans les deux langues", () => {
+    for (const k of ["accHaveCode", "accCodeOk", "accCodeInvalid", "accCodeExpired", "accCodeExhausted", "accCodeUsed", "accCodeCustomer", "accTrialThen", "accStartTrial", "accTrialUntil"] as const) {
+      expect(t("fr", k)).not.toBe("");
+      expect(t("en", k)).not.toBe(t("fr", k));
+    }
   });
 
   it("libellé de formule et statuts connus traduits dans les deux langues", () => {
@@ -172,5 +210,18 @@ describe("premiers pas (fil vide)", () => {
     for (const l of ["fr", "en"] as const)
       for (const k of ["firstTitle", "firstIdeaDraft", "firstIdeaSearch", "firstIdeaWhat", "firstConnect", "firstConnectBody", "startNow", "startNowNote"] as const)
         expect(t(l, k)).not.toBe(k);
+  });
+});
+
+
+describe("prix des paliers (05.11 : CHF, prix lus sur Stripe)", () => {
+  it("formate le montant avec la monnaie après, centimes seulement s'il y en a", () => {
+    expect(fmtAmount("fr", { amount: 19, currency: "CHF", interval: "month" })).toBe("19\u00a0CHF");
+    expect(fmtAmount("fr", { amount: 9.5, currency: "CHF", interval: "month" })).toBe("9.50\u00a0CHF");
+    expect(fmtAmount("en", { amount: 9.5, currency: "CHF", interval: "month" })).toBe("CHF\u00a09.50");
+  });
+  it("écrit BYOK en capitales", () => {
+    expect(planLabel("byok")).toBe("BYOK");
+    expect(planLabel("solo")).toBe("Solo");
   });
 });

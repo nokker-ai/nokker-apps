@@ -27,31 +27,30 @@ describe("mise en forme du coût par tour", () => {
     expect(formatTokens(-3)).toBe("0");
   });
 
-  it("anglais (extension VS Code) : point décimal, symbole devant, « tokens »", () => {
+  it("anglais (extension VS Code) : format monétaire en-CH, « tokens »", () => {
     expect(formatTokens(12_400, "en")).toBe("12.4k");
     expect(formatTokens(1_230_000, "en")).toBe("1.23M");
     expect(formatAmount(0.0312, "EUR", "en")).toBe("€0.03");
-    expect(formatAmount(0.004, "CHF", "en")).toBe("< CHF 0.01");
-    expect(formatAmount(0, "USD", "en")).toBe("$0");
-    expect(formatCostLine({ total_tokens: 12_400, cost: { EUR: 0.0312 } }, "en")).toBe("12.4k tokens · €0.03");
+    expect(formatAmount(0.004, "CHF", "en")).toBe("< CHF\u00a00.01");
+    expect(formatAmount(0.04, "CHF", "en")).toBe("CHF\u00a00.04");
+    expect(formatCostLine({ total_tokens: 12_400, cost: { CHF: 0.0312 } }, "en")).toBe("12.4k tokens · CHF\u00a00.03");
     expect(formatCostLine({ total_tokens: 900, cost: null }, "en")).toBe("900 tokens");
-    // Défaut inchangé : français.
-    expect(formatCostLine({ total_tokens: 12_400, cost: { EUR: 0.0312 } })).toBe("12,4 k jetons · 0,03 €");
+    // Défaut : français.
+    expect(formatCostLine({ total_tokens: 12_400, cost: { CHF: 0.0312 } })).toBe("12,4 k jetons · 0.03\u00a0CHF");
   });
 
-  it("montants : devise du noyau, jamais convertie ; sous le centime affiché comme tel", () => {
-    expect(formatAmount(0.0312, "EUR")).toBe("0,03 €");
-    expect(formatAmount(1.5, "usd")).toBe("1,50 $");
-    expect(formatAmount(0.004, "CHF")).toBe("< 0,01 CHF");
-    expect(formatAmount(0, "EUR")).toBe("0 €");
-    expect(formatAmount(2, "JPY")).toBe("2,00 JPY");
-    expect(formatCost({ USD: 0.5, EUR: 0.03 })).toBe("0,03 € + 0,50 $");
+  it("montants : devise du noyau, jamais convertie ; format monétaire fr-CH (décision du 05.11)", () => {
+    expect(formatAmount(0.0312, "CHF")).toBe("0.03\u00a0CHF");
+    expect(formatAmount(0.004, "CHF")).toBe("< 0.01\u00a0CHF");
+    expect(formatAmount(0, "CHF")).toBe("0.00\u00a0CHF");
+    expect(formatAmount(0.0312, "EUR")).toBe("0.03\u00a0€");
+    expect(formatCost({ CHF: 0.5, EUR: 0.03 })).toBe("0.50\u00a0CHF + 0.03\u00a0€");
     expect(formatCost({})).toBe("");
     expect(formatCost(null)).toBe("");
   });
 
   it("ligne de fin de tour : jetons · coût, ou jetons seuls sans prix", () => {
-    expect(formatCostLine({ total_tokens: 12_400, cost: { EUR: 0.0312 } })).toBe("12,4 k jetons · 0,03 €");
+    expect(formatCostLine({ total_tokens: 12_400, cost: { CHF: 0.0312 } })).toBe("12,4 k jetons · 0.03\u00a0CHF");
     expect(formatCostLine({ total_tokens: 12_400, cost: {} })).toBe("12,4 k jetons");
   });
 

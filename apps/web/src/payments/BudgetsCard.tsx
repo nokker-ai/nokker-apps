@@ -8,6 +8,7 @@ import { NokkerApiError, type BudgetLine, type BudgetsView, type NokkerClient, t
 import { tr } from "../i18n/index.js";
 import { draftError, draftOf, fmt, mandateStatusLabel, memberLabel, roleLabel, spendState, type BudgetDraft } from "./model.js";
 import "./payments.css";
+import { off as offCap } from "../capabilities.js";
 
 function apiMessage(e: unknown): string {
   if (e instanceof NokkerApiError) {
@@ -95,6 +96,7 @@ export function BudgetsCard({ client }: { client: NokkerClient }): React.ReactEl
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
+    if (offCap("pay")) return setView("off");
     client.getPaymentBudgets().then(setView, (e) => setView(e instanceof NokkerApiError && e.status === 404 ? "off" : (setError(apiMessage(e)), null)));
     client.listPayCards().then((r) => setCards(r.mandates.slice(0, 5)), () => undefined);
   }, [client]);

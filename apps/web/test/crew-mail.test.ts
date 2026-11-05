@@ -112,7 +112,7 @@ describe("onglet Crew en anglais", () => {
     expect(triggerLabel({ kind: "event", event: "alert:disk-full" }, "en")).toBe("on alert “disk-full”");
     expect(triggerLabel(undefined, "en")).toBe("on demand");
     expect(runStatusLabel("waiting_approval", "en")).toBe("waiting for your go-ahead");
-    expect(runCost({ cost: { tokens_in: 1, tokens_out: 1, amount: 0.5, currency: "EUR", calls: 1 } }, "en")).toBe("0.50 EUR · 1 call");
+    expect(runCost({ cost: { tokens_in: 1, tokens_out: 1, amount: 0.5, currency: "EUR", calls: 1 } }, "en")).toBe("€0.50 · 1 call");
     expect(ageLabel(150, "en")).toBe("2 min ago");
     expect(sessionStateLabel("awaiting_approval", "en")).toBe("waiting for a decision");
     expect(moveTargets([{ machine_id: "mc_b", name: "Laptop", online: false }], null, "en").map((t) => t.label)).toEqual(["Automatic (the least loaded machine)", "Laptop (offline)"]);

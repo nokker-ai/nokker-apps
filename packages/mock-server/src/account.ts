@@ -1,13 +1,14 @@
 /**
  * « Mon compte » en démo : `/v1/account*` (contrat final de Nokker dev, 22.10.2026) et `/v1/billing/*`
  * (nokker/billing). Le réglage de la démo passe par `POST /v1/dev/account-mock` (mock seulement) :
- * `{billing: bool, plan: "solo"|"famille"|"large"|null, status, deleting: bool, internal: bool, export_disabled: bool,
+ * `{billing: bool, plan: "byok"|"solo"|"famille"|"large"|null, status, deleting: bool, internal: bool, export_disabled: bool,
  * expire_export: true, decide_delete: "approve"|"reject"|"expire"}` (`decide_delete` tranche la carte de suppression en attente). Un export est construit tout de suite (24 h, un par 24 h) ; la suppression pose une carte forte
  * dont l'accord suspend le compte.
  */
-import { argsSha256, type Approval, type BillingStatus } from "@nokker-apps/sdk";
+import { argsSha256, type Approval, type BillingStatus, type VoucherCheck } from "@nokker-apps/sdk";
 import { finalizeDecision, MOCK_USER, randomId, type MockState } from "./state.js";
 import { householdMinor, householdUsage } from "./household.js";
+import { currentTerms, termsLangOf } from "./onboarding.js";
 
 type Send = (status: number, payload: unknown, headers?: Record<string, string>) => void;
 
@@ -17,29 +18,70 @@ interface AccountMock {
   status: string | null;
   deleting: boolean;
   internal: boolean;
+  /** Route des codes d'essai servie (noyau ≥ r38) ; faux : `GET /v1/billing/voucher` en 404 comme un noyau d'avant. */
+  vouchers: boolean;
+  /** Résiliation demandée (`cancel_at_period_end`), y compris pendant l'essai ; `status: "canceling"` aussi. */
+  cancelling: boolean;
   exportDisabled: boolean;
   exp: { id: string; created: number; expires: number } | null;
   turnsToday: number;
   mode: "soft" | "hard";
   training: boolean;
+  /** Version des conditions acceptée en dernier (MOCK_TERMS_OUTDATED=1 : une version d'avant → réacceptation). */
+  termsAccepted: string;
+  termsLang: "fr" | "en";
+  /** Langue du compte (`POST /v1/dev/account-mock {lang}`) ; null : celle du navigateur qui appelle
+   * (`Accept-Language`), comme un compte créé dans cette langue. */
+  lang: "fr" | "en" | null;
 }
 
 const mocks = new WeakMap<MockState, AccountMock>();
 export function accountMock(state: MockState): AccountMock {
   let m = mocks.get(state);
   if (!m) {
-    m = { billing: true, plan: null, status: null, deleting: false, internal: false, exportDisabled: false, exp: null, turnsToday: 37, mode: "soft", training: false };
+    m = { billing: true, plan: null, status: null, deleting: false, internal: false, vouchers: true, cancelling: false, exportDisabled: false, exp: null, turnsToday: 37, mode: "soft", training: false,
+      termsAccepted: process.env.MOCK_TERMS_OUTDATED === "1" ? "0".repeat(64) : currentTerms("fr").version, termsLang: "fr", lang: null };
     mocks.set(state, m);
   }
   return m;
 }
 
-// Paliers du noyau (nokker/billing/plans.py, 25.10) : mêmes clés que `GET /v1/billing/plan`.
-const PLANS: { id: string; caps: Record<string, number> }[] = [
-  { id: "solo", caps: { turns_per_day: 40, turns_per_week: 200 } },
-  { id: "famille", caps: { turns_per_day: 110, turns_per_week: 550, household_members: 6 } },
+// Codes d'essai de la démo (nokker/billing/voucher.py) : ESSAI2026 valide, PERIME expiré, EPUISE épuisé, DEJA déjà
+// utilisé par ce compte ; tout autre code est inconnu. Premier débit = même jour le mois suivant (Zurich).
+const DEMO_VOUCHERS: Record<string, "ok" | "code_expired" | "code_exhausted" | "code_used"> = {
+  ESSAI2026: "ok", PERIME: "code_expired", EPUISE: "code_exhausted", DEJA: "code_used",
+};
+
+function trialEnd(): string {
+  const d = new Date();
+  const next = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
+  const last = new Date(Date.UTC(next.getUTCFullYear(), next.getUTCMonth() + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(next.getUTCFullYear(), next.getUTCMonth(), Math.min(d.getUTCDate(), last), 22, 59, 59)).toISOString();
+}
+
+function voucherCheck(raw: string, customer: boolean): VoucherCheck {
+  const code = raw.replace(/\s+/g, "").toUpperCase();
+  if (customer) return { ok: false, error: "code_customer" };
+  const r = DEMO_VOUCHERS[code];
+  if (!r) return { ok: false, error: "code_invalid" };
+  if (r !== "ok") return { ok: false, error: r };
+  return { ok: true, months: 1, first_charge_on: trialEnd().slice(0, 10) };
+}
+
+// Paliers du noyau (nokker/billing/plans.py, 05.11) : mêmes clés que `GET /v1/billing/plan`, prix lus sur Stripe.
+const PLANS: { id: string; caps: Record<string, number>; price?: { amount: number; currency: string; interval: string | null } }[] = [
+  { id: "byok", caps: {}, price: { amount: 9, currency: "CHF", interval: "month" } },
+  { id: "solo", caps: { turns_per_day: 40, turns_per_week: 200, deep_per_day: 20 }, price: { amount: 19, currency: "CHF", interval: "month" } },
+  { id: "famille", caps: { turns_per_day: 110, turns_per_week: 550, household_members: 6 }, price: { amount: 49, currency: "CHF", interval: "month" } },
+  // Large sans prix : le noyau omet `price` quand Stripe n'a pas répondu (la carte s'affiche sans montant).
   { id: "large", caps: { turns_per_day: 230, turns_per_week: 1150, household_members: 6 } },
 ];
+
+// `{}` (palier byok) = plafonds par défaut de la bêta côté noyau (limits.py), pas « sans plafond ».
+function planCapsOrBeta(plan: string | null): Record<string, number> {
+  const caps = PLANS.find((p) => p.id === plan)?.caps;
+  return caps && Object.keys(caps).length > 0 ? caps : { turns_per_day: 40, turns_per_week: 200 };
+}
 
 /** Prochain midi UTC. */
 function nextNoonUtc(now = new Date()): string {
@@ -64,12 +106,14 @@ export async function handleAccount(
   path: string,
   readBody: () => Promise<Record<string, unknown>>,
   send: Send,
+  query: URLSearchParams = new URLSearchParams(),
+  acceptLanguage = "",
 ): Promise<boolean> {
   const m = accountMock(state);
 
   if (method === "POST" && path === "/v1/dev/account-mock") {
     const b = await readBody();
-    for (const k of ["billing", "deleting", "internal"] as const) if (typeof b[k] === "boolean") m[k] = b[k] as boolean;
+    for (const k of ["billing", "deleting", "internal", "vouchers", "cancelling"] as const) if (typeof b[k] === "boolean") m[k] = b[k] as boolean;
     if ("plan" in b) m.plan = (b.plan as string | null) ?? null;
     if ("status" in b) m.status = (b.status as string | null) ?? null;
     else if ("plan" in b) m.status = m.plan ? "active" : null;
@@ -82,6 +126,7 @@ export async function handleAccount(
     }
     if (typeof b.turns_today === "number") m.turnsToday = b.turns_today;
     if (b.mode === "soft" || b.mode === "hard") m.mode = b.mode;
+    if (b.lang === "fr" || b.lang === "en" || b.lang === null) m.lang = b.lang;
     send(200, { ok: true });
     return true;
   }
@@ -91,15 +136,36 @@ export async function handleAccount(
   if ([...state.approvals.values()].some((a) => a.tool_name === "account_delete" && (a.status === "approved" || a.status === "executed"))) m.deleting = true;
   if (m.deleting && path.startsWith("/v1/")) return send(403, { error: { message: "forbidden" } }), true;
 
+  if (method === "GET" && path === "/v1/terms") {
+    send(200, currentTerms(String(query.get("lang") ?? "fr")));
+    return true;
+  }
+
   if (!path.startsWith("/v1/account") && !path.startsWith("/v1/billing/")) return false;
+
+  const termsState = () => {
+    const cur = currentTerms(m.termsLang);
+    return { terms_current: { version: cur.version, lang: cur.lang }, terms_outdated: termsLangOf(m.termsAccepted) === null };
+  };
+
+  if (method === "POST" && path === "/v1/account/terms") {
+    const b = await readBody();
+    const lang = termsLangOf(String(b.version ?? ""));
+    if (!lang) return send(409, { error: "stale_version" }), true;
+    m.termsAccepted = String(b.version);
+    m.termsLang = lang;
+    send(200, { terms: { version: m.termsAccepted, lang, accepted_at: new Date().toISOString() }, ...termsState() });
+    return true;
+  }
 
   if (method === "GET" && path === "/v1/account") {
     send(200, {
       email: `${MOCK_USER}@example.ch`,
-      lang: "fr",
+      lang: m.lang ?? (/^\s*en\b/i.test(acceptLanguage) ? "en" : "fr"),
       created_at: "2026-10-12T08:30:00+02:00",
       status: "active",
-      terms: { version: "2026-10-28", accepted_at: "2026-10-12T08:31:10+02:00" },
+      terms: { version: m.termsAccepted, accepted_at: "2026-10-12T08:31:10+02:00" },
+      ...termsState(),
       consents: householdMinor(state, MOCK_USER) ? { training: false, training_locked: "minor" } : { training: m.training },
     });
     return true;
@@ -116,7 +182,7 @@ export async function handleAccount(
 
   if (method === "GET" && path === "/v1/account/usage") {
     const plan = m.billing ? m.plan : null;
-    const caps = m.internal ? null : (PLANS.find((p) => p.id === plan)?.caps ?? { turns_per_day: 40, turns_per_week: 200 });
+    const caps = m.internal ? null : planCapsOrBeta(plan);
     const dayCap = caps ? (caps.turns_per_day ?? null) : null;
     const weekCap = caps ? (caps.turns_per_week ?? null) : null;
     const weekUsed = m.turnsToday + 173;
@@ -218,16 +284,27 @@ export async function handleAccount(
         plan: m.plan,
         status: m.status,
         current_period_end: m.plan ? new Date(Date.now() + 20 * 86_400_000).toISOString() : null,
-        cancel_at_period_end: m.status === "canceling",
+        cancel_at_period_end: m.status === "canceling" || m.cancelling,
+        trial_end: m.status === "trialing" ? trialEnd() : null,
         plans: PLANS,
       };
       send(200, body);
+      return true;
+    }
+    if (method === "GET" && path === "/v1/billing/voucher") {
+      if (!m.vouchers) return send(404, { error: "not_found" }), true;
+      send(200, voucherCheck(String(query.get("code") ?? ""), m.plan !== null));
       return true;
     }
     if (method === "POST" && path === "/v1/billing/checkout") {
       const b = await readBody();
       if (!PLANS.some((p) => p.id === b.plan)) return send(400, { error: "bad_plan" }), true;
       if (m.plan) return send(409, { error: "already_subscribed" }), true;
+      if (b.code) {
+        const v = voucherCheck(String(b.code), false);
+        if (!v.ok) return send(400, { error: v.error }), true;
+        return send(200, { url: `https://checkout.stripe.example/trial/${String(b.plan)}` }), true;
+      }
       send(200, { url: `https://checkout.stripe.example/c/${String(b.plan)}` });
       return true;
     }

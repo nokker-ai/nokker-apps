@@ -4,7 +4,7 @@
  * désarmer), journal du projet (owner, maintainer). Le noyau décide ; l'écran ne fait que griser.
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { canRole, type BudgetWindow, type NokkerClient, type Project, type ProjectAgentEntry, type ProjectAuditEvent, type ProjectBudgetCap, type ProjectBudgetView } from "@nokker-apps/sdk";
+import { canRole, formatMoney, type BudgetWindow, type NokkerClient, type Project, type ProjectAgentEntry, type ProjectAuditEvent, type ProjectBudgetCap, type ProjectBudgetView } from "@nokker-apps/sdk";
 import { fmtWhen, teamError } from "../team/model.js";
 import { shellLang, tr } from "../i18n/index.js";
 import "./project.css";
@@ -12,7 +12,7 @@ import "./project.css";
 type Toast = (text: string, tone?: "ok" | "error") => void;
 
 export function money(v: number, currency: string): string {
-  return `${v.toFixed(2)} ${currency}`;
+  return formatMoney(v, currency, shellLang());
 }
 
 /** État d'une fenêtre écrit en clair (§7.27.4). */

@@ -439,7 +439,7 @@ async function continueAfterDecision(
   } finally {
     state.activeTurns.delete(threadId);
   }
-  state.appendTurn(threadId, block, cancelled ? "(turn cancelled)" : reply, { sender: null, channel: "cli", silent: true });
+  state.appendTurn(threadId, block, cancelled ? "(turn cancelled)" : reply, { sender: null, channel: "cli", silent: true, origin: "approval" });
   state.publish({ type: "turn.delta", thread_id: threadId, turn_id: turnId, text: reply });
   publishTurnCost(state, threadId, turnId, block, reply);
   state.publish({

@@ -192,7 +192,7 @@ export function Drawer({
               </span>
               <span className="session-meta" aria-hidden="true">
                 {unread ? <span className="session-unread">{unread}</span> : null}
-                <span className="session-count">{tr("{0} b.", t.bubble_count)}</span>
+                {t.bubble_count ? <span className="session-count">{tr("{0} b.", t.bubble_count)}</span> : null}
               </span>
             </button>
             {confirmId === t.id ? (

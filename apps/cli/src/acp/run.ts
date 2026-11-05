@@ -8,6 +8,7 @@ import { BRAND } from "@nokker-apps/brand";
 import { isLocalServer, loadSession, readLocalToken } from "../auth.js";
 import { t } from "../i18n/index.js";
 import { cliLog } from "../log.js";
+import { readLokkal } from "../lokkal.js";
 import { CLI_VERSION } from "../version.js";
 import { AcpAgent } from "./agent.js";
 import { RPC, RpcFailure, RpcPeer } from "./rpc.js";
@@ -51,6 +52,13 @@ export async function acpConnect(serverUrl: string): Promise<NokkerClient> {
   );
 }
 
+/** Distro WSL de Lokkal (lokkal.json), seulement pour le noyau local. */
+function wslDistroOf(serverUrl: string): string | null {
+  if (!isLocalServer(serverUrl)) return null;
+  const lk = readLokkal();
+  return lk.status === "ok" ? (lk.config.wsl_distro ?? null) : null;
+}
+
 export async function runAcp(serverUrl: string): Promise<number> {
   const peer = new RpcPeer({
     write: (line) => process.stdout.write(line),
@@ -63,6 +71,7 @@ export async function runAcp(serverUrl: string): Promise<number> {
     version: CLI_VERSION,
     log: (level, msg) => cliLog(level, msg),
     costLine: process.env.NOKKER_ACP_COST_LINE !== "0",
+    wsl: { platform: process.platform, wslDistro: wslDistroOf(serverUrl) },
   });
   cliLog("info", `acp: started (server ${serverUrl})`);
   process.stdin.setEncoding("utf-8");

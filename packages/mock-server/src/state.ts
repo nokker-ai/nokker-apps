@@ -65,6 +65,8 @@ export interface MockTurn {
   created_at: string;
   /** X7 : images jointes au message user (octets dans `MockState.images`). */
   images?: { sha256: string; media_type: string; size: number; name?: string | null }[];
+  /** Tour qui suit une décision (bloc `[Approbation]`) : `origin: "approval"` sur le message user, comme le noyau. */
+  origin?: "approval";
 }
 
 export interface MockThreadRecord {
@@ -124,6 +126,8 @@ export interface MockStateOptions {
   cast?: boolean;
   /** Flag `show_me` (core docs/SHOW-ME.md): Nina points instead of clicking. */
   showMe?: boolean;
+  /** Reading a reply aloud (`tts`, core p2/tts-stream) ; `MOCK_TTS=1`. */
+  tts?: boolean;
   /** Flag `guide` (core docs/GUIDE.md). */
   guide?: boolean;
   /** Flags `house_room` + `household` (HOUSE-ROOM §6). */
@@ -133,6 +137,11 @@ export interface MockStateOptions {
   consolidation?: boolean;
   /** Flag `payments` (PAYMENTS §5). */
   payments?: boolean;
+  /** Flag `approval_bubbles` (core p2/approval-bubble): an `approval` bubble opened by the kernel for each card that goes
+   * to the humans. Off: no bubble, like the core. `MOCK_APPROVAL_BUBBLES=1`. */
+  approvalBubbles?: boolean;
+  /** Flag `pay_agent`, issuer wise (PAY-AGENT §10): `wise` (no account yet) or `wise-linked` (verified, active). */
+  payAgent?: "off" | "wise" | "wise-linked" | "own_card";
   /** Flag `local.folder_mode` (FOLDER-MODE §6). */
   folder?: boolean;
   /** Relève du courrier du Crew (déclencheur `mail:`) : `on` (défaut), `off` (NO_MAIL_TRIGGER), `nobox`. */
@@ -250,11 +259,16 @@ export class MockState {
   readonly code: boolean;
   readonly cast: boolean;
   readonly showMe: boolean;
+  readonly tts: boolean;
   readonly guide: boolean;
   readonly houseRoom: boolean;
   readonly whoDoesWhat: boolean;
   readonly consolidation: boolean;
   readonly payments: boolean;
+  readonly approvalBubbles: boolean;
+  /** Called for each card that expires (its `approval` bubble says it). */
+  readonly expiredListeners = new Set<(a: Approval) => void>();
+  readonly payAgent: "off" | "wise" | "wise-linked" | "own_card";
   readonly folder: boolean;
   /** Payments: seals or rejects the mandate of a « to pay » card (set by payments.ts, flag on). */
   payDecided: ((approval: Approval, decision: ApprovalDecisionKind, by: string) => void) | null = null;
@@ -286,11 +300,14 @@ export class MockState {
     this.code = opts.code ?? false;
     this.cast = opts.cast ?? false;
     this.showMe = opts.showMe ?? false;
+    this.tts = opts.tts ?? false;
     this.guide = opts.guide ?? false;
     this.houseRoom = opts.houseRoom ?? false;
     this.whoDoesWhat = opts.whoDoesWhat ?? false;
     this.consolidation = opts.consolidation ?? false;
     this.payments = opts.payments ?? false;
+    this.approvalBubbles = opts.approvalBubbles ?? false;
+    this.payAgent = this.payments ? (opts.payAgent ?? "off") : "off";
     this.folder = opts.folder ?? false;
   }
 
@@ -493,7 +510,7 @@ export class MockState {
   }
 
   /** Ajoute un tour (user + reply) et publie turn.started / turn.delta (UNIQUE) / turn.cost / turn.done (§8). */
-  appendTurn(threadId: string, user: string, reply: string, opts: { sender?: string | null; channel?: string; silent?: boolean; images?: MockTurn["images"] } = {}): MockTurn {
+  appendTurn(threadId: string, user: string, reply: string, opts: { sender?: string | null; channel?: string; silent?: boolean; images?: MockTurn["images"]; origin?: "approval" } = {}): MockTurn {
     const rec = this.ensureThread(threadId, user);
     const turn: MockTurn = {
       index: rec.turns.length,
@@ -503,6 +520,7 @@ export class MockState {
       channel: opts.channel ?? "web",
       created_at: new Date().toISOString(),
       ...(opts.images?.length ? { images: opts.images } : {}),
+      ...(opts.origin ? { origin: opts.origin } : {}),
     };
     rec.turns.push(turn);
     rec.thread.updated_at = turn.created_at;
@@ -530,7 +548,7 @@ export class MockState {
     const turns = rec.turns.filter((t) => before === undefined || t.index < before).slice(-Math.max(1, Math.min(200, limit)));
     const out: ThreadMessage[] = [];
     for (const t of turns) {
-      out.push({ index: t.index, role: "user", content: t.user, sender: t.sender, channel: t.channel, created_at: t.created_at, ...(t.images ? { images: t.images } : {}) });
+      out.push({ index: t.index, role: "user", content: t.user, sender: t.sender, channel: t.channel, created_at: t.created_at, ...(t.images ? { images: t.images } : {}), ...(t.origin ? { origin: t.origin } : {}) });
       out.push({ index: t.index, role: "assistant", content: t.reply, created_at: t.created_at });
     }
     return out;
@@ -604,6 +622,7 @@ export class MockState {
     for (const a of this.approvals.values()) {
       if (a.status === "pending" && Date.parse(a.expires_at) < now) {
         a.status = "expired";
+        for (const f of this.expiredListeners) f(a);
       }
     }
   }
@@ -657,14 +676,17 @@ export function finalizeDecision(
     return;
   }
   // Exécution + tour de continuation (APPROVALS.md §2) — simulé : pas de vrai outil appelé.
-  let summary: string;
+  // Like the core (`nokker/approvals/executor.py::_approbation_block`): the block IS the user's message of the turn
+  // that follows, written for the model; the reply is the model's.
+  let reply: string;
   if (decision === "approve") {
     approval.status = "executed";
     approval.result_summary = `executed (demo, decided by ${decidedBy} via ${via}).`;
-    summary = `[Approbation] tool “${approval.tool_name}” executed (decided by ${decidedBy} via ${via}).`;
+    reply = `Done: “${approval.tool_name}” ran (demo).`;
   } else {
-    summary = `[Approbation] refused by ${decidedBy} (via ${via}).`;
+    reply = `Understood: “${approval.tool_name}” was refused, I leave it (demo).`;
   }
-  state.appendTurn(approval.thread_id, "", summary, { channel: "approval", sender: null });
+  const block = ["[Approbation]", `Outil : ${approval.tool_name}`, `D\u00e9cision : ${approval.status}`, `D\u00e9cideur : ${decidedBy}`, `Moyen : ${via}`, `R\u00e9sultat : ${approval.result_summary ?? "refused"}`, "[/Approbation]"].join("\n");
+  state.appendTurn(approval.thread_id, block, reply, { channel: "approval", sender: null, origin: "approval" });
   state.publishThread(approval.thread_id);
 }

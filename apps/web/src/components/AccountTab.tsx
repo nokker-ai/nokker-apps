@@ -1,19 +1,38 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import type { AccountExport, AccountInfo, AccountUsage, BillingStatus, Device, NokkerClient } from "@nokker-apps/sdk";
+import { NokkerApiError, type AccountExport, type AccountInfo, type AccountUsage, type BillingStatus, type Device, type NokkerClient, type VoucherCheck } from "@nokker-apps/sdk";
 import { deleteOutcome, exportIssue, fmtSize, fmtWhen, signOutDevice, suspendedError, type ExportIssue } from "../account/lifecycle.js";
 import { forgetDevice, readStoredDeviceKey } from "../auth.js";
 import { DeletingScreen } from "./DeletingScreen.js";
+import { shortVersion, termsVersionLabel } from "../account/terms.js";
+import { forgetVoucher, recallVoucher, type BillingReturn } from "../account/links.js";
+import { ModelsCard } from "../account/ModelsCard.js";
 import { GlassesCard } from "../glance/GlassesCard.js";
 import { BudgetsCard } from "../payments/BudgetsCard.js";
+import { PayMethodCard, type SignChallenge } from "../payments/PayMethodCard.js";
 import { KnockCard } from "../knock/KnockCard.js";
-import { billingView, fmtReset, monthTurns, planCaps, planLabel, softOver, STATUS_KEYS, todayRows, usageLevel, usagePct, weekRows, type UsageRow } from "../account/usage.js";
+import { billingView, subscriptionNote, fmtAmount, fmtReset, monthTurns, planCaps, planLabel, softOver, STATUS_KEYS, todayRows, usageLevel, usagePct, weekRows, type UsageRow } from "../account/usage.js";
 import { ConnectorsStep, TelegramStep } from "../onboarding/Connectors.js";
 import { errorCode, errorKey } from "../onboarding/errors.js";
 import { t, type Key, type Lang } from "../onboarding/i18n.js";
+import { off as offCap } from "../capabilities.js";
 
 const fmtDate = (lang: Lang, iso: string): string => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? iso : new Intl.DateTimeFormat(lang, { dateStyle: "long" }).format(d);
+};
+
+// Dates de l'essai : jour civil de Zurich (le premier débit tombe à 23:59 heure de Zurich), quel que soit le fuseau.
+const fmtZurich = (lang: Lang, iso: string): string => {
+  const d = new Date(iso.length === 10 ? `${iso}T12:00:00Z` : iso);
+  return Number.isNaN(d.getTime()) ? iso : new Intl.DateTimeFormat(lang, { dateStyle: "long", timeZone: "Europe/Zurich" }).format(d);
+};
+
+const VOUCHER_ERRORS: Record<string, Key> = {
+  code_invalid: "accCodeInvalid",
+  code_expired: "accCodeExpired",
+  code_exhausted: "accCodeExhausted",
+  code_used: "accCodeUsed",
+  code_customer: "accCodeCustomer",
 };
 
 const USAGE_LABEL: Record<"turns" | "browser", Key> = { turns: "accTurns", browser: "accBrowser" };
@@ -78,7 +97,8 @@ function ConsentCard({ client, lang, initial, locked }: { client: NokkerClient; 
   );
 }
 
-function capsLine(lang: Lang, caps: Record<string, number>): string {
+function capsLine(lang: Lang, id: string, caps: Record<string, number>): string {
+  if (id === "byok") return t(lang, "accPlanByok");
   const c = planCaps(caps);
   if (c.day === null) return "";
   const base = c.week === null ? t(lang, "accPlanCapsDay", { day: String(c.day) }) : t(lang, "accPlanCaps", { day: String(c.day), week: String(c.week) });
@@ -111,7 +131,22 @@ function HouseholdUsage({ lang, hh }: { lang: Lang; hh: NonNullable<AccountUsage
   );
 }
 
-function ProfileCard({ lang, info }: { lang: Lang; info: AccountInfo }): React.ReactElement {
+function ProfileCard({ client, lang, info }: { client: NokkerClient; lang: Lang; info: AccountInfo }): React.ReactElement {
+  // Version lisible : lue dans le texte courant, seulement si l'empreinte acceptée est la sienne.
+  const [termsLabel, setTermsLabel] = useState<string | null>(null);
+  const accepted = info.terms?.version ?? null;
+  const termsLang = info.terms_current?.lang ?? info.lang;
+  useEffect(() => {
+    if (!accepted || info.terms_outdated) return;
+    let live = true;
+    client.getCurrentTerms(termsLang).then(
+      (c) => live && setTermsLabel(c.version === accepted ? termsVersionLabel(c.text) : null),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [client, accepted, termsLang, info.terms_outdated]);
   return (
     <section className="ob-conn" aria-labelledby="acc-profile">
       <h3 id="acc-profile">{t(lang, "accProfile")}</h3>
@@ -123,10 +158,12 @@ function ProfileCard({ lang, info }: { lang: Lang; info: AccountInfo }): React.R
         <dt>{t(lang, "accSince")}</dt>
         <dd>{fmtDate(lang, info.created_at)}</dd>
         <dt>{t(lang, "accTerms")}</dt>
-        <dd>
-          {info.terms
-            ? t(lang, "accTermsLine", { version: info.terms.version, date: fmtDate(lang, info.terms.accepted_at) })
-            : t(lang, "accTermsNone")}
+        <dd data-terms-line>
+          {!info.terms
+            ? t(lang, "accTermsNone")
+            : info.terms_outdated
+              ? t(lang, "accTermsPrevious", { date: fmtDate(lang, info.terms.accepted_at) })
+              : t(lang, "accTermsLine", { version: termsLabel ?? shortVersion(info.terms.version), date: fmtDate(lang, info.terms.accepted_at) })}
         </dd>
       </dl>
     </section>
@@ -180,10 +217,23 @@ function DevicesCard({ client, lang }: { client: NokkerClient; lang: Lang }): Re
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
   const [err, setErr] = useState<unknown>(null);
+  // L'appareil de ce navigateur (clé rangée dans IndexedDB) : marqué et listé en premier.
+  const [thisId, setThisId] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    readStoredDeviceKey().then(
+      (k) => live && setThisId(k?.deviceId ?? null),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
   const load = useCallback(() => {
     client.listDevices().then(setDevices, setErr);
   }, [client]);
   useEffect(load, [load]);
+  const ordered = [...(devices ?? [])].sort((a, b) => Number(b.id === thisId) - Number(a.id === thisId));
   const revoke = (id: string): void => {
     setErr(null);
     client.deleteDevice(id).then(() => {
@@ -197,10 +247,11 @@ function DevicesCard({ client, lang }: { client: NokkerClient; lang: Lang }): Re
       <Fail lang={lang} err={err} />
       {devices && devices.length === 0 ? <p className="ob-muted">{t(lang, "accDevicesNone")}</p> : null}
       <ul className="acc-list">
-        {(devices ?? []).map((d) => (
-          <li key={d.id} data-device={d.id}>
+        {ordered.map((d) => (
+          <li key={d.id} data-device={d.id} data-this-device={d.id === thisId ? "" : undefined}>
             <div>
               <strong>{d.name}</strong>
+              {d.id === thisId ? <span className="chip acc-this-device">{t(lang, "accDeviceThis")}</span> : null}
               <div className="ob-note">
                 {t(lang, "accDeviceCode", { code: d.code })} · {t(lang, "accDeviceSince", { date: fmtDate(lang, d.created_at) })}
               </div>
@@ -227,6 +278,7 @@ function SignOutCard({ client, lang, onSignOut }: { client: NokkerClient; lang: 
   // Se déconnecter de CET appareil ne révoque pas les lunettes (décision de dev, 02.11) : on le dit quand il y en a.
   const [glasses, setGlasses] = useState(0);
   useEffect(() => {
+    if (offCap("glance")) return;
     let live = true;
     client.listGlanceDevices().then(
       (r) => live && setGlasses(r.devices.filter((d) => d.paired && !d.revoked).length),
@@ -255,8 +307,47 @@ function SignOutCard({ client, lang, onSignOut }: { client: NokkerClient; lang: 
 
 function SubscriptionCard({ client, lang, billing }: { client: NokkerClient; lang: Lang; billing: BillingStatus }): React.ReactElement {
   const view = billingView(billing);
+  const note = subscriptionNote(view);
   const [err, setErr] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  // Code d'essai : caché derrière « J'ai un code » (l'essai n'est pas une offre publique sans code), ouvert d'emblée si
+  // un code vient d'un lien de campagne.
+  const [code, setCode] = useState<string>(() => recallVoucher());
+  const [codeOpen, setCodeOpen] = useState<boolean>(() => recallVoucher() !== "");
+  const [voucher, setVoucher] = useState<VoucherCheck | null>(null);
+  const [checking, setChecking] = useState(false);
+  // Noyau sans codes d'essai (route en 404, noyau d'avant r38) : ni champ ni « J'ai un code », le code d'un lien est oublié.
+  const [vouchersOff, setVouchersOff] = useState(false);
+  const trial = voucher?.ok ? voucher : null;
+  const check = useCallback(
+    (raw: string): void => {
+      const c = raw.trim();
+      if (!c) return;
+      setChecking(true);
+      setErr(null);
+      client.checkVoucher(c).then(
+        (r) => {
+          setVoucher(r);
+          setChecking(false);
+        },
+        (e) => {
+          setChecking(false);
+          if (e instanceof NokkerApiError && e.status === 404) {
+            forgetVoucher();
+            setVoucher(null);
+            setCodeOpen(false);
+            setVouchersOff(true);
+          } else setErr(e);
+        },
+      );
+    },
+    [client],
+  );
+  useEffect(() => {
+    if (view.kind === "none" && code) check(code);
+    // vérifié une fois à l'arrivée (code venu d'un lien) ; ensuite seulement sur demande
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const go = (p: Promise<{ url: string }>): void => {
     setErr(null);
     setBusy(true);
@@ -282,8 +373,10 @@ function SubscriptionCard({ client, lang, billing }: { client: NokkerClient; lan
       {view.kind === "subscribed" ? (
         <>
           <p>{t(lang, "accPlanName", { plan: planLabel(view.plan) })}</p>
-          {view.periodEnd ? (
-            <p className="ob-note">{t(lang, view.cancelling ? "accCancelsAt" : "accPeriodEnd", { date: fmtDate(lang, view.periodEnd) })}</p>
+          {note ? (
+            <p className="ob-note" data-trial-end={note.zurich ? note.at : undefined} data-cancelling={view.cancelling ? "" : undefined}>
+              {t(lang, note.key, { date: note.zurich ? fmtZurich(lang, note.at) : fmtDate(lang, note.at) })}
+            </p>
           ) : null}
           <button type="button" className="ob-btn" disabled={busy} onClick={() => go(client.billingPortal())}>
             {busy ? t(lang, "accRedirecting") : t(lang, "accPortal")}
@@ -292,20 +385,79 @@ function SubscriptionCard({ client, lang, billing }: { client: NokkerClient; lan
       ) : (
         <>
           <p>{t(lang, "accPlanFree")}</p>
-          <h4 className="ob-sub">{t(lang, "accChoosePlan")}</h4>
+          <h4 className="ob-sub">{t(lang, trial ? "accChooseTrialPlan" : "accChoosePlan")}</h4>
+          {trial ? (
+            <p className="ob-okline" role="status" data-voucher="ok">
+              {t(lang, "accCodeOk", { date: fmtZurich(lang, trial.first_charge_on) })}
+            </p>
+          ) : null}
           <ul className="acc-list">
             {billing.plans.map((p) => (
               <li key={p.id} data-plan={p.id}>
                 <div>
                   <strong>{planLabel(p.id)}</strong>
-                  <div className="ob-note">{capsLine(lang, p.caps)}</div>
+                  {p.price ? (
+                    <span className="acc-price">
+                      {" · "}
+                      {trial
+                        ? t(lang, "accTrialThen", { amount: fmtAmount(lang, p.price), date: fmtZurich(lang, trial.first_charge_on) })
+                        : t(lang, p.price.interval === "year" ? "accPricePerYear" : "accPricePerMonth", { amount: fmtAmount(lang, p.price) })}
+                    </span>
+                  ) : null}
+                  <div className="ob-note">{capsLine(lang, p.id, p.caps)}</div>
                 </div>
-                <button type="button" className="ob-btn primary" disabled={busy} onClick={() => go(client.billingCheckout(p.id))}>
-                  {t(lang, "accSubscribe", { plan: planLabel(p.id) })}
+                <button
+                  type="button"
+                  className="ob-btn primary"
+                  disabled={busy}
+                  onClick={() => {
+                    if (trial) forgetVoucher();
+                    go(client.billingCheckout(p.id, trial ? code.trim() : undefined));
+                  }}
+                >
+                  {t(lang, trial ? "accStartTrial" : "accSubscribe", { plan: planLabel(p.id) })}
                 </button>
               </li>
             ))}
           </ul>
+          {vouchersOff ? null : codeOpen ? (
+            <form
+              className="acc-code ob-field"
+              onSubmit={(e) => {
+                e.preventDefault();
+                check(code);
+              }}
+            >
+              <label htmlFor="acc-code-in">{t(lang, "accCodeLabel")}</label>
+              <div className="acc-code-row">
+                <input
+                  id="acc-code-in"
+                  value={code}
+                  autoComplete="off"
+                  autoCapitalize="characters"
+                  spellCheck={false}
+                  maxLength={40}
+                  onChange={(e) => {
+                    setCode(e.target.value);
+                    setVoucher(null);
+                  }}
+                  aria-describedby={voucher && !voucher.ok ? "acc-code-err" : undefined}
+                />
+                <button type="submit" className="ob-btn" disabled={checking || !code.trim()}>
+                  {t(lang, checking ? "accCodeChecking" : "accCodeCheck")}
+                </button>
+              </div>
+              {voucher && !voucher.ok ? (
+                <p id="acc-code-err" className="ob-error" role="alert" data-voucher={voucher.error}>
+                  {t(lang, VOUCHER_ERRORS[voucher.error] ?? "accCodeInvalid")}
+                </p>
+              ) : null}
+            </form>
+          ) : (
+            <button type="button" className="acc-code-open" onClick={() => setCodeOpen(true)}>
+              {t(lang, "accHaveCode")}
+            </button>
+          )}
         </>
       )}
     </section>
@@ -323,7 +475,7 @@ function saveFile(filename: string, json: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function ExportCard({ client, lang, onDownloaded }: { client: NokkerClient; lang: Lang; onDownloaded: () => void }): React.ReactElement {
+function ExportCard({ client, lang, onDownloaded, onReady }: { client: NokkerClient; lang: Lang; onDownloaded: () => void; onReady?: (ready: boolean) => void }): React.ReactElement {
   const [exp, setExp] = useState<AccountExport | null>(null);
   const [busy, setBusy] = useState(false);
   const [issue, setIssue] = useState<ExportIssue | null>(null);
@@ -368,6 +520,7 @@ function ExportCard({ client, lang, onDownloaded }: { client: NokkerClient; lang
     });
   };
   const ready = exp?.status === "ready" && exp.download;
+  useEffect(() => onReady?.(!!ready), [ready, onReady]);
   return (
     <section className="ob-conn" id="acc-export-card" aria-labelledby="acc-export">
       <h3 id="acc-export">{t(lang, "accExport")}</h3>
@@ -410,6 +563,7 @@ function DeleteCard({
   lang,
   pollMs,
   exported,
+  exportReady = false,
   subscribed,
   onGranted,
 }: {
@@ -417,6 +571,8 @@ function DeleteCard({
   lang: Lang;
   pollMs: number;
   exported: boolean;
+  /** Un export est prêt dans la carte d'export mais n'a pas été téléchargé. */
+  exportReady?: boolean;
   subscribed: boolean;
   onGranted: () => void;
 }): React.ReactElement {
@@ -506,7 +662,7 @@ function DeleteCard({
         <>
           {!exported ? (
             <div className="ob-note" data-export-first>
-              <p>{t(lang, "accDeleteExportFirst")}</p>
+              <p>{t(lang, exportReady ? "accDeleteExportReady" : "accDeleteExportFirst")}</p>
               <button type="button" className="ob-btn" onClick={toExport}>
                 {t(lang, "accDeleteExportFirstBtn")}
               </button>
@@ -537,13 +693,19 @@ export function AccountTab({
   pollMs = 2000,
   onGone,
   onSignOut,
+  signDecision = null,
+  billingReturn = null,
 }: {
   client: NokkerClient;
   lang: Lang;
   pollMs?: number;
   onGone?: () => void;
+  /** Passkey of this device (payment method of the payment agent); null in demo / TOTP-only sessions. */
+  signDecision?: SignChallenge | null;
   /** Absent (démo, passerelle, Lokkal local) : pas de déconnexion ici. */
   onSignOut?: () => void;
+  /** Retour de Stripe Checkout (`?billing=`) : message en tête de page. */
+  billingReturn?: BillingReturn | null;
 }): React.ReactElement {
   const [info, setInfo] = useState<AccountInfo | null>(null);
   const [usage, setUsage] = useState<AccountUsage | null>(null);
@@ -551,6 +713,7 @@ export function AccountTab({
   const [loadErr, setLoadErr] = useState<unknown>(null);
   const [deleting, setDeleting] = useState(false);
   const [exported, setExported] = useState(false);
+  const [exportReady, setExportReady] = useState(false);
   const granted = useCallback(() => (onGone ? onGone() : setDeleting(true)), [onGone]);
 
   useEffect(() => {
@@ -562,7 +725,7 @@ export function AccountTab({
     client.getAccount().then((a) => live && setInfo(a), fail);
     client.getAccountUsage().then((u) => live && setUsage(u), fail);
     // 404 = abonnement non activé côté noyau : la section n'existe pas, ce n'est pas une erreur.
-    client.getBillingStatus().then((b) => live && setBilling(b), () => undefined);
+    if (!offCap("billing")) client.getBillingStatus().then((b) => live && setBilling(b), () => undefined);
     return () => {
       live = false;
     };
@@ -574,20 +737,27 @@ export function AccountTab({
       <div className="ob-card">
         <h2 className="ob-title">{t(lang, "accTitle")}</h2>
         <Fail lang={lang} err={loadErr} />
-        {info ? <ProfileCard lang={lang} info={info} /> : null}
+        {billingReturn ? (
+          <p className={billingReturn === "success" ? "ob-okline" : "ob-note"} role="status" data-billing-return={billingReturn}>
+            {t(lang, billingReturn === "success" ? "accBillingSuccess" : "accBillingCancel")}
+          </p>
+        ) : null}
+        {info ? <ProfileCard client={client} lang={lang} info={info} /> : null}
         {info?.consents ? <ConsentCard client={client} lang={lang} initial={info.consents.training} locked={info.consents.training_locked === "minor"} /> : null}
         {billing ? <SubscriptionCard client={client} lang={lang} billing={billing} /> : null}
+        <ModelsCard client={client} lang={lang} />
         {usage ? <UsageCard lang={lang} usage={usage} /> : null}
         <DevicesCard client={client} lang={lang} />
         <GlassesCard client={client} />
         <BudgetsCard client={client} />
+        <PayMethodCard client={client} signDecision={signDecision} />
         <KnockCard />
         {onSignOut ? <SignOutCard client={client} lang={lang} onSignOut={onSignOut} /> : null}
         <h3 className="ob-sub">{t(lang, "tabConnectors")}</h3>
         <ConnectorsStep client={client} lang={lang} embedded />
         <TelegramStep client={client} lang={lang} embedded />
-        <ExportCard client={client} lang={lang} onDownloaded={() => setExported(true)} />
-        <DeleteCard client={client} lang={lang} pollMs={pollMs} exported={exported} subscribed={billing?.plan != null} onGranted={granted} />
+        <ExportCard client={client} lang={lang} onDownloaded={() => setExported(true)} onReady={setExportReady} />
+        <DeleteCard client={client} lang={lang} pollMs={pollMs} exported={exported} exportReady={exportReady} subscribed={billing?.plan != null} onGranted={granted} />
       </div>
     </div>
   );

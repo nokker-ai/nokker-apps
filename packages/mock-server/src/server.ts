@@ -58,6 +58,7 @@ import { handleLocalMail } from "./local-mail.js";
 import { handlePacks } from "./packs.js";
 import { handleConsolidation } from "./consolidation.js";
 import { handleFolder } from "./folder.js";
+import { handleOwnCard } from "./owncard.js";
 import { handlePayments, payChallengeBinding, payDecided, payProofRefusal } from "./payments.js";
 import { handleHouse } from "./house.js";
 import { handlePresence } from "./presence.js";
@@ -71,10 +72,17 @@ import { handleAlertReceive, handleOps, handleOpsDev } from "./ops.js";
 import { handleLocalMachine, handleLocalMachineDev, handlePreview } from "./local-machine.js";
 import { handleImport } from "./importers.js";
 import { handleLearning } from "./learning.js";
+import { handleAutoReview, withRollback } from "./auto-review.js";
+import { handleSpeech } from "./speech.js";
+import { handleCloudByok } from "./cloud-byok.js";
+import { capabilitiesOn, mockCapabilities } from "./capabilities.js";
+import { handleLocalPasskey } from "./local-passkey.js";
 import { handleLink, handleLinkDev } from "./link.js";
 import { handleGatewayAuthorize, handleGatewayRelay } from "./gateway.js";
 import { handleLocal, LOCAL_TOKEN } from "./local-setup.js";
 import { handleAuthedOnboarding, handlePublicOnboarding } from "./onboarding.js";
+import { handleConnectorsMulti, handleConnectorsOAuthPublic } from "./connectors-multi.js";
+import { handleCastFrame, handleCastFrameUrl } from "./cast.js";
 
 export const MOCK_TOTP_CODE = "000000";
 /** Réponse finale d'un tour annulé, mot pour mot celle du noyau (`turn.error = "cancelled"`, LOKKAL.md §7.4.4). */
@@ -421,19 +429,32 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     return;
   if (handlePreview(state, req, res, path)) return;
 
+  // Faux fournisseur OAuth et callback (CONNECTORS-OAUTH) : sans session, c'est le `state` qui lie au profil.
+  if (handleConnectorsOAuthPublic(state, method, path, url.searchParams, res)) return;
+  // Cadre de l'aperçu cast : sans jeton, l'URL signée fait foi (p2/cast-frame).
+  if (handleCastFrame(state, method, path, url.searchParams, res)) return;
+
   // Tout ce qui suit exige une session valide.
   const user = authUser(state, req);
   if (!user && path !== "/v1/chat/completions") {
     return void sendJson(res, 401, { error: { message: "unauthorized" } });
   }
 
-  if (await handleAccount(state, method, path, readBody, (st, obj, h) => sendJson(res, st, obj, h))) return;
+  if (path === "/v1/capabilities" && method === "GET") {
+    if (!capabilitiesOn()) return void sendJson(res, 404, { error: { code: "not_found", message: "noyau d'avant /v1/capabilities" } });
+    return void sendJson(res, 200, mockCapabilities(state, user === LOCAL_OWNER));
+  }
+  if (await handleCloudByok(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleAccount(state, method, path, readBody, (st, obj, h) => sendJson(res, st, obj, h), url.searchParams, String(req.headers["accept-language"] ?? ""))) return;
   if (user && (await handleLink(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj)))) return;
   if (await handleGatewayAuthorize(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleLocalMachine(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleImport(state, user, method, path + url.search, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleFolder(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleLearning(state, user, method, path + url.search, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleAutoReview(state, user, method, path, (st, obj) => sendJson(res, st, obj))) return;
+  if (handleSpeech(state, user, method, path, res)) return;
+  if (await handleLocalPasskey(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleLocalMail(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (user && (await handleSso(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj)))) return;
   if (await handlePacks(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
@@ -444,10 +465,13 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   if (await handleGuide(state, user ?? MOCK_USER, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleHouse(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleConsolidation(state, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleOwnCard(state, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return; // own_card (PAY-AGENT §11)
   if (await handlePayments(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleHousehold(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleTeam(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj), sessionDevice(state, req))) return;
   if (await handleOps(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (handleCastFrameUrl(state, method, path, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleConnectorsMulti(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleAuthedOnboarding(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
 
   // ---- Session de code locale (LOKKAL.md §7.4.1) ------------------------------------------------
@@ -662,7 +686,8 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     const body = await readJsonBody(req);
     const kind = String(body.kind ?? "") as BubbleKind;
     // `pack_agents` (BUBBLES §9.6) : posée par le noyau seulement (400 pour un client).
-    if (!(BUBBLE_KINDS as readonly string[]).includes(kind) || kind === "notify" || kind === "pack_agents" || kind === "cast" || kind === "pointer") {
+    // `approval`: posed by the kernel only, flag on or off (core p2/approval-bubble-r33).
+    if (!(BUBBLE_KINDS as readonly string[]).includes(kind) || kind === "notify" || kind === "pack_agents" || kind === "cast" || kind === "pointer" || kind === "approval") {
       return void sendJson(res, 400, { error: { message: `kind non créable par un client : ${kind}` } });
     }
     if (body.state !== undefined && (typeof body.state !== "object" || body.state === null || Array.isArray(body.state))) {
@@ -809,7 +834,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     state.expireStaleApprovals();
     const approval = state.approvals.get(approvalMatch[1]!);
     if (!approval) return void sendJson(res, 404, { error: { message: "approbation inconnue" } });
-    sendJson(res, 200, approval);
+    sendJson(res, 200, withRollback(state, approval));
     return;
   }
 

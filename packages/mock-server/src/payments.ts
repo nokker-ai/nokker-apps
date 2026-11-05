@@ -9,7 +9,7 @@
  * (« achète un vélo ») the spend is refused BEFORE any card (`payment.refused`). Only a passkey (WebAuthn proof)
  * approves it — a raw device signature is a 403, like the core's ProofInvalid; rejecting is always possible.
  */
-import { argsSha256, canonicalJson, formatMinor, unitsToMinor, type Approval, type BudgetLine, type MandateDetail, type MandateStatus, type PayCard } from "@nokker-apps/sdk";
+import { argsSha256, canonicalJson, formatMinor, unitsToMinor, type Approval, type BudgetLine, type MandateDetail, type MandateStatus, type PayCard, type PayLink, type PayMethod, type ThreeDSPending } from "@nokker-apps/sdk";
 import { createHash } from "node:crypto";
 import { approvalBubble } from "./demo.js";
 import { MOCK_USER, randomId, type MockState } from "./state.js";
@@ -35,11 +35,22 @@ interface Rec extends Omit<MandateDetail, "status"> {
   status: MandateStatus;
   created: number;
 }
+interface ThreeDSRec extends ThreeDSPending {
+  status: "pending" | "approved" | "rejected" | "expired";
+}
+/** Payment agent, issuer wise (PAY-AGENT §10; `MOCK_PAY_AGENT`): the Wise account, the method, waiting 3-D Secure. */
+interface AgentMock {
+  link: PayLink | null;
+  method: PayMethod | null;
+  threeds: Map<string, ThreeDSRec>;
+}
 interface P {
   people: Person[];
   budgets: Map<string, StoredBudget>;
   mandates: Rec[];
+  agent: AgentMock;
 }
+const WISE_PROFILE = "wise:29751964";
 const all = new WeakMap<MockState, P>();
 const DEFAULT: Omit<StoredBudget, "set_by" | "updated_at"> = { currency: "CHF", per_purchase_minor: 20000, per_day_minor: 30000, per_month_minor: 100000, minor_allowed: false };
 
@@ -119,6 +130,11 @@ function seed(state: MockState): P {
           : [{ account: MOCK_USER, role: "payer" }],
     budgets: new Map([["sam", { currency: "CHF", per_purchase_minor: 5000, per_day_minor: 10000, per_month_minor: 30000, minor_allowed: false, set_by: MOCK_USER, updated_at: nowS() - 3 * 86400 }]]),
     mandates: [],
+    agent: {
+      link: state.payAgent === "wise-linked" ? { state: "PASSED", required_by: null, updated_at: nowS() - 86400 } : null,
+      method: state.payAgent === "wise-linked" ? { kind: "wise_card", issuer: "wise", brand: "VISA", last4: null, exp_month: null, exp_year: null, created_at: nowS() - 86400 } : null,
+      threeds: new Map(),
+    },
   };
   const yesterday = nowS() - 26 * 3600;
   const rec = makeRec(state, MOCK_USER, { merchant: "Librairie du Lac", amount_minor: 3450, currency: "CHF", items: [{ name: "Carnet A5", quantity: 2, unit_price: "8.25" }, { name: "Stylo plume", quantity: 1, unit_price: "18.00" }], url: "https://shop.example.com/cart/42", source: "browser", reference: null }, "appr_demo_books", yesterday, "pending");
@@ -230,6 +246,23 @@ export function payDemo(state: MockState, threadId: string, normalized: string):
   return `Cart ready at ${pick.merchant} (${rec.amount}). Approve the « to pay » card with your passkey, then you pay on the merchant's page — I never pay.`;
 }
 
+/** Mock only (« ta carte », PAY-AGENT §11): the mandate of a card made by `payDemo` becomes the Lokkal owner's, paid
+ * by the payment agent with the person's own card when `ownCard`. */
+export function ownCardMandate(state: MockState, approvalId: string, account: string, ownCard: boolean): void {
+  const rec = pay(state).mandates.find((m) => m.approval_id === approvalId);
+  if (!rec) return;
+  rec.account = account;
+  if (!ownCard) return;
+  rec.pay_by = "agent";
+  rec.handoff = { kind: "agent" };
+}
+
+/** Mock only: after the passkey, the core's payment agent starts on an own_card mandate (`agent.kind: "own_card"`). */
+export function ownCardStarted(state: MockState, approvalId: string): void {
+  const rec = pay(state).mandates.find((m) => m.approval_id === approvalId);
+  if (rec?.pay_by === "agent") rec.agent = { kind: "own_card", status: "active", used: false, currency: rec.currency, max_amount_minor: rec.amount_minor };
+}
+
 /** Challenge of a « to pay » card: it carries the mandate's hash (signed as is). */
 export function payChallengeBinding(state: MockState, approvalId: string): string | null {
   if (!state.payments) return null;
@@ -272,6 +305,8 @@ export async function handlePayments(state: MockState, user: string, method: str
     throw Object.assign(new Error("membre inconnu dans ce foyer"), { status: 404, code: "not_found" });
   };
   try {
+    const agentDone = await handlePayAgent(state, p, user, method, path, readBody, send);
+    if (agentDone) return true;
     if (path === PREFIX + "/budgets" && method === "GET") {
       return send(200, { is_payer: isPayer, timezone: TZ, members: (isPayer ? p.people : [me]).map((x) => line(p, x)) }), true;
     }
@@ -317,4 +352,173 @@ export async function handlePayments(state: MockState, user: string, method: str
     throw e;
   }
   return err(send, 404, "not_found", "not found");
+}
+
+// ── Payment agent, issuer wise (PAY-AGENT §10) — mock of nokker/payments/http.py `_method_route` and the 3DS routes ──
+
+const KYC_DONE = ["PASSED", "PASSED_WITH_REQUIREMENTS"];
+
+function agentPublish(state: MockState, rec: Rec): void {
+  state.publish({ type: "payment.agent", mandate_id: rec.mandate_id, approval_id: rec.approval_id, account: rec.account, merchant: rec.merchant, amount_minor: rec.amount_minor, currency: rec.currency, agent: rec.agent ?? { status: "active" } });
+}
+
+async function handlePayAgent(state: MockState, p: P, user: string, method: string, path: string, readBody: () => Promise<Record<string, unknown>>, send: Send): Promise<boolean> {
+  const on = state.payAgent === "wise" || state.payAgent === "wise-linked"; // own_card : owncard.ts
+  const a = p.agent;
+  if (path === PREFIX + "/method" || path.startsWith(PREFIX + "/method/")) {
+    if (!on) return err(send, 404, "not_found", "not found");
+    if (path === PREFIX + "/method" && method === "GET") return send(200, { issuer: "wise", publishable_key: null, method: a.method, link: a.link }), true;
+    if (path === PREFIX + "/method" && method === "DELETE") {
+      const had = !!a.method;
+      a.method = null;
+      return send(200, { removed: had }), true;
+    }
+    if (path === PREFIX + "/method/link" && method === "POST") {
+      const b = await readBody();
+      const person = (b.person ?? {}) as Record<string, unknown>;
+      const ok = ["first_name", "last_name", "date_of_birth", "address_line", "city", "country_iso3", "email", "phone"].every((k) => typeof person[k] === "string" && (person[k] as string).trim());
+      if (!ok || !/^\+[1-9]\d{6,14}$/.test(String(person.phone)) || !/^\d{4}-\d{2}-\d{2}$/.test(String(person.date_of_birth))) return err(send, 400, "invalid", "identité illisible");
+      a.link ??= { state: "WAITING_CUSTOMER_INPUT", required_by: null, updated_at: nowS() };
+      return send(200, { link: a.link }), true;
+    }
+    if (path === PREFIX + "/method/link/url" && method === "POST") {
+      if (!a.link) return err(send, 404, "not_found", "aucun compte émetteur ouvert");
+      if (a.link.state !== "WAITING_CUSTOMER_INPUT" && a.link.state !== "PASSED_WITH_REQUIREMENTS") return err(send, 409, "kyc_no_link", "pas de lien KYC");
+      // Wise's hosted page is not mocked: back at once, `status=success`; Wise checks for a moment, then PASSED.
+      a.link = { ...a.link, state: "PROCESSING", updated_at: nowS() };
+      state.later(1500, () => {
+        if (a.link) a.link = { ...a.link, state: "PASSED", updated_at: nowS() };
+      });
+      return send(200, { url: "/?wise=kyc&status=success#account", expires_at: new Date(Date.now() + 5 * 60_000).toISOString() }), true;
+    }
+    if (path === PREFIX + "/method/balance" && method === "GET") {
+      if (!a.link) return err(send, 404, "not_found", "aucun compte émetteur ouvert");
+      return send(200, { balances: [{ currency: "CHF", amount_minor: 18450 }, { currency: "EUR", amount_minor: 4200 }] }), true;
+    }
+    if (path === PREFIX + "/method/challenge" && method === "POST") {
+      if (!a.link) return err(send, 409, "no_link", "aucun compte émetteur ouvert");
+      const challenge = canonicalJson({ account: user, aud: "nokker-pay-method", iat: Math.floor(nowS()), payment_method: WISE_PROFILE });
+      return send(200, { challenge, payment_method: WISE_PROFILE }), true;
+    }
+    if (path === PREFIX + "/method" && method === "PUT") {
+      const b = await readBody();
+      const proof = (b.proof ?? {}) as Record<string, unknown>;
+      if (!a.link || !KYC_DONE.includes(a.link.state)) return err(send, 409, "kyc", "vérification d'identité pas encore terminée chez l'émetteur");
+      if (b.payment_method !== WISE_PROFILE) return err(send, 403, "profile", "ce profil n'a pas été ouvert pour ce compte");
+      if (typeof proof.client_data_json !== "string" || typeof proof.signature !== "string") return err(send, 403, "proof", "preuve passkey attendue");
+      a.method = { kind: "wise_card", issuer: "wise", brand: "VISA", last4: null, exp_month: null, exp_year: null, created_at: nowS() };
+      return send(200, { method: a.method }), true;
+    }
+    return err(send, 404, "not_found", "not found");
+  }
+  const m = /^\/v1\/payments\/mandates\/([^/]+)\/3ds$/.exec(path);
+  if (!m) return false;
+  if (!on) return err(send, 404, "not_found", "not found");
+  const rec = p.mandates.find((r) => r.mandate_id === m[1] && r.account === user);
+  const t = rec ? a.threeds.get(rec.mandate_id) : undefined;
+  if (!rec || !t || t.status !== "pending") return err(send, 404, "not_found", "aucune confirmation en attente");
+  if (method === "GET") {
+    const { status: _s, ...pending } = t;
+    return send(200, pending), true;
+  }
+  if (method !== "POST") return err(send, 404, "not_found", "not found");
+  const b = await readBody();
+  if (b.challenge_id !== t.challenge_id) return err(send, 404, "not_found", "aucune confirmation en attente");
+  if (t.expires_at <= nowS()) {
+    t.status = "expired";
+    rec.agent = { ...(rec.agent ?? { status: "active" }), status: "active" };
+    delete rec.agent.threeds;
+    agentPublish(state, rec);
+    return err(send, 410, "expired", "délai de confirmation dépassé");
+  }
+  if (b.decline === true) t.status = "rejected";
+  else {
+    const proof = (b.proof ?? {}) as Record<string, unknown>;
+    if (proof.challenge !== t.challenge || typeof proof.client_data_json !== "string") return err(send, 403, "proof", "le défi signé ne porte pas sur ce paiement");
+    t.status = "approved";
+  }
+  rec.agent = { ...(rec.agent ?? { status: "active" }), status: "active" };
+  delete rec.agent.threeds;
+  if (t.status === "approved") {
+    state.later(1500, () => {
+      rec.agent = { ...(rec.agent ?? { status: "active" }), status: "deactivated", used: true, deactivated_reason: "used" };
+      agentPublish(state, rec);
+    });
+  }
+  agentPublish(state, rec);
+  return send(200, { ...card(rec), agent: rec.agent }), true;
+}
+
+/** Demo (`MOCK_PAY_AGENT`): « simule 3ds » / « simulate 3ds » in a chat — a signed card paid by the agent, then the
+ * bank asks a 3-D Secure confirmation (5 minutes). Mock only: the core gets it from Wise. */
+export function payAgentDemo(state: MockState, normalized: string): string | null {
+  if ((state.payAgent !== "wise" && state.payAgent !== "wise-linked") || !/^(?:simule|simulate)\s+3ds\b/.test(normalized)) return null;
+  const p = pay(state);
+  const rec = makeRec(state, MOCK_USER, { merchant: "Boutique du Lac", amount_minor: 4290, currency: "CHF", items: [{ name: "Bougie parfumée", quantity: 2, unit_price: "21.45" }], url: "https://shop.example.com/checkout", source: "browser", reference: null }, randomId("appr"), nowS(), "pending");
+  seal(rec, MOCK_USER);
+  rec.pay_by = "agent";
+  rec.handoff = { kind: "agent" };
+  const id = randomId("3ds");
+  const expires = Math.floor(nowS()) + 300;
+  const challenge = canonicalJson({ amount_minor: 4290, aud: "nokker-3ds", challenge_id: id, currency: "CHF", expires_at: expires, mandate_id: rec.mandate_id, merchant: "BOUTIQUE DU LAC", merchant_url: "https://shop.example.com" });
+  p.agent.threeds.set(rec.mandate_id, { challenge_id: id, amount_minor: 4290, currency: "CHF", merchant: "BOUTIQUE DU LAC", expires_at: expires, merchant_url: "https://shop.example.com", merchant_country: "CH", merchant_match: "host", challenge, status: "pending" });
+  rec.agent = { id: "cd_demo", kind: "card", status: "requires_action", used: false, currency: "CHF", max_amount_minor: 4290, expires_at: expires + 3600, threeds: { challenge_id: id, amount_minor: 4290, currency: "CHF", merchant: "BOUTIQUE DU LAC", expires_at: expires } };
+  p.mandates.unshift(rec);
+  state.later(400, () => agentPublish(state, rec));
+  return "The payment agent is paying Boutique du Lac (42.90 CHF) with the card reserved to this purchase; your bank asks you to confirm.";
+}
+
+// ── « Ta carte » (own_card, Lokkal, PAY-AGENT §11) — démo et demandes de la banque (mock seulement) ──
+
+const ownPrompts = new WeakMap<MockState, Map<string, { kind: "cvv" | "otp" | "bank_app"; expires_at: number }>>();
+const promptsOf = (state: MockState) => {
+  let m = ownPrompts.get(state);
+  if (!m) ownPrompts.set(state, (m = new Map()));
+  return m;
+};
+
+function ownAsk(state: MockState, rec: Rec, kind: "cvv" | "otp" | "bank_app", ttl = 300): void {
+  const expires_at = Math.floor(nowS()) + ttl;
+  promptsOf(state).set(rec.mandate_id, { kind, expires_at });
+  rec.agent = { ...(rec.agent ?? { status: "active" }), kind: "own_card", status: "active", prompt: { kind, expires_at } };
+  agentPublish(state, rec);
+}
+
+function ownEnd(state: MockState, rec: Rec, reason: "used" | "checkout_failed"): void {
+  promptsOf(state).delete(rec.mandate_id);
+  rec.agent = { ...(rec.agent ?? { status: "active" }), kind: "own_card", status: "deactivated", used: reason === "used", deactivated_reason: reason };
+  delete rec.agent.prompt;
+  agentPublish(state, rec);
+}
+
+/** `POST /v1/payments/mandates/{id}/cvv|otp` : seulement ce que l'agent a demandé, une fois. Le code de test de la
+ * banque est 123456 ; tout autre code : paiement refusé. */
+export function ownCardPrompt(state: MockState, mandateId: string, kind: "cvv" | "otp", value: string): "ok" | "none" | "invalid" {
+  const p = promptsOf(state).get(mandateId);
+  const rec = pay(state).mandates.find((r) => r.mandate_id === mandateId);
+  if (!p || !rec || p.kind !== kind || p.expires_at < nowS()) return "none";
+  if (kind === "cvv" ? !/^\d{3,4}$/.test(value) : !/^[0-9A-Za-z]{4,10}$/.test(value)) return "invalid";
+  promptsOf(state).delete(mandateId);
+  if (kind === "cvv") state.later(600, () => ownAsk(state, rec, "otp"));
+  else state.later(600, () => ownEnd(state, rec, value === "123456" ? "used" : "checkout_failed"));
+  return "ok";
+}
+
+/** « simule ta carte » / « simulate my card » (et « … appli » / « … app ») : une carte « à payer » own_card signée, puis
+ * l'agent demande le CVV (sauf s'il est gardé), puis le code de la banque — ou la confirmation dans l'appli. */
+export function ownCardDemo(state: MockState, normalized: string, cvvKept: boolean): string | null {
+  if (state.payAgent !== "own_card" || !/^(?:simule ta carte|simulate my card)\b/.test(normalized)) return null;
+  const app = /\b(appli|app)\b/.test(normalized);
+  const p = pay(state);
+  const rec = makeRec(state, MOCK_USER, { merchant: "Boutique de test", amount_minor: 4290, currency: "CHF", items: [{ name: "Bouilloire inox", quantity: 1, unit_price: "42.90" }], url: "https://shop.example.com/checkout", source: "browser", reference: null }, randomId("appr"), nowS(), "pending");
+  seal(rec, MOCK_USER);
+  rec.pay_by = "agent";
+  rec.handoff = { kind: "agent" };
+  rec.agent = { id: "cd_own", kind: "own_card", status: "active", used: false, currency: "CHF", max_amount_minor: 4290 };
+  p.mandates.unshift(rec);
+  if (app) {
+    state.later(400, () => ownAsk(state, rec, "bank_app", 600));
+    state.later(6000, () => ownEnd(state, rec, "used"));
+  } else state.later(400, () => ownAsk(state, rec, cvvKept ? "otp" : "cvv"));
+  return "Your payment agent is paying Boutique de test (42.90 CHF) with your own card; your bank may ask you something in Nokker.";
 }

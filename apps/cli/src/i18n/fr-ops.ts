@@ -82,6 +82,7 @@ export const FR_OPS: Record<string, string> = {
   "{0} < minimum {1} — run 'nokker update'": "{0} < minimale {1} — lancez « nokker update »",
   "{0} ≥ minimum {1}": "{0} ≥ minimale {1}",
   "git is missing from the host (needed for /diff and checkpoints)": "git absent de l'hôte (nécessaire pour /diff et les points de retour)",
+  "git not found on Windows — not needed: /diff and checkpoints run in WSL ({0})": "git introuvable sous Windows — pas nécessaire : /diff et les points de retour tournent dans WSL ({0})",
   "docker compose up -d started": "docker compose up -d lancé",
   "docker compose up -d failed — {0}": "docker compose up -d a échoué — {0}",
   "{0} responds": "{0} répond",
@@ -229,6 +230,10 @@ export const FR_OPS: Record<string, string> = {
   "\n{0}:\n```\n{1}\n```\n": "\n{0} :\n```\n{1}\n```\n",
   "At most {0} images per message": "{0} images au plus par message",
   "local token rejected by the kernel (nokker doctor)": "jeton local refusé par le noyau (nokker doctor)",
+  "folder {0} is in the WSL distribution {1}, but Lokkal runs in {2}: open the project in {2}":
+    "le dossier {0} est dans la distribution WSL {1}, mais Lokkal tourne dans {2} : ouvrez le projet dans {2}",
+  "folder {0} is on the Windows drive {1} ({2} in WSL), outside the roots declared in Lokkal: open the project inside WSL (\\\\wsl.localhost\\{3}\\home\\<you>\\<project>)":
+    "le dossier {0} est sur le disque Windows {1} ({2} dans WSL), hors des racines déclarées de Lokkal : ouvrez le projet dans WSL (\\\\wsl.localhost\\{3}\\home\\<vous>\\<projet>)",
   "folder outside the roots declared in Lokkal: {0} ({1})": "dossier hors des racines déclarées de Lokkal : {0} ({1})",
   "kernel unreachable (is Lokkal running? nokker doctor)": "noyau injoignable (Lokkal tourne-t-il ? nokker doctor)",
   "unknown session: {0}": "session inconnue : {0}",
@@ -254,8 +259,8 @@ export const FR_OPS: Record<string, string> = {
   "no session for {0}: first run {1} --server {0} in a terminal": "aucune session pour {0} : lance d'abord {1} --server {0} dans un terminal",
 
   // import
-  "take over another agent's install: the kernel lists what it reads, those paths are mounted read-only (never credentials or identity files) into a one-off container; dry run, then --apply writes after confirmation; --project (claude-code, cursor) also reads a repository. Not followed: a custom HERMES_HOME, an OpenClaw agents.defaults.workspace outside ~/.openclaw":
-    "reprendre l'installation d'un autre agent : le noyau liste ce qu'il lit, ces chemins sont montés en lecture seule (jamais les identifiants ni l'identité) dans un conteneur jetable ; à blanc, puis --apply écrit après confirmation ; --project (claude-code, cursor) lit aussi un dépôt. Non suivis : un HERMES_HOME personnalisé, un agents.defaults.workspace d'OpenClaw hors de ~/.openclaw",
+  "take over another agent's install: the kernel lists what it reads, those paths are mounted read-only (never credentials or identity files) into a one-off container; dry run, then --apply writes after confirmation; --project (claude-code, cursor) also reads a repository. Not followed: a custom home folder of a compatible agent, an OpenClaw agents.defaults.workspace outside ~/.openclaw":
+    "reprendre l'installation d'un autre agent : le noyau liste ce qu'il lit, ces chemins sont montés en lecture seule (jamais les identifiants ni l'identité) dans un conteneur jetable ; à blanc, puis --apply écrit après confirmation ; --project (claude-code, cursor) lit aussi un dépôt. Non suivis : un dossier personnel personnalisé d'un agent compatible, un agents.defaults.workspace d'OpenClaw hors de ~/.openclaw",
   "import expects one of: {0}": "import attend l'une de ces sources : {0}",
   "--project expects the root folder of a repository": "--project attend le dossier racine d'un dépôt",
   "--project only applies to {0}: {1} reads nothing in a project.": "--project ne vaut que pour {0} : {1} ne lit rien dans un projet.",

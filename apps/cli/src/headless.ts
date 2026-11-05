@@ -16,6 +16,8 @@ import { toolTarget } from "./toolview.js";
 import { resolveEffect } from "./approval-model.js";
 import { t } from "./i18n/index.js";
 import { expandAtRefs } from "./atrefs.js";
+import type { LastThreadStore } from "./lastthread.js";
+import { serverCwdFor, type WslContext } from "./wslcwd.js";
 
 export interface RefusedEffect {
   approval_id: string;
@@ -58,11 +60,20 @@ export function printExitCode(r: { error: TurnDoneError | null; cancelled: boole
   return EXIT_OK;
 }
 
-export async function runPrint(text: string, client: NokkerClient, conn: Connection, cwd: string): Promise<PrintResult> {
+export async function runPrint(
+  text: string,
+  client: NokkerClient,
+  conn: Connection,
+  cwd: string,
+  lastThreads?: LastThreadStore,
+  wsl: WslContext = { platform: process.platform, wslDistro: null },
+): Promise<PrintResult> {
   const session = new CliSession(client, conn.identity, undefined, conn.user);
-  let local = true;
+  // Windows + Lokkal dans WSL : le noyau reçoit le chemin Linux ; les @refs se lisent toujours dans `cwd` (local).
+  const target = serverCwdFor(cwd, wsl);
+  let local = target.kind !== "other-distro";
   try {
-    await session.openLocal(cwd);
+    if (local) await session.openLocal(target.cwd, lastThreads);
   } catch (err) {
     if (!(err instanceof NokkerApiError) || ![403, 404, 405].includes(err.status)) throw err;
     local = false;
@@ -119,7 +130,7 @@ export async function runPrint(text: string, client: NokkerClient, conn: Connect
     return {
       reply,
       thread_id: session.threadId,
-      cwd: local ? cwd : null,
+      cwd: local ? target.cwd : null,
       pending_approvals: pending.map((a) => a.id),
       refused,
       cancelled,

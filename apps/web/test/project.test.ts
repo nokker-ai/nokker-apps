@@ -13,7 +13,7 @@ describe("projet d'équipe (§7.27)", () => {
     expect(windowState({ ...w, state: "warning" })).toBe("over 80%");
     expect(windowState({ ...w, state: "over" })).toMatch(/refused/);
     expect(windowState({ ...w, cap: null, state: "none" })).toBe("no cap");
-    expect(money(3.1, "CHF")).toBe("3.10 CHF");
+    expect(money(3.1, "CHF")).toBe("CHF\u00a03.10");
     expect(budgetLabel({ daily: 5, monthly: 50, currency: "CHF" })).toBe("5 CHF / day, 50 CHF / month");
     expect(budgetLabel(null)).toBe("none");
   });

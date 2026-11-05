@@ -25,6 +25,17 @@ const TERMS: Record<string, string> = {
 };
 const sha = (lang: string): string => createHash("sha256").update(TERMS[lang]!).digest("hex");
 
+/** Texte courant des conditions (réacceptation, `GET /v1/terms`) : `version` = SHA-256 du texte, comme le noyau. */
+export function currentTerms(lang: string): { version: string; lang: string; text: string } {
+  const l = lang === "en" ? "en" : "fr";
+  return { version: sha(l), lang: l, text: TERMS[l]! };
+}
+
+/** Langue du texte courant dont c'est la version, sinon null (version périmée ou inconnue). */
+export function termsLangOf(version: string): "fr" | "en" | null {
+  return (["fr", "en"] as const).find((l) => sha(l) === version) ?? null;
+}
+
 const DEMO_INVITATIONS: Record<string, { lang: string; prenom: string }> = {
   demo: { lang: "fr", prenom: "Camille" },
   "demo-en": { lang: "en", prenom: "Sam" },

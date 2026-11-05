@@ -1,10 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
-import { liveTail, type LiveInput, type NokkerClient, type ThreadMessage } from "@nokker-apps/sdk";
+import { PAY_TOOL, liveTail, type LiveInput, type NokkerClient, type ThreadMessage } from "@nokker-apps/sdk";
 import { Markdown } from "../Markdown.js";
 import { Icon } from "../icons.js";
 import { readAsDataUrl, refusalText, refuseImage, type PendingImage } from "../composer/images.js";
 import { tr } from "../i18n/index.js";
 import { anchor } from "../showme/model.js";
+import { ListenButton } from "../voice/ListenButton.js";
+import { speechCapability } from "../voice/speech.js";
+import { approvalStatusLabel } from "../ops/model.js";
 
 /** Conversation du fil courant. Les blocs `system` (bulle reçue, message d'une autre session) s'affichent en
  * ligne discrète : c'est le contexte que Nina voit. */
@@ -53,6 +56,15 @@ export function Chat({
   const [images, setImages] = useState<PendingImage[]>([]);
   const [imgError, setImgError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  // « Listen » (speaker): only when the core says reading aloud is available (GET /v1/speech).
+  const [canSpeak, setCanSpeak] = useState(false);
+  useEffect(() => {
+    let live = true;
+    if (client && threadId) void speechCapability(client).then((c) => live && setCanSpeak(!!c));
+    return () => {
+      live = false;
+    };
+  }, [client, threadId]);
   const online = useOnline();
   const fileRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -128,6 +140,7 @@ export function Chat({
               thinking={thinking && i === lastUserIdx}
               images={m.role === "user" && m.images?.length && client && threadId ? <MessageImages client={client} threadId={threadId} images={m.images} /> : null}
               cost={m.role === "assistant" && threadId ? turnCosts[`${threadId}:${m.index}`] : undefined}
+              listen={canSpeak && client && threadId && m.role === "assistant" && m.content ? <ListenButton client={client} threadId={threadId} index={m.index} /> : null}
             />
           ))}
           {live && streaming === null ? (
@@ -254,8 +267,35 @@ function isMachineInput(m: ThreadMessage): boolean {
   return m.role === "user" && (m.channel === "session" || MACHINE_INPUT.test(m.content));
 }
 
-function Message({ m, thinking = false, images = null, cost }: { m: ThreadMessage; thinking?: boolean; images?: React.ReactNode; cost?: string }): React.ReactElement | null {
+/** Turn that follows a decision (`nokker/approvals/executor.py`): the kernel writes a `[Approbation]…[/Approbation]`
+ * block as the user's message, for the MODEL (decider, means, instructions), marked `origin: "approval"`. Never shown
+ * as the person's message:
+ * only what was decided, in one discreet line. `null` for any other message. */
+export function approvalContinuation(m: Pick<ThreadMessage, "role" | "content" | "origin">): { tool: string; status: string } | null {
+  if (m.role !== "user") return null;
+  // `origin: "approval"` (noyau du 03.11) ; les tours d'avant le champ se reconnaissent à leur bloc (texte du noyau).
+  if (m.origin !== "approval" && !m.content.startsWith("[Approbation]")) return null;
+  const field = (name: string): string => new RegExp(`^${name} : (.*)$`, "m").exec(m.content)?.[1]?.trim() ?? "";
+  return { tool: field("Outil"), status: field("D\u00e9cision") };
+}
+
+export function approvalContinuationText(c: { tool: string; status: string }): string {
+  const ok = c.status === "approved" || c.status === "executed";
+  if (c.tool === PAY_TOOL) return ok ? tr("Payment approved") : c.status === "failed" ? tr("Payment approved, then stopped") : tr("Payment refused");
+  return tr("{0}: {1}", c.tool || tr("action"), approvalStatusLabel(c.status));
+}
+
+function Message({ m, thinking = false, images = null, cost, listen = null }: { m: ThreadMessage; thinking?: boolean; images?: React.ReactNode; cost?: string; listen?: React.ReactNode }): React.ReactElement | null {
   if (m.role === "user" && !m.content) return null; // tour de continuation (approbation) sans entrée
+  const decided = approvalContinuation(m);
+  if (decided) {
+    return (
+      <div className="msg system" data-continuation="">
+        <span className="eyebrow">{tr("approval")}</span>
+        <span>{approvalContinuationText(decided)}</span>
+      </div>
+    );
+  }
   if (isMachineInput(m)) {
     return (
       <div className="msg system">
@@ -288,6 +328,7 @@ function Message({ m, thinking = false, images = null, cost }: { m: ThreadMessag
       <NinaAvatar />
       <div className="msg-body">
         <Markdown text={m.content} />
+        {listen}
         {cost ? <span className="turn-cost fine">{cost}</span> : null}
       </div>
     </div>

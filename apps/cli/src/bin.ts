@@ -10,13 +10,14 @@ import { connect, defaultUser } from "./auth.js";
 import { cliLog } from "./log.js";
 import { runPrint } from "./headless.js";
 import { formatChecks, runDoctor } from "./doctor.js";
-import { resolveServer } from "./lokkal.js";
+import { readLokkal, resolveServer } from "./lokkal.js";
 import { runLogs } from "./logs.js";
 import { runUpdate } from "./update.js";
 import { runBackup } from "./backup.js";
 import { runImport } from "./import.js";
 import { runAcp } from "./acp/run.js";
 import { parseLang, setLang, t } from "./i18n/index.js";
+import { fileLastThreadStore } from "./lastthread.js";
 
 // `--lang` d'abord : les erreurs d'usage sont déjà dans la bonne langue.
 const argv = process.argv.slice(2);
@@ -105,7 +106,7 @@ function printHelp(): void {
     ["backup [--to <dir|s3://…>] [--keep N] [--encrypt]", t("full backup of the install (databases, .env, config, state, vault); encryption required for S3, passphrase asked without echo")],
     ["backup list [--to <dir|s3://…>]", t("list the backups")],
     ["restore <file|s3://…> [--yes]", t("replace the data of the install with a backup (asks for confirmation without --yes)")],
-    ["import <claude-code|cursor|hermes|openclaw> [--project <dir>] [--apply] [--yes]", t("take over another agent's install: the kernel lists what it reads, those paths are mounted read-only (never credentials or identity files) into a one-off container; dry run, then --apply writes after confirmation; --project (claude-code, cursor) also reads a repository. Not followed: a custom HERMES_HOME, an OpenClaw agents.defaults.workspace outside ~/.openclaw")],
+    ["import <claude-code|cursor|openclaw|…> [--project <dir>] [--apply] [--yes]", t("take over another agent's install: the kernel lists what it reads, those paths are mounted read-only (never credentials or identity files) into a one-off container; dry run, then --apply writes after confirmation; --project (claude-code, cursor) also reads a repository. Not followed: a custom home folder of a compatible agent, an OpenClaw agents.defaults.workspace outside ~/.openclaw")],
     ["acp", t("ACP agent on stdio for an editor (Zed, JetBrains, Neovim…): session of the editor's folder")],
     ["--server <url>", t("server (default {0}, or $NOKKER_SERVER_URL)", args.serverUrl)],
     ["--lang en|fr", t("interface language (default: NOKKER_LANG, LC_ALL, LC_MESSAGES, LANG; English otherwise)")],
@@ -139,7 +140,9 @@ async function runNonInteractive(opts: ParsedArgs): Promise<number> {
       ...(process.env.NOKKER_TOTP ? { totp: process.env.NOKKER_TOTP } : {}),
       onPending: (d) => process.stderr.write(`${t("Device waiting for confirmation — code {0}. Confirm it on the host (or NOKKER_TOTP).", d.code)}\n`),
     });
-    const res = await runPrint(opts.print ?? "", client, conn, process.cwd());
+    const lk = conn.mode === "local" ? readLokkal() : null;
+    const wsl = { platform: process.platform, wslDistro: lk?.status === "ok" ? (lk.config.wsl_distro ?? null) : null };
+    const res = await runPrint(opts.print ?? "", client, conn, process.cwd(), fileLastThreadStore(opts.serverUrl), wsl);
 
     if (opts.json) {
       process.stdout.write(`${JSON.stringify(res)}\n`);

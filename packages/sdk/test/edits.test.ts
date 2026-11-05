@@ -88,3 +88,12 @@ describe("choix d'une carte (partagés CLI / VS Code / ACP)", () => {
     expect(strongCardText({})).toBe("Action forte : à décider dans le terminal (`nokker`).");
   });
 });
+
+describe("hostPathOf avec un dossier noyau différent (Windows + WSL)", () => {
+  const host = "\\\\wsl.localhost\\Ubuntu\\home\\alice\\calc";
+  it("chemin absolu du noyau → chemin UNC ; chemin hôte toujours reconnu ; dehors → null", () => {
+    expect(hostPathOf("/home/alice/calc/src/a.py", host, "/home/alice/calc")).toBe("\\\\wsl.localhost\\Ubuntu\\home\\alice\\calc\\src\\a.py");
+    expect(hostPathOf("/home/alice/autre/a.py", host, "/home/alice/calc")).toBeNull();
+    expect(hostPathOf("/home/alice/calc/src/a.py", "/home/alice/calc", "/home/alice/calc")).toBe("/home/alice/calc/src/a.py");
+  });
+});

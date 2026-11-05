@@ -1,6 +1,7 @@
 import React, { Suspense, lazy } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
+import { captureOAuthReturn, captureVoucher } from "./account/links.js";
 import { approvalIdFromPath } from "./approvals/path.js";
 import { uiLang } from "./components/ConnectorsTab.js";
 import { shellLang } from "./i18n/index.js";
@@ -22,6 +23,9 @@ const SsoCallbackPage = lazy(() => import("./sso/SsoCallbackPage.js").then((m) =
 
 listenInstall();
 registerServiceWorker();
+// Code d'essai d'une campagne (`?code=` sur le lien d'invitation ou de Mon compte) : gardé jusqu'au Checkout.
+captureVoucher(location.search);
+captureOAuthReturn(location.search);
 // index.html ships lang="fr"; the shell may be in English (stored choice or browser language): screen readers follow this.
 document.documentElement.lang = shellLang();
 

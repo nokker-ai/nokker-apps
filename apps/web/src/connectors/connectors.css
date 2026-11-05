@@ -1,0 +1,113 @@
+/* Connecteurs, plusieurs boîtes et agendas par profil (ConnectorsMulti). Mêmes jetons que Mon compte. */
+.cm-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+.cm-item {
+  padding: 10px 0;
+  border-top: 1px solid var(--line-strong);
+  min-width: 0;
+}
+.cm-item:first-child {
+  border-top: 0;
+}
+.cm-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+}
+.cm-label {
+  overflow-wrap: anywhere;
+}
+.cm-address {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+.cm-grants {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.cm-grants li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  padding: 4px 0;
+}
+.cm-grants li > span {
+  flex: 1 1 12em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* Actions d'une boîte : petites, alignées à gauche sous son nom (cinq tiennent sur une ligne à 1280 px). */
+.ob-actions.cm-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+}
+.cm-inline {
+  margin-top: 8px;
+}
+/* Petits boutons sur grand écran seulement : au doigt (téléphone), la cible garde ses 44 px. */
+@media (min-width: 720px) {
+  .ob-btn.small {
+    padding: 4px 12px;
+    min-height: 34px;
+    font-size: 0.92em;
+  }
+}
+
+/* Connexions OAuth : boutons « Connecter … », compte tout juste relié, bannière de retour, sélecteur simulé (mock). */
+.cm-connect {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.cm-connect-one {
+  min-width: 0;
+  max-width: 100%;
+}
+.cm-connect-one .ob-btn {
+  max-width: 100%;
+}
+.cm-services {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+.cm-services legend {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.cm-fresh {
+  outline: 2px solid var(--ok);
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+/* Bannière de retour : les lignes l'une sous l'autre, « OK » à la fin. */
+.cm-banner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 8px 0;
+}
+.cm-banner p {
+  margin: 0;
+}
+.cm-picked {
+  margin-top: 6px;
+}
+.cm-mock-picker {
+  max-width: min(28em, calc(100vw - 32px));
+}

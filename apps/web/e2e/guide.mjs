@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { cspWatch, PREVIEW_MODE, webCommand } from "./web-server.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const WEB = resolve(HERE, "..");
@@ -24,7 +25,7 @@ const SHOTS = process.env.E2E_SHOTS ? resolve(process.env.E2E_SHOTS) : null;
 const EMAIL = "alice@example.com";
 const CODE = "123456"; // MOCK_EMAIL_CODE
 const ALLOWED_4XX = [
-  [404, /\/v1\/(packs|code\/sessions|household\/invitations\/received|sso\/connections|glance\/devices|house|presence|memory\/consolidation\/runs|payments\/budgets|payments\/mandates|local\/folder\/runs)(\?|$)/],
+  [404, /\/v1\/(speech|account\/models|capabilities|packs|code\/sessions|household\/invitations\/received|sso\/connections|glance\/devices|house|presence|memory\/consolidation\/runs|payments\/budgets|payments\/mandates|local\/folder\/runs)(\?|$)/],
   [401, /\/v1\/local\//],
   [429, /\/v1\/guide\/ask$/], // le parcours provoque le quota (mot « quota » du mock)
 ];
@@ -69,7 +70,7 @@ async function servers(on) {
   if (on) Object.assign(webEnv, { VITE_NOKKER_GUIDE: "1", VITE_NOKKER_SHOW_ME: "1" });
   const procs = [
     spawn("npx", ["tsx", "src/run.ts"], { cwd: MOCK, env, stdio: ["ignore", "ignore", "inherit"], detached: true }),
-    spawn("npx", ["vite", "--port", String(webPort), "--strictPort", "--host", "127.0.0.1"], { cwd: WEB, env: webEnv, stdio: ["ignore", "ignore", "inherit"], detached: true }),
+    spawn("npx", [...webCommand(), "--port", String(webPort), "--strictPort", "--host", "127.0.0.1"], { cwd: WEB, env: webEnv, stdio: ["ignore", "ignore", "inherit"], detached: true }),
   ];
   const stop = () => {
     for (const p of procs) {
@@ -89,6 +90,7 @@ async function servers(on) {
 }
 
 function watch(page, problems, seen) {
+  cspWatch(page, () => page.url().replace(/^https?:\/\/[^/]+/, ""));
   page.on("pageerror", (e) => problems.push(`page error: ${e.message}`));
   page.on("request", (r) => seen.push(`${r.method()} ${new URL(r.url()).pathname}`));
   page.on("response", (r) => {
@@ -241,7 +243,10 @@ async function main() {
     ["on-desktop-en", true, DESKTOP, (p, b, s) => on(p, b, s, "en")],
     ["on-phone-fr", true, PHONE_FR, (p, b, s) => on(p, b, s, "fr")],
     ["off-desktop-en", false, DESKTOP, off],
-  ].filter(([n]) => !only || n.startsWith(only));
+  ]
+    .filter(([n]) => !only || n.startsWith(only))
+    // Sous `vite preview`, le build porte VITE_NOKKER_GUIDE=1 (celui de la prod) : « drapeau éteint » ne se teste qu'en dev.
+    .filter(([n, flagOn]) => flagOn || !PREVIEW_MODE || (console.log(`SKIP ${n} (preview : build avec le guide allumé)`), false));
   const report = [];
   for (const [name, flagOn, device, fn] of runs) {
     const s = await servers(flagOn);

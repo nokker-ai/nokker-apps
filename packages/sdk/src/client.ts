@@ -9,6 +9,8 @@ import { decodeUtf8Stream, parseJsonData, parseSSEFrames } from "./sse.js";
 import type {
   Approval,
   ApprovalDecisionRequest,
+  AutoReviewRollbackResult,
+  SpeechCapability,
   Challenge,
   ChatCompletion,
   ChatAttachment,
@@ -20,6 +22,8 @@ import type {
   CancelResult,
   Healthz,
   LocalApprovalDecision,
+  LocalApprovalChallenge,
+  WebAuthnApprovalDecision,
   LocalToolName,
   LocalCostTotals,
   LocalMemoryStatus,
@@ -57,14 +61,21 @@ import type {
   AccountExportFile,
   AccountConsentResult,
   AccountInfo,
+  CurrentTerms,
+  TermsAcceptResult,
   AccountUsage,
   BillingStatus,
+  VoucherCheck,
 } from "./account.js";
 import type { LocalProcess, LocalSecrets } from "./local-machine.js";
+import type { AccountModels, AccountModelTestRequest, AccountModelTestResult, PutAccountModelsRequest } from "./account-models.js";
+import type { Capabilities } from "./capabilities.js";
 import type { ImportReport, ImportSource } from "./importers.js";
 import type { ApprovalSuggestions, ImportedMemoryEntry, JournalEntry, LearnedSkill, LearnedSkillDetail, PendingNote, PendingStatus, SkillRevertResult } from "./learning.js";
 import type { PackDetail, PackInstallResult, PackRemoveResult, PackSummary } from "./packs.js";
 import type { PageLocalityResult, PublishPageResult, UnpublishPageResult } from "./pages.js";
+import type { OAuthStartRequest, OAuthStartResult, PickedFile, PickerGrant } from "./connectors-oauth.js";
+import type { ConnectorLevel, ConnectorsMultiListing, CreateConnectorRequest, GrantResult, MultiConnector, PatchConnectorRequest } from "./connectors-multi.js";
 import type { LocalConnectorsListing, LocalMailCard, PutLocalMailRequest } from "./local-connectors.js";
 import type { LocalMirrorPage, LocalMirrorProject, LocalMirrorStatus, MirrorSpace, QuarantinedNote } from "./mirror.js";
 import type { AlertSource, AlertSourceSecret, BriefDelivery, Incident, IncidentState, PlanCard, PlanCardDetail, PlanCardInput, PlanContext, PlanProposal } from "./ops.js";
@@ -115,7 +126,7 @@ import type { HouseMessagesPage, HousePostResult, HouseView } from "./house.js";
 import type { PresenceView } from "./presence.js";
 import type { GuideAnswer, GuideTurn, GuideView } from "./guide.js";
 import type { FolderRun, FolderRunCreate, FolderRunSummary } from "./folder.js";
-import type { BudgetInput, BudgetLine, BudgetsView, MandateDetail, MandateVerification, PayCard } from "./payments.js";
+import type { BudgetInput, BudgetLine, BudgetsView, MandateDetail, MandateVerification, PayCard, PayMethod, LocalPasskey, LocalPasskeyOptions, LocalPasskeyRegistration, OwnCard, OwnCardInput, PayBalance, PayLink, PayLinkPerson, PayMethodProof, PayMethodView, ThreeDSPending } from "./payments.js";
 import type { ConsolidationOpUndo, ConsolidationReport, ConsolidationRun, ConsolidationRunUndo, ConsolidationSettings } from "./consolidation.js";
 import type {
   Agent,
@@ -334,6 +345,18 @@ export class NokkerClient {
     });
   }
 
+  /** `POST /v1/local/approvals/{id}/challenge` (own_card, PAY-AGENT §11) : défi d'une carte signée avec la passkey
+   * locale. 409 `not_local` (carte à décider sur nokker.ai) / `not_pending`, 412 `no_passkey`, 404. */
+  async localApprovalChallenge(approvalId: string): Promise<LocalApprovalChallenge> {
+    return this.request<LocalApprovalChallenge>(`/v1/local/approvals/${encodeURIComponent(approvalId)}/challenge`, { method: "POST" });
+  }
+
+  /** `POST /v1/local/approvals/{id}/decision` (own_card) : décision prouvée par la passkey locale. Distincte de
+   * `…/decide` (décision locale ordinaire). 403 `proof_invalid` (redemander un défi), 409 `not_local` / `not_pending`. */
+  async decideLocalWithPasskey(approvalId: string, body: WebAuthnApprovalDecision): Promise<Approval> {
+    return this.request<Approval>(`/v1/local/approvals/${encodeURIComponent(approvalId)}/decision`, { method: "POST", body: JSON.stringify(body) });
+  }
+
   /** Permission mode of a local session (local token). */
   async getLocalSessionMode(threadId: string): Promise<SessionModeState> {
     return this.request<SessionModeState>(`/v1/local/sessions/${encodeURIComponent(threadId)}/mode`);
@@ -499,6 +522,35 @@ export class NokkerClient {
     return await (res as unknown as Response).blob();
   }
 
+  /** `GET /v1/speech` : lecture à voix haute disponible, ou `null` (404 : tts éteinte ou sans fournisseur). */
+  async getSpeechCapability(): Promise<SpeechCapability | null> {
+    try {
+      return await this.request<SpeechCapability>("/v1/speech");
+    } catch (e) {
+      if (e instanceof NokkerApiError && e.status === 404) return null;
+      throw e;
+    }
+  }
+
+  /** `POST /v1/threads/{id}/messages/{index}/speech` : la voix d'UNE réponse, que le noyau lit lui-même (le client
+   * n'envoie jamais de texte). Rend la réponse HTTP telle quelle, son corps en flux `audio/mpeg` (chunked) ; une
+   * erreur avant le premier octet lève `NokkerApiError` avec `{error: {code}}` (not_found, not_a_reply, too_long,
+   * rate_limited, provider_failed, tts_off). */
+  async speechStream(threadId: string, index: number, opts: { lang?: string; signal?: AbortSignal } = {}): Promise<Response> {
+    const res = (await this.fetchImpl(`${this.baseUrl}/v1/threads/${encodeURIComponent(threadId)}/messages/${index}/speech`, {
+      method: "POST",
+      headers: { ...this.headers(), "Content-Type": "application/json", Accept: "audio/mpeg" },
+      body: JSON.stringify(opts.lang ? { lang: opts.lang } : {}),
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    } as RequestInitLike)) as unknown as Response;
+    if (!res.ok) {
+      const body = await res.json().catch(() => undefined);
+      const retry = Number(res.headers?.get?.("Retry-After"));
+      throw new NokkerApiError(`speech → ${res.status}`, res.status, body, Number.isFinite(retry) && retry > 0 ? retry : null);
+    }
+    return res;
+  }
+
   /** Remplace la liste de partage (membres = personnes, threads = fils). */
   async shareBubble(id: string, req: ShareRequest): Promise<Bubble> {
     return this.request<Bubble>(`/v1/bubbles/${encodeURIComponent(id)}/share`, { method: "POST", body: JSON.stringify(req) });
@@ -596,6 +648,16 @@ export class NokkerClient {
 
   async getAccount(): Promise<AccountInfo> {
     return this.request<AccountInfo>("/v1/account");
+  }
+
+  /** `GET /v1/terms?lang=` — texte courant des conditions (réacceptation), public. */
+  async getCurrentTerms(lang: string): Promise<CurrentTerms> {
+    return this.request<CurrentTerms>(`/v1/terms?lang=${encodeURIComponent(lang)}`);
+  }
+
+  /** `POST /v1/account/terms` — 409 `stale_version` : relire `getCurrentTerms`. */
+  async acceptCurrentTerms(version: string): Promise<TermsAcceptResult> {
+    return this.request<TermsAcceptResult>("/v1/account/terms", { method: "POST", body: JSON.stringify({ version }) });
   }
 
   async setAccountConsent(scope: "training", granted: boolean): Promise<AccountConsentResult> {
@@ -1244,8 +1306,16 @@ export class NokkerClient {
     return this.request<{ name: string; deleted: true }>(`/v1/code/credentials/${encodeURIComponent(name)}`, { method: "DELETE" });
   }
 
-  async billingCheckout(plan: string): Promise<{ url: string }> {
-    return this.request<{ url: string }>("/v1/billing/checkout", { method: "POST", body: JSON.stringify({ plan }) });
+  /** `code` : code d'essai (voucher) — session d'essai d'un mois, carte enregistrée, jamais de coupon. */
+  async billingCheckout(plan: string, code?: string): Promise<{ url: string }> {
+    return this.request<{ url: string }>("/v1/billing/checkout", {
+      method: "POST",
+      body: JSON.stringify(code ? { plan, code } : { plan }),
+    });
+  }
+
+  async checkVoucher(code: string): Promise<VoucherCheck> {
+    return this.request<VoucherCheck>(`/v1/billing/voucher?code=${encodeURIComponent(code)}`);
   }
 
   async billingPortal(): Promise<{ url: string }> {
@@ -1253,6 +1323,77 @@ export class NokkerClient {
   }
 
   // -- Connecteurs (session requise) ------------------------------------------------------
+
+  /** Cadre de l'aperçu cast (SCREEN-CAST, noyau Lokkal p2/cast-frame b48cc48) : URL signée de 2 min, servie par le noyau
+   * avec sa propre CSP (sandbox allow-scripts, default-src 'none'). 404 : pas au propriétaire, inconnu, ou noyau d'avant ;
+   * 413 `html_too_large`. */
+  async castFrameUrl(castId: string): Promise<{ url: string; expires_at: string }> {
+    return this.request<{ url: string; expires_at: string }>(`/v1/cast/${encodeURIComponent(castId)}/frame-url`, { method: "POST" });
+  }
+
+  /** OAuth : URL du fournisseur à suivre dans le même onglet. 404 `provider_off`, 400 `bad_service`. */
+  async startOAuth(provider: string, req: OAuthStartRequest): Promise<OAuthStartResult> {
+    return this.request<OAuthStartResult>(`/v1/connectors/oauth/${encodeURIComponent(provider)}/start`, { method: "POST", body: JSON.stringify(req) });
+  }
+
+  async reconnectOAuth(oauthAccountId: string): Promise<OAuthStartResult> {
+    return this.request<OAuthStartResult>(`/v1/connectors/oauth/accounts/${encodeURIComponent(oauthAccountId)}/reconnect`, { method: "POST" });
+  }
+
+  /** Le compte OAuth et TOUS ses connecteurs (partages compris) ; le jeton est révoqué chez le fournisseur. */
+  async deleteOAuthAccount(oauthAccountId: string): Promise<{ revoked: boolean }> {
+    return this.request<{ revoked: boolean }>(`/v1/connectors/oauth/accounts/${encodeURIComponent(oauthAccountId)}`, { method: "DELETE" });
+  }
+
+  /** Jeton du sélecteur Google (drive.file seul, ≤ 10 min) : à garder en mémoire le temps du sélecteur, jamais ailleurs. */
+  async pickerGrant(connectorId: string): Promise<PickerGrant> {
+    return this.request<PickerGrant>(`/v1/connectors/${encodeURIComponent(connectorId)}/picker`, { method: "POST" });
+  }
+
+  async listPickedFiles(connectorId: string): Promise<{ files: PickedFile[] }> {
+    return this.request<{ files: PickedFile[] }>(`/v1/connectors/${encodeURIComponent(connectorId)}/files`);
+  }
+
+  async addPickedFiles(connectorId: string, ids: string[]): Promise<{ files: PickedFile[] }> {
+    return this.request<{ files: PickedFile[] }>(`/v1/connectors/${encodeURIComponent(connectorId)}/picker/files`, { method: "POST", body: JSON.stringify({ ids }) });
+  }
+
+  async removePickedFile(connectorId: string, fileId: string): Promise<{ removed: boolean }> {
+    return this.request<{ removed: boolean }>(`/v1/connectors/${encodeURIComponent(connectorId)}/files/${encodeURIComponent(fileId)}`, { method: "DELETE" });
+  }
+
+  /** `GET /v1/connectors` d'un noyau `connectors_multi` : toutes mes boîtes et agendas, ceux partagés avec moi, les
+   * bénéficiaires possibles et les préréglages. */
+  async listConnectorsMulti(): Promise<ConnectorsMultiListing> {
+    return this.request<ConnectorsMultiListing>("/v1/connectors");
+  }
+
+  /** 201 carte (testé avant d'être enregistré) ; 409 `label_taken` | `too_many`, 400 `bad_label` | `bad_settings`… */
+  async createConnector(req: CreateConnectorRequest): Promise<MultiConnector> {
+    return this.request<MultiConnector>("/v1/connectors", { method: "POST", body: JSON.stringify(req) });
+  }
+
+  async patchConnector(id: string, req: PatchConnectorRequest): Promise<MultiConnector> {
+    return this.request<MultiConnector>(`/v1/connectors/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(req) });
+  }
+
+  async testConnectorById(id: string): Promise<ConnectorTestResult> {
+    return this.request<ConnectorTestResult>(`/v1/connectors/${encodeURIComponent(id)}/test`, { method: "POST" });
+  }
+
+  async deleteConnectorById(id: string): Promise<{ revoked: boolean }> {
+    return this.request<{ revoked: boolean }>(`/v1/connectors/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  /** Donner (ou monter) un accès = carte forte (202 pending) ; même niveau = 200 unchanged ; descendre = immédiat. */
+  async grantConnector(id: string, accountId: string, level: ConnectorLevel): Promise<GrantResult> {
+    return this.request<GrantResult>(`/v1/connectors/${encodeURIComponent(id)}/grants`, { method: "POST", body: JSON.stringify({ account_id: accountId, level }) });
+  }
+
+  /** Retirer un accès : le propriétaire pour un bénéficiaire, ou moi pour mon propre accès (`"me"`). */
+  async revokeConnectorGrant(id: string, accountId: string | "me"): Promise<{ revoked: boolean }> {
+    return this.request<{ revoked: boolean }>(`/v1/connectors/${encodeURIComponent(id)}/grants/${encodeURIComponent(accountId)}`, { method: "DELETE" });
+  }
 
   async listConnectors(): Promise<ConnectorsListing> {
     return this.request<ConnectorsListing>("/v1/connectors");
@@ -1280,6 +1421,26 @@ export class NokkerClient {
   /** Essai d'un point d'accès « ma propre clé » ; la clé n'est jamais renvoyée. 200 même si `ok` est faux. */
   async testLocalModel(req: LocalModelTestRequest): Promise<LocalModelTestResult> {
     return this.request<LocalModelTestResult>("/v1/local/setup/models/test", { method: "POST", body: JSON.stringify(req) });
+  }
+
+  /** `GET /v1/capabilities` : fonctions actives pour l'appelant (404 : noyau d'avant 6aaccb4, le client sonde). */
+  async getCapabilities(): Promise<Capabilities> {
+    return this.request<Capabilities>("/v1/capabilities");
+  }
+
+  /** `GET /v1/account/models` (nokker.ai, BYOK cloud) : modèle par défaut, inférences du client, droit à la formule. */
+  async getAccountModels(): Promise<AccountModels> {
+    return this.request<AccountModels>("/v1/account/models");
+  }
+
+  /** `PUT /v1/account/models` : `byok` remplace la liste ; une clé omise reste au coffre. Rend l'état à jour. */
+  async putAccountModels(req: PutAccountModelsRequest): Promise<AccountModels> {
+    return this.request<AccountModels>("/v1/account/models", { method: "PUT", body: JSON.stringify(req) });
+  }
+
+  /** `POST /v1/account/models/test` : essai d'un point d'accès compatible OpenAI (200 même si `ok` est faux). */
+  async testAccountModel(req: AccountModelTestRequest): Promise<AccountModelTestResult> {
+    return this.request<AccountModelTestResult>("/v1/account/models/test", { method: "POST", body: JSON.stringify(req) });
   }
 
   /** Modèle par défaut et clés de l'utilisateur ; rend le réglage à jour (forme de `getLocalSetup`). */
@@ -1451,6 +1612,66 @@ export class NokkerClient {
   async getMandate(id: string, member?: string): Promise<MandateDetail> {
     return this.request<MandateDetail>(`/v1/payments/mandates/${encodeURIComponent(id)}${member ? `?member=${encodeURIComponent(member)}` : ""}`);
   }
+  // ---- Payment agent (PAY-AGENT §8; flag `pay_agent` off → 404) ----
+  async getPayMethod(): Promise<PayMethodView> {
+    return this.request<PayMethodView>("/v1/payments/method");
+  }
+  /** Issuer wise: `paymentMethod` is ignored, the core names the account it opened (`payment_method` in the answer). */
+  async payMethodChallenge(paymentMethod?: string): Promise<{ challenge: string; payment_method?: string }> {
+    return this.request<{ challenge: string; payment_method?: string }>("/v1/payments/method/challenge", { method: "POST", body: JSON.stringify(paymentMethod ? { payment_method: paymentMethod } : {}) });
+  }
+  async putPayMethod(paymentMethod: string, proof: PayMethodProof, holderName?: string): Promise<{ method: PayMethod }> {
+    return this.request<{ method: PayMethod }>("/v1/payments/method", { method: "PUT", body: JSON.stringify({ payment_method: paymentMethod, proof, ...(holderName ? { holder_name: holderName } : {}) }) });
+  }
+  async startPayLink(person: PayLinkPerson): Promise<{ link: PayLink | null }> {
+    return this.request<{ link: PayLink | null }>("/v1/payments/method/link", { method: "POST", body: JSON.stringify({ person }) });
+  }
+  async payLinkUrl(): Promise<{ url: string; expires_at: string }> {
+    return this.request<{ url: string; expires_at: string }>("/v1/payments/method/link/url", { method: "POST", body: "{}" });
+  }
+  async payBalance(): Promise<{ balances: PayBalance[] }> {
+    return this.request<{ balances: PayBalance[] }>("/v1/payments/method/balance");
+  }
+  // ── own_card (Lokkal) : the person's card, kept in the machine's vault by the payment agent ──
+  async putOwnCard(card: OwnCardInput): Promise<{ method: OwnCard }> {
+    return this.request<{ method: OwnCard }>("/v1/payments/method/card", { method: "PUT", body: JSON.stringify(card) });
+  }
+  async ownCardCvvMode(keep: boolean, cvv?: string): Promise<{ cvv_kept: boolean }> {
+    return this.request<{ cvv_kept: boolean }>("/v1/payments/method/cvv-mode", { method: "POST", body: JSON.stringify(keep ? { keep, cvv } : { keep }) });
+  }
+  /** Give what the payment agent asked for THIS payment (`cvv` or `otp`); 404 when nothing is asked. */
+  async providePaymentValue(mandateId: string, kind: "cvv" | "otp", value: string): Promise<{ accepted: boolean }> {
+    return this.request<{ accepted: boolean }>(`/v1/payments/mandates/${encodeURIComponent(mandateId)}/${kind}`, { method: "POST", body: JSON.stringify({ value }) });
+  }
+  async listLocalPasskeys(): Promise<{ passkeys: LocalPasskey[] }> {
+    return this.request<{ passkeys: LocalPasskey[] }>("/v1/local/passkeys");
+  }
+  async localPasskeyOptions(): Promise<LocalPasskeyOptions> {
+    return this.request<LocalPasskeyOptions>("/v1/local/passkeys/options", { method: "POST", body: "{}" });
+  }
+  async registerLocalPasskey(reg: LocalPasskeyRegistration): Promise<LocalPasskey> {
+    return this.request<LocalPasskey>("/v1/local/passkeys", { method: "POST", body: JSON.stringify(reg) });
+  }
+  async deleteLocalPasskey(deviceId: string): Promise<{ removed: boolean }> {
+    return this.request<{ removed: boolean }>(`/v1/local/passkeys/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
+  }
+  async deletePayMethod(): Promise<{ removed: boolean }> {
+    return this.request<{ removed: boolean }>("/v1/payments/method", { method: "DELETE" });
+  }
+  async revokeAgentPayment(mandateId: string): Promise<PayCard> {
+    return this.request<PayCard>(`/v1/payments/mandates/${encodeURIComponent(mandateId)}/revoke`, { method: "POST" });
+  }
+  /** Issuer `wise`: the 3-D Secure confirmation waiting for this mandate (404 when none). */
+  async getThreeDS(mandateId: string): Promise<ThreeDSPending> {
+    return this.request<ThreeDSPending>(`/v1/payments/mandates/${encodeURIComponent(mandateId)}/3ds`);
+  }
+  /** Confirm with the passkey proof on `challenge` (as is), or decline. 410 when the bank's delay has passed. */
+  async answerThreeDS(mandateId: string, challengeId: string, answer: { proof: PayMethodProof } | { decline: true }): Promise<PayCard & { agent: unknown }> {
+    return this.request<PayCard & { agent: unknown }>(`/v1/payments/mandates/${encodeURIComponent(mandateId)}/3ds`, {
+      method: "POST",
+      body: JSON.stringify({ challenge_id: challengeId, ...answer }),
+    });
+  }
   async verifyMandate(id: string, member?: string): Promise<MandateVerification> {
     return this.request<MandateVerification>(`/v1/payments/mandates/${encodeURIComponent(id)}/verify${member ? `?member=${encodeURIComponent(member)}` : ""}`);
   }
@@ -1568,6 +1789,18 @@ export class NokkerClient {
       method: "POST",
       body: JSON.stringify(decision),
     });
+  }
+
+  /** Révoque la décision du relecteur automatique (APPROVALS.md §8). Approbation d'une écriture de fichier : la
+   * réponse porte `rollback` (rien n'est restauré ici). `409` : rien à révoquer ou déjà révoquée. */
+  async revokeAutoReview(approvalId: string): Promise<Approval> {
+    return this.request<Approval>(`/v1/approvals/${encodeURIComponent(approvalId)}/auto-review/revoke`, { method: "POST", body: "{}" });
+  }
+
+  /** Applique le point de retour d'une approbation automatique DÉJÀ révoquée ; un fichier modifié depuis n'est pas
+   * écrasé (`conflicts`). `409` : pas révoquée, pas de point, point incomplet ou déjà appliqué. */
+  async rollbackAutoReview(approvalId: string): Promise<AutoReviewRollbackResult> {
+    return this.request<AutoReviewRollbackResult>(`/v1/approvals/${encodeURIComponent(approvalId)}/auto-review/rollback`, { method: "POST", body: "{}" });
   }
 
   // -- Événements -----------------------------------------------------------------

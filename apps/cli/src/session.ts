@@ -36,6 +36,7 @@ import type { DeviceIdentity } from "./auth.js";
 import { signWithDevice } from "./auth.js";
 import { t } from "./i18n/index.js";
 import type { ProjectSkillsState } from "./localtools.js";
+import type { LastThreadStore } from "./lastthread.js";
 
 export class StrongApprovalRequiresDeviceError extends Error {
   constructor() {
@@ -84,22 +85,46 @@ export class CliSession {
 
   /** Session de code sur `cwd` : reprend le fil local le plus récent de ce dossier, sinon en crée un
    * (LOKKAL.md §7.4.1). Renvoie l'historique du fil repris (vide pour un fil neuf). */
-  async openLocal(cwd: string): Promise<{ resumed: boolean; messages: ThreadView["messages"]; skills: ProjectSkillsState }> {
+  async openLocal(cwd: string, lastThreads?: LastThreadStore): Promise<{ resumed: boolean; messages: ThreadView["messages"]; skills: ProjectSkillsState }> {
     const mine = (await this.client.listLocalSessions()).filter((s) => s.cwd === cwd);
     // La plus récente : plus grand `last_turn_at` s'il est connu, sinon la dernière de la liste (le noyau les liste
     // de la plus ancienne à la plus récente).
     const existing = mine.length
       ? mine.reduce((best, s) => ((s.last_turn_at ?? "") >= (best.last_turn_at ?? "") ? s : best))
       : undefined;
-    // Fil connu pour ce dossier : on le reprend sans rappeler POST (le noyau ouvre un fil neuf à chaque POST, `resume`
-    // ou non — il laisserait des fils vides).
-    const opened = existing ? null : await this.client.createLocalSession({ cwd });
+    // Fil connu du noyau pour ce dossier : on le reprend sans rappeler POST (un POST sans `thread_id` ouvre un fil neuf).
+    // Sinon (noyau redémarré : sa liste est en mémoire), on redemande le dernier fil mémorisé par la CLI pour ce dossier
+    // (`POST {cwd, thread_id}`) ; un refus (400/403/404/409) retombe sur un fil neuf.
+    let opened: Awaited<ReturnType<NokkerClient["createLocalSession"]>> | null = null;
+    let reopened = false;
+    if (!existing) {
+      const remembered = lastThreads?.get(cwd) ?? null;
+      if (remembered) {
+        try {
+          opened = await this.client.createLocalSession({ cwd, thread_id: remembered });
+          reopened = opened.thread_id === remembered;
+        } catch (err) {
+          if (!(err instanceof NokkerApiError) || ![400, 403, 404, 409].includes(err.status)) throw err;
+        }
+      }
+      if (!opened) opened = await this.client.createLocalSession({ cwd });
+    }
     this.threadId = existing ? existing.thread_id : opened!.thread_id;
     this.cwd = cwd;
+    lastThreads?.set(cwd, this.threadId);
     // Skills du dépôt (§7.21.3) : dans la réponse d'ouverture ; une session reprise les relit par
     // `GET /v1/local/sessions/{id}/skills` (§7.21.4) — sans cela, un dépôt non fiable (ou modifié depuis) n'affichait aucune
     // carte à la reprise. 404 (drapeau éteint, noyau ancien) : « inconnu ».
-    if (!existing) return { resumed: false, messages: [], skills: opened!.skills ?? "off" };
+    if (!existing && !reopened) return { resumed: false, messages: [], skills: opened!.skills ?? "off" };
+    if (reopened) {
+      // Fil rouvert par POST : la réponse porte déjà l'état des skills ; l'historique se relit comme une reprise.
+      const skills = opened!.skills ?? "off";
+      try {
+        return { resumed: true, messages: (await this.client.getThread(this.threadId)).messages, skills };
+      } catch {
+        return { resumed: true, messages: [], skills };
+      }
+    }
     let skills: ProjectSkillsState = "unknown";
     try {
       skills = (await this.client.getLocalSessionSkills(this.threadId)).skills;
@@ -111,6 +136,11 @@ export class CliSession {
     } catch {
       return { resumed: true, messages: [], skills }; // fil sans tour encore (404 côté noyau)
     }
+  }
+
+  /** Renomme un fil (`PATCH /v1/threads/{id} {title}`) : titre lisible d'un fil ouvert par /loop (controltext.ts). */
+  renameThread(id: string, title: string): Promise<Thread> {
+    return this.client.patchThread(id, { title });
   }
 
   /** Appel d'un outil du noyau sur ce fil (route locale proposée) : 200 {content, is_error} ou 202 {approval_id}. */

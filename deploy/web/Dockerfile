@@ -24,5 +24,6 @@ RUN if [ -n "$VITE_NOKKER_SHOW_ME" ]; then export VITE_NOKKER_SHOW_ME; else unse
 
 FROM nginx:1.27-alpine
 COPY deploy/web/nginx.conf /etc/nginx/conf.d/default.conf
+COPY deploy/web/security-headers.conf /etc/nginx/snippets/security-headers.conf
 COPY --from=build /w/apps/web/dist /usr/share/nginx/html
 EXPOSE 8080

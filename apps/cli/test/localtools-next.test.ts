@@ -35,7 +35,7 @@ describe("/agents", () => {
     const one = formatSubagent(m.get("c1")!, 60_000);
     expect(one).toContain("Sub-agent c1 (background)");
     expect(one).toContain("worktree: nokker/sa-c1 · 2 commit(s) · kept");
-    expect(one).toContain("cost: 1200 tokens · CHF 0.02");
+    expect(one).toContain("cost: 1200 tokens · CHF\u00a00.02");
     expect(one).toContain("    Both fixed.");
   });
 

@@ -89,7 +89,10 @@ export function reconstructBefore(after: string, edit: FileEdit): string | null 
 
 /** Chemin de l'outil → chemin sur la machine de l'éditeur. Le dossier de la session est monté tel quel dans le bac à
  * sable, sous `/workspace` ; un chemin absolu hors du dossier de la session renvoie `null` (rien à montrer). */
-export function hostPathOf(toolPath: string, cwd: string): string | null {
+/** `serverCwd` : dossier de la session vu par le noyau quand il diffère du dossier hôte `cwd` (Windows + Lokkal dans WSL :
+ * hôte `\\\\wsl.localhost\\Ubuntu\\home\\u\\p`, noyau `/home/u/p`). Un chemin absolu du noyau sous `serverCwd` est alors
+ * rapporté sous `cwd` (préfixe remplacé). */
+export function hostPathOf(toolPath: string, cwd: string, serverCwd?: string): string | null {
   const sep = cwd.includes("\\") && !cwd.includes("/") ? "\\" : "/";
   const base = cwd.replace(/[\\/]+$/, "");
   const join = (rel: string): string | null => {
@@ -101,8 +104,11 @@ export function hostPathOf(toolPath: string, cwd: string): string | null {
   const isAbs = toolPath.startsWith("/") || /^[A-Za-z]:[\\/]/.test(toolPath);
   if (!isAbs) return join(toolPath);
   const norm = (p: string): string => p.replace(/\\/g, "/").replace(/\/+$/, "");
-  const nb = norm(base);
   const np = norm(toolPath);
-  if (np === nb) return null;
-  return np.startsWith(`${nb}/`) ? join(np.slice(nb.length + 1)) : null;
+  for (const b of serverCwd && serverCwd !== cwd ? [base, serverCwd] : [base]) {
+    const nb = norm(b);
+    if (np === nb) return null;
+    if (np.startsWith(`${nb}/`)) return join(np.slice(nb.length + 1));
+  }
+  return null;
 }

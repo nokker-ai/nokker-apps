@@ -12,8 +12,26 @@ export interface AccountInfo {
   /** Toujours `active` en pratique : un compte suspendu ne lit plus `GET /v1/account` (403). */
   status: string;
   terms: { version: string; accepted_at: string } | null;
+  /** Conditions courantes pour ce compte (langue de sa dernière acceptation). Absent : noyau d'avant la réacceptation. */
+  terms_current?: { version: string; lang: string };
+  /** Vrai : la dernière version acceptée n'est plus le texte courant (conditions modifiées) → écran de réacceptation. */
+  terms_outdated?: boolean;
   /** Consentement d'usage des conversations pour améliorer les modèles (facultatif, révocable). */
   consents: { training: boolean; /** X23 : profil mineur, le consentement d'entraînement est verrouillé à non. */ training_locked?: "minor" };
+}
+
+/** `GET /v1/terms?lang=` (public) : texte courant ; `version` = SHA-256 des octets de `text`. */
+export interface CurrentTerms {
+  version: string;
+  lang: string;
+  text: string;
+}
+
+/** `POST /v1/account/terms {version}` → 200 ; 409 `stale_version` si l'écran affichait une version périmée. */
+export interface TermsAcceptResult {
+  terms: { version: string; lang: string; accepted_at: string | null };
+  terms_current: { version: string; lang: string };
+  terms_outdated: boolean;
 }
 
 /** `PUT /v1/account/consent` — 400 `invalid` si la portée ou le booléen est faux, 503 `consents_disabled` si non configuré. */
@@ -48,9 +66,18 @@ export interface AccountUsage {
   };
 }
 
+/** Prix d'un palier lu sur Stripe par le noyau : `amount` en unités de la monnaie (19 = 19 CHF, 9.5 = 9,50 CHF),
+ * `currency` en majuscules (CHF), `interval` de Stripe (`month`). Absent si Stripe n'a pas répondu. */
+export interface BillingPrice {
+  amount: number;
+  currency: string;
+  interval: string | null;
+}
+
 export interface BillingPlanInfo {
   id: string;
   caps: Record<string, number>;
+  price?: BillingPrice;
 }
 
 /** `GET /v1/billing/plan` : `plan` n'est posé que si l'abonnement est vivant (actif, essai, impayé en relance). */
@@ -59,8 +86,17 @@ export interface BillingStatus {
   status: string | null;
   current_period_end: string | null;
   cancel_at_period_end: boolean;
+  /** Fin d'essai (voucher) tant que l'abonnement est `trialing` ; premier débit ce jour-là. */
+  trial_end?: string | null;
   plans: BillingPlanInfo[];
 }
+
+/** Refus d'un code d'essai (nokker/billing/voucher.py). */
+export type VoucherError = "code_invalid" | "code_expired" | "code_exhausted" | "code_used" | "code_customer";
+
+/** `GET /v1/billing/voucher?code=` : vérification sans écriture. `first_charge_on` = date (YYYY-MM-DD, Zurich) du
+ * premier débit pour un Checkout fait maintenant. 429 `rate_limited` au-delà de 10 vérifications par heure. */
+export type VoucherCheck = { ok: true; months: number; first_charge_on: string } | { ok: false; error: VoucherError };
 
 /** `POST /v1/account/delete` : 202, carte d'approbation FORTE (une seule en attente : la même est rendue).
  * Elle se décide par `/v1/approvals/{id}/challenge` puis `/decision` avec un appareil fort ; une preuve trop faible

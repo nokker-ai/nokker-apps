@@ -28,8 +28,8 @@ describe("deck Crew (X14)", () => {
   });
   it("passages : durée, coût, fusion", () => {
     expect(runDuration(run("a", "succeeded"))).toBe("42 s");
-    expect(runCost(run("a", "succeeded"))).toBe("0.012 EUR");
-    expect(runCost({ cost: { tokens_in: 1, tokens_out: 1, amount: 0.5, currency: "EUR", calls: 3, amounts: { EUR: 0.5, CHF: 0.2 } } })).toBe("0.20 CHF + 0.50 EUR · 3 appels");
+    expect(runCost(run("a", "succeeded"))).toBe("0.01\u00a0€");
+    expect(runCost({ cost: { tokens_in: 1, tokens_out: 1, amount: 0.5, currency: "EUR", calls: 3, amounts: { EUR: 0.5, CHF: 0.2 } } })).toBe("0.20\u00a0CHF + 0.50\u00a0€ · 3 appels");
     const l = [run("b", "succeeded")];
     expect(mergeRun(l, run("a", "running")).map((r) => r.run_id)).toEqual(["a", "b"]);
     expect(mergeRun(l, run("b", "failed"))[0]!.status).toBe("failed");

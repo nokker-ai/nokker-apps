@@ -140,7 +140,7 @@ describe("lignes d'outils, carte, coût, aide en anglais", () => {
     setLang("fr");
     expect(formatToolLine(line)).toBe("⟳ patch src/app.py (écriture)");
     expect(decisionSummary(card, "expired")).toBe("⌛ Approbation expirée — refusée : terminal pytest -q");
-    expect(turnCostLine({ total_tokens: 12_400, cost: { EUR: 0.0312 } })).toBe("12,4 k jetons · 0,03 €");
+    expect(turnCostLine({ total_tokens: 12_400, cost: { EUR: 0.0312 } })).toBe("12,4 k jetons · 0.03\u00a0€");
     expect(helpText()).toContain("/memory forget <note>");
   });
 });

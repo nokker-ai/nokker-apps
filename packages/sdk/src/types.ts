@@ -136,7 +136,45 @@ export type ApprovalStrength = "strong" | "standard";
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired" | "executed" | "failed";
 /** `"signature"` (clé logicielle), `"signature+telegram"` (Mini App, `init_data` vérifié),
  * `"webauthn"` (passkey), `"totp"` — APPROVALS.md §3. */
-export type DecidedVia = "signature" | "signature+telegram" | "webauthn" | "totp" | "local";
+export type DecidedVia = "signature" | "signature+telegram" | "webauthn" | "totp" | "local" | "auto-review";
+
+/** Relecture automatique d'une carte `standard` (APPROVALS.md §8) : `approve`/`reject` la décident
+ * (`decided_via = "auto-review"`), `escalate` la laisse aux humains. `revoked_by`/`revoked_at` : décision révoquée
+ * par le propriétaire. */
+export interface ApprovalAutoReview {
+  decision: "approve" | "reject" | "escalate";
+  reason: string;
+  model?: string;
+  at: string | null;
+  by_rule?: boolean;
+  revoked_by?: string;
+  revoked_at?: string | null;
+}
+
+/** Point de retour PAR CARTE d'une écriture de fichier approuvée automatiquement (APPROVALS.md §8), rendu par la
+ * révocation. `available: false` + `reason` : pas de point, point incomplet, déjà appliqué, écriture hors fichiers. */
+export interface AutoReviewRollbackOffer {
+  available: boolean;
+  checkpoint_id: string | null;
+  /** Chemins relatifs au dossier de travail. Absent quand aucun point n'existe. */
+  files?: string[];
+  reason?: string;
+  applied_at?: string;
+  /** Point déjà appliqué (`GET /v1/approvals/{id}` d'une approbation révoquée) : avec ce qui a été remis en place et
+   * ce qui ne l'a pas été. Un noyau peut aussi ranger le résultat sous `applied: {restored, conflicts}`. */
+  applied?: boolean | { restored?: string[]; conflicts?: string[] };
+  restored?: string[];
+  conflicts?: string[];
+}
+
+/** `POST /v1/approvals/{id}/auto-review/rollback` : fichiers remis en place ; `conflicts` = modifiés depuis l'écriture,
+ * laissés tels quels. */
+export interface AutoReviewRollbackResult {
+  approval_id: string;
+  checkpoint_id: string;
+  restored: string[];
+  conflicts: string[];
+}
 
 /** Forme CANONIQUE de `GET /v1/approvals/{id}` et des éléments de `GET /v1/approvals?status=…`
  * (APPROVALS.md §5, `nokker/api/server.py::approval_to_json`) — snake_case exact du noyau. */
@@ -180,7 +218,26 @@ export interface Approval {
    * lien de décision est parti au téléphone. Faux ou absent : machine non liée, ou dépôt pas encore fait (il sera
    * annoncé par `approval.forwarded`) — elle se décide au terminal. */
   forwarded?: boolean;
+  /** Relecture automatique (APPROVALS.md §8) ; absent si la carte n'a pas été relue. */
+  auto_review?: ApprovalAutoReview;
+  /** Rendu par `POST …/auto-review/revoke` d'une approbation automatique (point de retour, §8). */
+  rollback?: AutoReviewRollbackOffer;
+  /** Présent dans `GET /v1/local/approvals` (PAY-AGENT §11, own_card) : carte `payments:to_pay` dont le mandat est
+   * own_card, signée sur la machine avec la passkey LOCALE (rpId `localhost`), jamais déposée chez nokker.ai
+   * (`forwarded: false`). Absent ou faux : rien ne change. */
+  local_passkey?: boolean;
 }
+
+/** `POST /v1/local/approvals/{id}/challenge` (own_card) : défi canonique à re-signer tel quel, avec `.approve` |
+ * `.reject` (SHA-256, comme APPROVALS §3.4). `allow_credentials` : identifiants base64url des passkeys locales. */
+export interface LocalApprovalChallenge {
+  challenge: string;
+  nonce: string;
+  exp: number;
+  rp_id: string;
+  allow_credentials: string[];
+}
+
 
 /** `tool` (tout appel de l'outil), `file` (ce fichier), `dir` (ce dossier), `prefix` (commandes qui commencent ainsi),
  * `exact` (cette commande, cet hôte:chemin) — `nokker/local/approvals.py::rule_kind`. */
@@ -413,6 +470,25 @@ export interface ApprovalDecidedEvent {
   via: DecidedVia;
 }
 
+/** Relecture automatique rangée sur la carte (APPROVALS.md §8). Le noyau la publie pour `escalate` (la carte part aux
+ * humains) ; une approbation ou un refus automatiques arrivent par `approval.decided` (`via: "auto-review"`). */
+export interface ApprovalAutoReviewEvent {
+  type: "approval.auto_review";
+  approval_id: string;
+  decision: "approve" | "reject" | "escalate";
+  reason: string;
+}
+
+/** Décision automatique révoquée par le propriétaire : un refus revient `pending` (ou `expired`), une approbation
+ * garde son statut (l'effet a eu lieu). */
+export interface ApprovalAutoReviewRevokedEvent {
+  type: "approval.auto_review_revoked";
+  approval_id: string;
+  by: VerifiedUser;
+  decision: "approve" | "reject";
+  status: ApprovalStatus;
+}
+
 /** Images du tour non lues : le modèle n'a pas la vision (LOKKAL.md §7.6), une fois par tour. */
 export interface AttachmentSkippedEvent {
   type: "attachment.skipped";
@@ -477,11 +553,18 @@ export interface ModelCost extends CostTokens {
   tiers: string[];
   /** `null` : modèle absent du catalogue de prix (jamais un prix inventé). */
   cost: CostByCurrency | null;
+  /** Même coût en CHF (noyau 6aaccb4) ; `null` : pas de prix ou devise sans taux. Absent d'un noyau plus ancien. */
+  cost_chf?: number | null;
   price_source: string | null;
 }
 
 export interface CostSummary extends CostTokens {
   cost: CostByCurrency;
+  /** Total en CHF au taux de la config du noyau (6aaccb4) : `null` = une devise sans taux ou aucun prix (jetons
+   * seulement) ; `0` = tour sans appel modèle. Absent d'un noyau plus ancien. */
+  cost_chf?: number | null;
+  /** Taux USD → CHF appliqué. */
+  usd_chf?: number | null;
   unpriced_models: string[];
   models: ModelCost[];
 }
@@ -555,6 +638,8 @@ export type NokkerEvent =
   | ApprovalRequestedEvent
   | ApprovalForwardedEvent
   | ApprovalDecidedEvent
+  | ApprovalAutoReviewEvent
+  | ApprovalAutoReviewRevokedEvent
   | TurnCostEvent
   | TurnDoneEvent
   | SessionModeEvent
@@ -585,6 +670,8 @@ export const NOKKER_EVENT_TYPES = [
   "approval.requested",
   "approval.forwarded",
   "approval.decided",
+  "approval.auto_review",
+  "approval.auto_review_revoked",
   "turn.cost",
   "turn.done",
   "thread.updated",
@@ -612,6 +699,7 @@ export const NOKKER_EVENT_TYPES = [
   "payment.rejected",
   "payment.refused",
   "payment.budget_changed",
+  "payment.agent",
 ] as const satisfies readonly NokkerEvent["type"][];
 
 // ---------------------------------------------------------------------------
@@ -750,6 +838,16 @@ export interface CancelResult {
    * pas) ; il finira par `turn.done {cancelled: true}`. Absent d'un noyau plus ancien. */
   running?: boolean;
   subagents_cancelled?: number;
+}
+
+/** `GET /v1/speech` (tts allumée avec un fournisseur) : la lecture à voix haute d'une réponse est disponible ; 404
+ * sinon. Contrat validé le 03.11.2026 (noyau p2/tts-stream). */
+export interface SpeechCapability {
+  available: boolean;
+  /** Plafond du texte lu, après nettoyage (`tts.web_max_chars`) : au-delà, 413 `too_long`. */
+  max_chars: number;
+  /** Format du flux de `POST …/speech` : `audio/mpeg` (lu par MediaSource pendant qu'il arrive). */
+  format: string;
 }
 
 /** `GET /healthz` — champs optionnels annoncés par le serveur. */

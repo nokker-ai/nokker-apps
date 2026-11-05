@@ -50,6 +50,13 @@ const KEYS: Record<string, Key> = {
   key_missing: "errKeyMissing",
   protocol_error: "errProtocol",
   unsupported: "errUnsupported",
+  label_taken: "errLabelTaken",
+  too_many: "errTooMany",
+  bad_label: "errBadLabel",
+  not_owner: "errNotOwner",
+  not_household_member: "errNotMember",
+  bad_level: "errBadLevel",
+  stale: "errStale",
   strong_device_required: "errStrongDevice",
   already_subscribed: "errAlreadySubscribed",
   no_customer: "errNoCustomer",
@@ -59,6 +66,16 @@ const KEYS: Record<string, Key> = {
   delete_disabled: "errDeleteDisabled",
   export_expired: "errExportExpired",
   export_limit: "errExportLimit",
+  // BYOK cloud (docs/CLOUD-BYOK.md §2)
+  plan_required: "errPlanRequired",
+  blocked_address: "errBlockedAddress",
+  bad_base_url: "lkByokHttpsNeeded",
+  bad_api_key: "errBadApiKey",
+  bad_name: "errBadByok",
+  bad_model: "errBadByok",
+  bad_byok: "errBadByok",
+  too_large: "errBadByok",
+  vault_unavailable: "errVaultUnavailable",
 };
 
 /** Clé de traduction à afficher pour une erreur : jamais le texte brut du serveur ni une trace. */

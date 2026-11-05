@@ -4,6 +4,7 @@
  * kind — the app is the same as before.
  */
 import type { Bubble, PointerState } from "@nokker-apps/sdk";
+import { approvalTitle } from "../approvals/title.js";
 import { tr } from "../i18n/index.js";
 
 let flag: boolean = import.meta.env?.VITE_NOKKER_SHOW_ME === "1";
@@ -94,6 +95,7 @@ export function findAnchor<T extends AnchorEl>(els: T[], ui: string): { el: T; v
 /** Title of a bubble as shown: a `pointer` gets its title here, in the interface language, from its step (the core's
  * title is French data for the model's turn); any other bubble keeps its own. Off: every bubble keeps its own. */
 export function displayTitle(b: Bubble): string {
+  if (b.kind === "approval") return approvalTitle(b); // the kernel titles it with the raw tool name
   if (b.kind !== "pointer" || !flag) return b.title;
   return stepLabel(b.state ?? { step: null, steps: null }) || tr("Show me");
 }

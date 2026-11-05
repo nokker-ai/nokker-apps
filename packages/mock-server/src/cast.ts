@@ -4,6 +4,7 @@
  * (`POST /v1/bubbles/{id}/actions/{approve|refuse|stop}` → 200 `{cast: <state without html>}`), never a turn.
  * The first time on a screen asks for a go (`request.reason: "new_screen"`): nothing is shown before it.
  */
+import { createHmac, randomBytes } from "node:crypto";
 import type { Bubble, CastState } from "@nokker-apps/sdk";
 import { createBubble, registerDirectAction, updateBubble } from "./bubbles.js";
 import { hexId, MOCK_USER, type MockState } from "./state.js";
@@ -68,3 +69,55 @@ registerDirectAction("cast", (state, b, actionId) => {
   const next = state.bubbles.get(b.id);
   return { cast: withoutHtml((next?.kind === "cast" ? next.state : { ...st, ...patch }) as CastState) };
 });
+
+
+// -- Cadre de l'aperçu (p2/cast-frame b48cc48) -------------------------------------------------------------------------
+// POST /v1/cast/{cast_id}/frame-url (session) → {url, expires_at} (2 min) ; GET /v1/cast/{cast_id}/frame?exp=&sig= (sans
+// jeton : la signature fait foi) → la page COURANTE de l'aperçu, avec sa propre CSP. `MOCK_CAST_FRAME=0` : noyau d'avant
+// (404 sur frame-url, le web revient à srcdoc).
+const FRAME_KEY = randomBytes(32);
+const FRAME_TTL_MS = 2 * 60_000;
+const frameSig = (castId: string, exp: number): string => createHmac("sha256", FRAME_KEY).update(`${castId}.${exp}`).digest("base64url");
+
+function castOf(state: MockState, castId: string): CastState | null {
+  for (const b of state.bubbles.values()) if (b.kind === "cast" && (b.state as CastState).cast_id === castId) return b.state as CastState;
+  return null;
+}
+
+export function handleCastFrameUrl(state: MockState, method: string, path: string, send: (status: number, obj: unknown) => void): boolean {
+  const m = /^\/v1\/cast\/([^/]+)\/frame-url$/.exec(path);
+  if (!m || method !== "POST") return false;
+  if (process.env.MOCK_CAST_FRAME === "0") return send(404, { error: { message: "not found" } }), true;
+  const st = castOf(state, decodeURIComponent(m[1]!));
+  if (!st) return send(404, { error: "not_found" }), true;
+  if (st.html_too_large || !st.html) return send(413, { error: "html_too_large" }), true;
+  const exp = Date.now() + FRAME_TTL_MS;
+  send(200, { url: `/v1/cast/${encodeURIComponent(st.cast_id)}/frame?exp=${exp}&sig=${frameSig(st.cast_id, exp)}`, expires_at: new Date(exp).toISOString() });
+  return true;
+}
+
+/** Public (l'iframe n'envoie pas de Bearer) : signature et expiration vérifiées ici. */
+export function handleCastFrame(state: MockState, method: string, path: string, query: URLSearchParams, res: { writeHead: (s: number, h: Record<string, string>) => void; end: (b?: string) => void }): boolean {
+  const m = /^\/v1\/cast\/([^/]+)\/frame$/.exec(path);
+  if (!m || method !== "GET") return false;
+  const castId = decodeURIComponent(m[1]!);
+  const exp = Number(query.get("exp"));
+  const sig = query.get("sig") ?? "";
+  const st = castOf(state, castId);
+  const ok = Number.isFinite(exp) && sig === frameSig(castId, exp);
+  const status = !ok ? 403 : exp < Date.now() ? 410 : !st?.html ? 404 : 200;
+  if (status !== 200) {
+    res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end(String(status));
+    return true;
+  }
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Security-Policy": "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: https:",
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+  });
+  res.end(st!.html!);
+  return true;
+}

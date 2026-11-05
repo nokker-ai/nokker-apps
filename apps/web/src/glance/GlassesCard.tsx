@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import qrcode from "qrcode-generator";
 import { NokkerApiError, type GlanceDevice, type GlanceOffer, type NokkerClient } from "@nokker-apps/sdk";
 import { tr } from "../i18n/index.js";
+import { off as offCap } from "../capabilities.js";
 
 /** QR drawn as SVG rectangles from the generator's modules (no HTML injected). */
 export function QrSvg({ text, size = 176 }: { text: string; size?: number }): React.ReactElement {
@@ -41,6 +42,7 @@ export function GlassesCard({ client }: { client: NokkerClient }): React.ReactEl
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
+    if (offCap("glance")) return setDevices("off");
     client.listGlanceDevices().then(
       (r) => setDevices(r.devices.filter((d) => !d.revoked)),
       (e) => setDevices(e instanceof NokkerApiError && e.status === 404 ? "off" : []),

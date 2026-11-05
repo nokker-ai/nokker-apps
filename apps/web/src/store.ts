@@ -5,8 +5,10 @@
 import { deletionGranted } from "./account/lifecycle.js";
 import { messageContent } from "./composer/images.js";
 import { userErrorText } from "./errors/userError.js";
-import { refusalText } from "./payments/model.js";
+import { agentEventText, refusalText } from "./payments/model.js";
 import { applyLiveInputEvent, formatCostLine, type LiveInputs } from "@nokker-apps/sdk";
+import { chfOnly } from "./account/cost.js";
+import { loadCapabilities, off as offCap } from "./capabilities.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   NokkerApiError,
@@ -27,6 +29,7 @@ import { SERVER_URL, createClient } from "./api.js";
 import { t } from "./onboarding/i18n.js";
 import { uiLang } from "./components/ConnectorsTab.js";
 import { forgetLocalToken } from "./onboarding/localToken.js";
+import { localKeyRefused, onUnauthorized } from "./lokkal/keyWatch.js";
 import { DeviceNotApprovedError, forgetDevice, isMockServer, lokkalWithoutKey, restoreLogin, type AuthResult } from "./auth.js";
 import { knock, loadSignaturePrefs, saveSignaturePrefs } from "./sound.js";
 import { readJson, writeJson } from "./viewState.js";
@@ -39,6 +42,8 @@ export interface Toast {
   id: number;
   text: string;
   tone?: "ok" | "error";
+  /** Same key: the new toast replaces the old one (one line per payment, never a stale request). */
+  key?: string;
 }
 
 /** `booting` : reprise de session ; `signed-out` : aucun appareil reconnu (écran de connexion) ; `error` : serveur
@@ -101,6 +106,8 @@ export interface NokkerStore {
   crewPulse: number;
   focusBubble: string | null;
   toasts: Toast[];
+  /** Bumped on every `payment.agent` event: payment blocks reload their state. */
+  payAgentRev: number;
   signature: SignaturePrefs;
   /** Bulles d'agent en train de « voler » vers l'onglet Crew (animation de sortie dédiée). */
   flying: Set<string>;
@@ -147,6 +154,18 @@ function parseHash(): { thread?: string; bubble?: string } {
   return m ? { thread: m[1], bubble: m[2] } : {};
 }
 
+async function confirmWithBank(client: NokkerClient, hashedValue: string, toast: (t: string, tone?: Toast["tone"]) => void): Promise<void> {
+  try {
+    const { publishable_key } = await client.getPayMethod();
+    if (!publishable_key) throw new Error("publishable key");
+    const { stripeFor } = await import("./payments/stripe.js");
+    const res = await (await stripeFor(publishable_key)).handleNextAction({ hashedValue });
+    toast(res?.error ? tr("Bank confirmation not completed: the payment token stays on hold.") : tr("Bank confirmation done."), res?.error ? "error" : "ok");
+  } catch {
+    toast(tr("Bank confirmation could not open: try again from the payment card."), "error");
+  }
+}
+
 export function useNokker(): NokkerStore {
   const client = useMemo(() => createClient(), []);
   const [status, setStatus] = useState(() => tr("connecting…"));
@@ -181,9 +200,11 @@ export function useNokker(): NokkerStore {
   // X2 : totaux relus sur la route du noyau (aucun montant recalculé ici) ; absente (hébergé, mock ancien) = pas d'encart.
   const refreshCost = useCallback(
     async (threadId: string | null) => {
+      // Route Lokkal seulement (`/v1/local/*` n'existe pas sur nokker.ai) : en cloud, pas d'appel (ni de 404).
+      if (!lokkalRef.current || offCap("local_cost")) return setCostTotals(null);
       try {
         const t = await client.getLocalCost(threadId ?? undefined);
-        setCostTotals({ session: t.session ? formatCostLine(t.session, shellLang()) : null, day: formatCostLine(t.day, shellLang()) });
+        setCostTotals({ session: t.session ? formatCostLine(chfOnly(t.session), shellLang()) : null, day: formatCostLine(chfOnly(t.day), shellLang()) });
       } catch {
         setCostTotals(null);
       }
@@ -201,6 +222,7 @@ export function useNokker(): NokkerStore {
   const [crewPulse, setCrewPulse] = useState(0);
   const [focusBubble, setFocusBubble] = useState<string | null>(parseHash().bubble ?? null);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [payAgentRev, setPayAgentRev] = useState(0);
   const [signature, setSignatureState] = useState<SignaturePrefs>(() => loadSignaturePrefs());
   const [flying, setFlying] = useState<Set<string>>(() => new Set());
 
@@ -215,6 +237,14 @@ export function useNokker(): NokkerStore {
   const toast = useCallback((text: string, tone?: Toast["tone"]) => {
     const id = ++toastSeq.current;
     setToasts((t) => [...t.slice(-3), { id, text, ...(tone ? { tone } : {}) }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200);
+  }, []);
+  /** Toast of one thing that changes (a payment by the agent): replaces the previous one of the same key; `null` text
+   * only removes it (the request was answered). */
+  const keyedToast = useCallback((key: string, text: string | null, tone?: Toast["tone"]) => {
+    if (text === null) return void setToasts((t) => t.filter((x) => x.key !== key));
+    const id = ++toastSeq.current;
+    setToasts((t) => [...t.filter((x) => x.key !== key).slice(-3), { id, text, key, ...(tone ? { tone } : {}) }]);
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200);
   }, []);
 
@@ -373,7 +403,7 @@ export function useNokker(): NokkerStore {
           }
           return;
         case "turn.cost":
-          setTurnCosts((c) => ({ ...c, [e.turn_id]: formatCostLine(e, shellLang()) }));
+          setTurnCosts((c) => ({ ...c, [e.turn_id]: formatCostLine(chfOnly(e), shellLang()) }));
           if (e.thread_id === currentRef.current) void refreshCost(e.thread_id);
           return;
         case "turn.done":
@@ -387,11 +417,22 @@ export function useNokker(): NokkerStore {
         case "payment.refused":
           toast(refusalText(e), "error");
           return;
+        // Agent de paiement (PAY-AGENT §8) : jeton émis, utilisé ; 3-D Secure demandé par la banque → la fenêtre de
+        // Stripe s'ouvre ici (`handleNextAction`), la personne confirme chez sa banque. Rien de la carte ne passe par nous.
+        case "payment.agent": {
+          // One line per payment: a request answered (CVV given, code typed) never stays on screen.
+          keyedToast(`pay:${e.mandate_id}`, agentEventText(e), e.next_action || e.agent.threeds ? undefined : "ok");
+          if (e.next_action) void confirmWithBank(client, e.next_action, toast);
+          // Émetteur wise (PAY-AGENT §10.3) : la carte « Confirme ce paiement » (payments/ThreeDSDock) relit les
+          // mandats à chaque événement de l'agent ; elle s'efface quand l'agent dit que c'est tranché.
+          setPayAgentRev((n) => n + 1);
+          return;
+        }
         default:
           return;
       }
     },
-    [scheduleRefresh, toast, refreshCost],
+    [scheduleRefresh, toast, keyedToast, refreshCost, client],
   );
 
   // Connexion, chargement initial, flux d'événements.
@@ -399,6 +440,7 @@ export function useNokker(): NokkerStore {
     let sub: { close(): void } | undefined;
     let cancelled = false;
     let localKey: string | null = null;
+    let stopKeyWatch: (() => void) | undefined;
     (async () => {
       try {
         const isMock = await isMockServer(SERVER_URL);
@@ -418,7 +460,9 @@ export function useNokker(): NokkerStore {
         localKey = a.mode === "local" ? (a.localKey ?? null) : null;
         if (cancelled) return;
         setAuth(a);
-        let list = sortThreads(await client.listThreads());
+        // Capacités d'abord (une requête) : chaque écran sait ensuite quelles routes existent, sans les sonder.
+        const [, threads] = await Promise.all([loadCapabilities(client), client.listThreads()]);
+        let list = sortThreads(threads);
         lokkalRef.current = a.mode === "local" || a.mode === "gateway" ? { user: a.user } : null;
         if (lokkalRef.current) {
           // Sessions de code : celles sans tour ne sont pas encore des fils du hub ; racines pour le « + ».
@@ -478,6 +522,26 @@ export function useNokker(): NokkerStore {
         });
         setStatus(tr("connected"));
         setAccess("ready");
+        // Not after a cleanup that ran during the awaits above: the listener would never be removed.
+        if (localKey && !cancelled) {
+          // Key refused during the session (install reset, key revoked): confirmed by the core, then THIS key is
+          // forgotten and the key page comes back. A 401 about something else keeps the session.
+          const key = localKey;
+          let checking = false;
+          stopKeyWatch = onUnauthorized((bearer) => {
+            if (bearer !== key || checking) return;
+            checking = true;
+            void localKeyRefused(SERVER_URL, key).then((refused) => {
+              checking = false;
+              if (!refused || cancelled) return;
+              stopKeyWatch?.();
+              forgetLocalToken(key);
+              sub?.close();
+              setReady(false);
+              setAccess("lokkal-no-key");
+            });
+          });
+        }
         setReady(true);
       } catch (err) {
         if (cancelled) return;
@@ -498,6 +562,7 @@ export function useNokker(): NokkerStore {
     })();
     return () => {
       cancelled = true;
+      stopKeyWatch?.();
       sub?.close();
     };
   }, [client, loadThread, onEvent, attempt]);
@@ -802,6 +867,7 @@ export function useNokker(): NokkerStore {
     crewPulse,
     focusBubble,
     toasts,
+    payAgentRev,
     signature,
     flying,
     setSignature,

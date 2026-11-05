@@ -6,12 +6,13 @@ import { createClient } from "../api.js";
 import { uiLang } from "../components/ConnectorsTab.js";
 import { writeJson } from "../viewState.js";
 import { ConnectorsStep, ErrorLine, TelegramStep } from "./Connectors.js";
-import { localErrorKey, testErrorKind } from "./errors.js";
+import { localErrorKey } from "./errors.js";
 import { t, type Key } from "./i18n.js";
 import { forgetLocalToken, takeLocalToken } from "./localToken.js";
 import { StepsNav } from "./Onboarding.js";
 import { DefaultPicker, optionLabel, RouterCard } from "./SetupParts.js";
 import { ImportCard } from "./ImportCard.js";
+import { ByokForm } from "./ByokForm.js";
 import { LocalKeyHelp } from "./LocalKey.js";
 import {
   byokName,
@@ -261,106 +262,15 @@ function ByokCard(props: {
   onRemove: (name: string) => void;
 }): React.ReactElement {
   const { s, client } = props;
-  const L = s.lang;
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | undefined>();
-  const [info, setInfo] = useState<string | undefined>();
-  // Essai réussi, en attente du choix du modèle. La clé reste dans cette référence, jamais dans l'état React.
-  const [tested, setTested] = useState<{ baseUrl: string; models: string[] } | null>(null);
-  const testedKey = useRef("");
-
-  const test = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const form = e.currentTarget;
-    const baseUrl = String(new FormData(form).get("base_url") ?? "").trim();
-    const keyField = form.elements.namedItem("api_key") as HTMLInputElement | null;
-    const key = keyField?.value ?? "";
-    setInfo(undefined);
-    setTested(null);
-    if (!validApiUrl(baseUrl)) return void setError(t(L, "lkByokUrlNeeded"));
-    setBusy(true);
-    setError(undefined);
-    try {
-      const r = await client.testLocalModel({ base_url: baseUrl, ...(key ? { api_key: key } : {}) });
-      if (r.ok) {
-        testedKey.current = key;
-        setTested({ baseUrl, models: r.models });
-        setInfo(t(L, "lkByokOk", { n: String(r.models.length), ms: String(r.latency_ms ?? "–") }));
-        if (keyField) keyField.value = ""; // la clé a quitté le champ : elle n'est plus affichée
-      } else {
-        const kind = testErrorKind(r.error);
-        setError(kind === "invalid_key" ? t(L, "lkByokInvalidKey") : kind === "url" ? t(L, "lkByokUrlNeeded") : t(L, "lkByokUnreachable", { detail: r.error || "?" }));
-      }
-    } catch (err) {
-      setError(t(L, localErrorKey(err)));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const add = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!tested) return;
-    const model = String(new FormData(e.currentTarget).get("model") ?? "").trim();
-    if (!model) return;
-    props.onAdd(byokName(tested.baseUrl), tested.baseUrl, model, testedKey.current);
-    testedKey.current = "";
-    setTested(null);
-    setInfo(undefined);
-  };
-
-  const ready = s.byok;
   return (
-    <article className="ob-conn" aria-labelledby="lk-byok">
-      <div className="ob-conn-head">
-        <h3 id="lk-byok">{t(L, "lkByokTitle")}</h3>
-        <span className={"ob-badge " + (ready.length ? "ok" : "absent")}>{ready.length ? t(L, "lkByokReady") : t(L, "stateAbsent")}</span>
-      </div>
-      <p className="ob-note">{t(L, "lkByokBody")}</p>
-      {ready.map((b) => (
-        <p key={b.name} className="ob-account lk-byok-ok">
-          <span className="mono">{b.name}</span>
-          <span className="ob-muted"> · <span className="mono">{b.model}</span> · {t(L, b.hasKey ? "lkByokKeyStored" : "lkByokNoKey")} </span>
-          <button type="button" className="ob-btn link" onClick={() => props.onRemove(b.name)}>{t(L, "lkByokRemove")}</button>
-        </p>
-      ))}
-      <form className="ob-form" onSubmit={test} autoComplete="off">
-        <div className="ob-field">
-          <label htmlFor="lk-byok-url">{t(L, "lkByokUrl")}</label>
-          <input id="lk-byok-url" name="base_url" type="url" inputMode="url" placeholder="https://api.exemple.com/v1" autoComplete="off" autoCapitalize="none" spellCheck={false} required onChange={() => setTested(null)} />
-        </div>
-        <div className="ob-field">
-          <label htmlFor="lk-byok-key">{t(L, "lkByokKey")}</label>
-          <input id="lk-byok-key" name="api_key" type="password" autoComplete="off" autoCapitalize="none" spellCheck={false} />
-        </div>
-        <div className="ob-row" aria-live="polite">
-          {error && <p className="ob-error" role="alert">{error}</p>}
-          {info && !error && <p className="ob-okline">{info}</p>}
-        </div>
-        <div className="ob-actions inline">
-          <button type="submit" className="ob-btn" disabled={busy}>{busy ? t(L, "lkByokTesting") : t(L, "lkByokTest")}</button>
-        </div>
-      </form>
-      {tested && (
-        <form className="ob-form lk-byok-model" onSubmit={add} autoComplete="off">
-          <div className="ob-field">
-            <label htmlFor="lk-byok-model">{t(L, "lkByokModel")}</label>
-            {tested.models.length > 0 ? (
-              <select id="lk-byok-model" name="model" defaultValue={tested.models[0]} required>
-                {tested.models.map((m) => (
-                  <option key={m} value={m}>{m}</option>
-                ))}
-              </select>
-            ) : (
-              <input id="lk-byok-model" name="model" type="text" autoCapitalize="none" spellCheck={false} required />
-            )}
-          </div>
-          <div className="ob-actions inline">
-            <button type="submit" className="ob-btn primary">{t(L, "lkByokAdd")}</button>
-          </div>
-        </form>
-      )}
-    </article>
+    <ByokForm
+      lang={s.lang}
+      idPrefix="lk"
+      list={s.byok}
+      test={(req) => client.testLocalModel(req)}
+      onAdd={props.onAdd}
+      onRemove={props.onRemove}
+    />
   );
 }
 

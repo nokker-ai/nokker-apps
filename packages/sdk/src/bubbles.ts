@@ -53,6 +53,9 @@ export interface ThreadMessage {
   created_at?: string;
   /** LOKKAL §7.6 (X7) : images jointes au message user ; octets par `GET /v1/threads/{id}/images/{sha256}`. */
   images?: { sha256: string; media_type: string; size: number; name?: string | null }[];
+  /** `"approval"` : message user du tour qui suit une décision (bloc `[Approbation]` écrit par le noyau pour le
+   * modèle, APPROVALS §2). Absent pour un message de la personne et pour les tours d'avant le champ. */
+  origin?: "approval" | (string & {});
 }
 
 export interface ThreadView {
@@ -268,6 +271,15 @@ export interface AgentDraftState {
 
 export interface ApprovalBubbleState {
   approval_id: string;
+  /** Bulle posée par le noyau à une approbation du relecteur automatique (APPROVALS.md §8, BUBBLES.md) : affichage
+   * seulement. Une bulle peut être réécrite : Révoquer et Restaurer se décident sur `GET /v1/approvals/{id}`. */
+  tool_name?: string;
+  status?: string;
+  decision?: "approve" | "reject" | "escalate" | null;
+  decided_via?: string | null;
+  reason?: string;
+  revoked?: boolean;
+  rollback_applied?: boolean;
 }
 
 export interface BubbleStateByKind {

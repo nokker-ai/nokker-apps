@@ -86,3 +86,7 @@ export function loopPrompt(prompt: string, run: number, maxRuns: number, everyMs
     "[/Exécution planifiée]",
   ].join("\n");
 }
+
+/** En-têtes des blocs ci-dessus, sans crochets : controltext.ts reconnaît ainsi un titre de fil né d'un tour de contrôle.
+ * Aucun texte envoyé au modèle n'en dépend. */
+export const CONTROL_HEADERS = ["Exécution planifiée", "Vérification du but", "Relance du but", "Question annexe"] as const;

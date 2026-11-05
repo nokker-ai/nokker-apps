@@ -1,7 +1,7 @@
 /**
  * Recette des écrans de la zone onboarding, dans un vrai Chromium (sans tête) contre le mock, sur `localhost`
  * (contexte sécurisé : clés d'appareil WebCrypto, donc vraie acceptation d'invitation) :
- *  - invitation `/invite?t=…` → conditions → connecteurs : « Commencer maintenant » mène au chat, où le fil vide
+ *  - invitation `/invite?t=…` → conditions → connecteurs : « Aller au chat » mène au chat, où le fil vide
  *    propose ses premières demandes (temps jusqu'à la première valeur, chronométré) ;
  *  - premier lancement Lokkal `/setup` → fin → « Tu viens d'un autre agent ? » : aperçu puis Importer ;
  *  - Apprentissage `/journey` : journal, À valider (Retenir), Skills (revenir à une version) ;
@@ -17,14 +17,16 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { cspWatch, webCommand } from "./web-server.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const WEB = resolve(HERE, "..");
 const MOCK = resolve(WEB, "../../packages/mock-server");
 const STEP_MS = Number(process.env.E2E_STEP_MS ?? 20000);
 const SHOTS = process.env.E2E_SHOTS ? resolve(process.env.E2E_SHOTS) : null;
+// /v1/guide : le build de prod (E2E_PREVIEW=1) allume le guide, que le mock de cette recette ne sert pas (404).
 const ALLOWED_4XX = [
-  [404, /\/v1\/(packs|code\/sessions|household\/invitations\/received|sso\/connections|local\/import\/report|glance\/devices|house|presence|memory\/consolidation\/runs|payments\/budgets|payments\/mandates|local\/folder\/runs)(\?|$)/],
+  [404, /\/v1\/(guide|speech|account\/models|capabilities|packs|code\/sessions|household\/invitations\/received|sso\/connections|local\/import\/report|glance\/devices|house|presence|memory\/consolidation\/runs|payments\/budgets|payments\/mandates|payments\/method|local\/folder\/runs)(\?|$)/],
   [401, /\/v1\/local\//],
 ];
 const PHONE = { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true };
@@ -68,7 +70,7 @@ async function servers() {
   const env = { ...process.env, NOKKER_CONFIG_DIR_OVERRIDE: cfg, MOCK_PORT: String(mockPort), MOCK_LOCAL_ROOTS: join(cfg, "work") };
   const procs = [
     spawn("npx", ["tsx", "src/run.ts"], { cwd: MOCK, env, stdio: ["ignore", "ignore", "inherit"], detached: true }),
-    spawn("npx", ["vite", "--port", String(webPort), "--strictPort", "--host", "127.0.0.1"], {
+    spawn("npx", [...webCommand(), "--port", String(webPort), "--strictPort", "--host", "127.0.0.1"], {
       cwd: WEB,
       env: { ...process.env, NOKKER_SERVER_URL: `http://127.0.0.1:${mockPort}` },
       stdio: ["ignore", "ignore", "inherit"],
@@ -93,6 +95,7 @@ async function servers() {
 }
 
 function watch(page, problems) {
+  cspWatch(page, () => page.url().replace(/^https?:\/\/[^/]+/, ""));
   page.on("pageerror", (e) => problems.push(`page error: ${e.message}`));
   page.on("response", (r) => {
     const s = r.status();
@@ -152,13 +155,13 @@ async function invite(page, s, t, dev, token) {
   await noOverflow(page, "conditions");
   await page.locator('.ob-card input[type="checkbox"]').first().check();
   await page.locator(".ob-card .ob-actions .ob-btn.primary").first().click();
-  await until(page, "étape connecteurs", () => /Commencer maintenant|Start now/.test(document.body.innerText));
+  await until(page, "étape connecteurs", () => /Aller au chat|Go to the chat/.test(document.body.innerText));
   t.toConnectorsMs = Date.now() - t0;
   const cut = await page.evaluate(() => [...document.querySelectorAll(".ob-steplabel")].filter((e) => e.clientWidth > 1 && e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent));
   if (cut.length) throw new StepError(`étapes coupées : ${cut.join(", ")}`);
   await shot(page, `${dev}-invite-connectors`);
   await noOverflow(page, "connecteurs");
-  await clickText(page, /Commencer maintenant|Start now/);
+  await clickText(page, /Aller au chat|Go to the chat/);
   await until(page, "chat ouvert", () => !!document.querySelector("#nk-composer"));
   t.inviteToChatMs = Date.now() - t0;
   // Le mock remplit d'avance des fils de démo ; un vrai premier fil est vide : nouvelle session pour voir le fil vide.

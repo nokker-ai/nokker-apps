@@ -68,6 +68,10 @@ import { initPromptFor } from "../init.js";
 import { exportThread } from "../export.js";
 import { completeAtRef, expandAtRefs } from "../atrefs.js";
 import { t } from "../i18n/index.js";
+import { fileLastThreadStore } from "../lastthread.js";
+import { readLokkal } from "../lokkal.js";
+import { localPathFor, serverCwdFor, type WslContext } from "../wslcwd.js";
+import { hideGoalMarker, isControlTitle, loopThreadTitle, shownUserText } from "../controltext.js";
 import { BTW_THREAD_TITLE, btwPrompt, goalCheckPrompt, goalContinuePrompt, loopPrompt, type CliControl } from "../prompts.js";
 import { LOOP_MAX_RUNS, clampInterval, formatInterval, formatLoops, loopTickDecision, loopsStatusLine, parseInterval, type LoopEntry } from "../loop.js";
 import { GOAL_MAX_AUTO_TURNS, formatGoal, goalStatusLine, newGoal, nextGoalStep, splitGoalText, type GoalState } from "../goal.js";
@@ -96,6 +100,9 @@ type FeedItem =
 
 let seq = 0;
 const nextId = (): string => `f${seq++}`;
+
+/** Dossier dans une autre distro WSL que celle de Lokkal : pas de session locale, le message dit quoi faire. */
+class WslElsewhere extends Error {}
 
 export function App({
   baseUrl,
@@ -133,6 +140,9 @@ export function App({
   const goalDueRef = useRef<"check" | "continue" | null>(null);
   /** `/loop` : boucles de la session et leurs minuteurs (arrêtés au départ). */
   const loopsRef = useRef<LoopEntry[]>([]);
+  /** Titre lisible du fil ouvert par le dernier /loop (controltext.ts) ; fils déjà retitrés (un seul PATCH par fil). */
+  const controlTitleRef = useRef<string | null>(null);
+  const retitledRef = useRef<Set<string>>(new Set());
   const [loopsView, setLoopsView] = useState<LoopEntry[]>([]);
   const loopTimersRef = useRef<Map<number, ReturnType<typeof setInterval>>>(new Map());
   const loopSeqRef = useRef(0);
@@ -242,7 +252,7 @@ export function App({
     // Tab : complète le dernier `@chemin` de la saisie (dossier de la session de code).
     if (key.tab && !key.shift && !localCardOpen) {
       const cwd = sessionRef.current?.cwd;
-      if (cwd) void completeAtInput(cwd);
+      if (cwd) void completeAtInput(localDir(cwd));
       return;
     }
     // Échap ne décide jamais une carte ; hors carte, il annule le tour (côté noyau, pas seulement l'affichage) et vide la file.
@@ -400,6 +410,11 @@ export function App({
     }
   }
 
+  // Windows + Lokkal dans WSL : la session porte un chemin Linux, les lectures locales (@refs, complétion, /export) le
+  // retraduisent en chemin Windows (wslcwd.ts). Ailleurs : identité.
+  const wslCtxRef = useRef<WslContext>({ platform: process.platform, wslDistro: null });
+  const localDir = (p: string): string => localPathFor(p, wslCtxRef.current);
+
   useEffect(() => {
     let sub: { close(): void } | undefined;
     (async () => {
@@ -448,20 +463,35 @@ export function App({
         },
       });
 
+      if (conn.mode === "local") {
+        const lk = readLokkal();
+        wslCtxRef.current = { platform: process.platform, wslDistro: lk.status === "ok" ? (lk.config.wsl_distro ?? null) : null };
+      }
+      const target = serverCwdFor(cwd, wslCtxRef.current);
       try {
-        const opened = await session.openLocal(cwd);
-        setFolder(basename(cwd) || cwd);
+        if (target.kind === "other-distro") {
+          const distro = wslCtxRef.current.wslDistro ?? "";
+          throw new WslElsewhere(t("Folder {0} is in the WSL distribution {1}, but Lokkal runs in {2}: open the project in {2} (\\\\wsl.localhost\\{2}\\…). Plain thread opened instead.", cwd, target.distro, distro));
+        }
+        const opened = await session.openLocal(target.cwd, fileLastThreadStore(baseUrl));
+        setFolder(basename(target.cwd) || target.cwd);
         setThreadLabel(session.threadId);
         if (opened.messages.length) setFeed(feedFromMessages(opened.messages));
-        pushSystem(opened.resumed ? t("Code session on {0} (resumed). /help for the commands.", cwd) : t("Code session on {0} (new). /help for the commands.", cwd));
+        const shown = target.kind === "same" ? cwd : `${target.cwd} (WSL ${wslCtxRef.current.wslDistro})`;
+        pushSystem(opened.resumed ? t("Code session on {0} (resumed). /help for the commands.", shown) : t("Code session on {0} (new). /help for the commands.", shown));
         skillsRef.current = opened.skills;
         void refreshMode(session);
         void adoptPendingCard(session);
         if (typeof opened.skills === "object" && opened.skills.project === "untrusted") askTrust(opened.skills);
         else if (typeof opened.skills === "object" && opened.skills.project === "invalid" && opened.skills.notice) pushSystem(opened.skills.notice);
       } catch (err) {
-        if (err instanceof NokkerApiError && err.status === 403) {
-          pushSystem(t("Folder outside the roots declared by the server: {0}. Plain thread opened instead.", cwd));
+        if (err instanceof WslElsewhere) {
+          pushSystem(err.message);
+        } else if (err instanceof NokkerApiError && err.status === 403 && target.kind === "drive") {
+          const distro = wslCtxRef.current.wslDistro ?? "";
+          pushSystem(t("Folder {0} is on the Windows drive {1} ({2} in WSL), outside the roots declared by the server. Open the project inside WSL instead: \\\\wsl.localhost\\{3}\\home\\<you>\\<project>, or run: wsl -d {3} --cd <folder> -- ~/.nokker/bin/nokker. Plain thread opened instead.", cwd, target.drive, target.cwd, distro));
+        } else if (err instanceof NokkerApiError && err.status === 403) {
+          pushSystem(t("Folder outside the roots declared by the server: {0}. Plain thread opened instead.", target.cwd));
         } else if (err instanceof NokkerApiError && (err.status === 404 || err.status === 405)) {
           pushSystem(t("This server offers no local code session — plain thread."));
         } else {
@@ -617,7 +647,18 @@ export function App({
         }
         return;
       case "thread.updated":
-        if (event.thread.id === session.threadId) setThreadLabel(event.thread.title || session.threadId);
+        if (event.thread.id === session.threadId) {
+          // Fil ouvert par /loop : le noyau l'a titré d'après le texte de contrôle (« [Exécution planifiée 1/50… »). On
+          // affiche et on pose (une fois) le titre tapé par l'utilisateur ; sinon l'identifiant du fil.
+          if (isControlTitle(event.thread.title)) {
+            const clean = controlTitleRef.current;
+            setThreadLabel(clean ?? session.threadId);
+            if (clean && !retitledRef.current.has(event.thread.id)) {
+              retitledRef.current.add(event.thread.id);
+              void session.renameThread(event.thread.id, clean).catch(() => undefined);
+            }
+          } else setThreadLabel(event.thread.title || session.threadId);
+        }
         return;
       case "bubble.created":
         setBubbles((b) => applyBubbleEvent(b, event, session.threadId));
@@ -717,7 +758,7 @@ export function App({
   }
 
   function feedFromMessages(messages: { role: "user" | "assistant"; content: string }[]): FeedItem[] {
-    return messages.map((m) => ({ kind: m.role, id: nextId(), text: m.content }));
+    return messages.map((m) => ({ kind: m.role, id: nextId(), text: m.role === "assistant" ? hideGoalMarker(m.content) : shownUserText(m.content) }));
   }
 
   async function onSubmit(value: string): Promise<void> {
@@ -746,7 +787,7 @@ export function App({
     // Références `@chemin` : développées avant l'envoi, l'écran garde la ligne tapée (pas les fichiers inlinés).
     let expanded: Awaited<ReturnType<typeof expandAtRefs>> | null = null;
     try {
-      expanded = await expandAtRefs(text, sessionRef.current?.cwd ?? null);
+      expanded = await expandAtRefs(text, sessionRef.current?.cwd ? localDir(sessionRef.current.cwd) : null);
     } catch (err) {
       cliLog("warn", `@ references: ${String(err)}`);
     }
@@ -776,6 +817,12 @@ export function App({
     const session = sessionRef.current;
     if (!session) return;
     const { text, attachments } = item;
+    if (item.kind === "loop") {
+      const l = loopsRef.current.find((x) => x.id === item.loopId);
+      if (l) controlTitleRef.current = loopThreadTitle(l.prompt);
+    }
+    // Vérification /goal : le marqueur GOAL: DONE|CONTINUE est pour goal.ts, pas pour l'écran.
+    const shownText = item.kind === "goalCheck" ? (s: string) => hideGoalMarker(s, true) : (s: string) => s;
     sendingRef.current = true;
     stopRequestedRef.current = false;
     setFeed((f) => [...f, { kind: "user", id: nextId(), text: item.shown }]);
@@ -793,7 +840,7 @@ export function App({
         if (!created) {
           if (!full) return;
           created = true;
-          setFeed((f) => [...f, { kind: "assistant", id: assistantId, text: full }]);
+          setFeed((f) => [...f, { kind: "assistant", id: assistantId, text: shownText(full) }]);
           return;
         }
         // `reset` sans texte (appel fini en outils, tour annulé : le noyau vide le texte partiel avant la réponse finale) :
@@ -803,7 +850,7 @@ export function App({
           setFeed((f) => f.filter((it) => it.id !== assistantId));
           return;
         }
-        setFeed((f) => f.map((it) => (it.id === assistantId && it.kind === "assistant" ? { ...it, text: full } : it)));
+        setFeed((f) => f.map((it) => (it.id === assistantId && it.kind === "assistant" ? { ...it, text: shownText(full) } : it)));
         },
         { attachments, control: CONTROL_OF[item.kind] },
       );
@@ -1007,7 +1054,7 @@ export function App({
           return;
         }
         try {
-          const r = await exportThread(client, session.threadId, { format: cmd.format, file: cmd.file, base: session.cwd ?? process.cwd(), cwd: session.cwd });
+          const r = await exportThread(client, session.threadId, { format: cmd.format, file: cmd.file, base: session.cwd ? localDir(session.cwd) : process.cwd(), cwd: session.cwd });
           pushSystem(t("Exported {0} turn(s) to {1}", r.turns, r.path));
         } catch (err) {
           pushSystem(toolCallError("/export", err));

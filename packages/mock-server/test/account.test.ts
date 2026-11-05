@@ -109,7 +109,9 @@ describe("abonnement", () => {
   it("sans abonnement : plans proposés, checkout, pas de portail", async () => {
     const b = await c.getBillingStatus();
     expect(b.plan).toBeNull();
-    expect(b.plans.map((p) => p.id)).toEqual(["solo", "famille", "large"]);
+    expect(b.plans.map((p) => p.id)).toEqual(["byok", "solo", "famille", "large"]);
+    expect(b.plans.find((p) => p.id === "solo")?.price).toEqual({ amount: 19, currency: "CHF", interval: "month" });
+    expect(b.plans.find((p) => p.id === "large")?.price).toBeUndefined(); // Stripe muet : pas de prix
     expect((await c.billingCheckout("solo")).url).toContain("solo");
     expect((await c.billingPortal().catch((e) => e)).status).toBe(404);
     expect((await c.billingCheckout("nope").catch((e) => e)).status).toBe(400);
@@ -121,6 +123,25 @@ describe("abonnement", () => {
     expect((await c.billingPortal()).url).toContain("stripe");
     expect((await c.billingCheckout("solo").catch((e) => e)).status).toBe(409);
     expect((await c.getAccountUsage()).today.turns.cap).toBe(40);
+  });
+
+  it("code d'essai : vérification, refus, Checkout d'essai ; essai en cours affiché", async () => {
+    const ok = await c.checkVoucher("essai2026");
+    expect(ok).toMatchObject({ ok: true, months: 1 });
+    expect(ok.ok && /^\d{4}-\d{2}-\d{2}$/.test(ok.first_charge_on)).toBe(true);
+    for (const [code, error] of [["PERIME", "code_expired"], ["EPUISE", "code_exhausted"], ["DEJA", "code_used"], ["X1Y", "code_invalid"]]) {
+      expect(await c.checkVoucher(code)).toEqual({ ok: false, error });
+    }
+    expect((await c.billingCheckout("solo", "ESSAI2026")).url).toContain("/trial/solo");
+    expect((await c.billingCheckout("solo", "PERIME").catch((e) => e)).status).toBe(400);
+    Object.assign(accountMock(mock.state), { plan: "solo", status: "trialing" });
+    expect((await c.getBillingStatus()).trial_end).toMatch(/T22:59:59/);
+    expect(await c.checkVoucher("ESSAI2026")).toEqual({ ok: false, error: "code_customer" });
+  });
+
+  it("noyau sans codes d'essai : GET /v1/billing/voucher en 404", async () => {
+    Object.assign(accountMock(mock.state), { vouchers: false });
+    expect((await c.checkVoucher("ESSAI2026").catch((e) => e)).status).toBe(404);
   });
 
   it("abonnement éteint côté noyau : 404 sur /v1/billing/*", async () => {

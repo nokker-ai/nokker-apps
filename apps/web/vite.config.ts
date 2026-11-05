@@ -57,6 +57,15 @@ function swBuildId(): Plugin {
 }
 const walkNames = (d: string): string[] => readdirSync(d).filter((f) => !f.endsWith(".map")).sort();
 
+/** En-têtes de sécurité de deploy/web/security-headers.conf (source unique, servie par nginx en prod), pour `vite preview`
+ * — les e2e en E2E_PREVIEW=1 tournent sous la même CSP. Le serveur de dev n'en porte pas (il injecte du code en ligne). */
+function securityHeaders(): Record<string, string> {
+  const conf = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../deploy/web/security-headers.conf"), "utf8");
+  const out: Record<string, string> = {};
+  for (const m of conf.matchAll(/^\s*add_header\s+([A-Za-z-]+)\s+"([^"]*)"/gm)) out[m[1]!] = m[2]!;
+  return out;
+}
+
 export default defineConfig({
   plugins: [react(), brandAssets(), swBuildId()],
   // Pages and tabs load lazily: without this, the first lazy import makes Vite discover new dependencies, optimise them
@@ -74,6 +83,7 @@ export default defineConfig({
       "/healthz": { target, changeOrigin: true },
     },
   },
+  preview: { headers: securityHeaders() },
   build: {
     outDir: "dist",
     sourcemap: true,

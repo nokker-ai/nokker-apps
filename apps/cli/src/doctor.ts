@@ -35,6 +35,8 @@ export interface DoctorOptions {
   http?: (url: string, init?: { signal?: AbortSignal }) => Promise<{ status: number }>;
   /** Test : remplace `fetch` pour les sondes HTTP. */
   fetchImpl?: ConstructorParameters<typeof NokkerClient>[0]["fetchImpl"];
+  /** Test : plateforme de la CLI (défaut `process.platform`). */
+  platform?: NodeJS.Platform;
 }
 
 const CANDIDATES = ["http://127.0.0.1:8742", "http://127.0.0.1:4310"];
@@ -241,9 +243,14 @@ export async function runDoctor(opts: DoctorOptions): Promise<{ checks: Check[];
 
   // 6. git
   const git = await run("git", ["--version"], { timeoutMs: 5000 });
+  // Sous Windows avec la pile dans WSL (lokkal.json `wsl_distro`), /diff et les points de retour tournent dans WSL : un git
+  // absent côté Windows n'empêche rien, c'est un avertissement, pas un échec.
+  const wslHost = (opts.platform ?? process.platform) === "win32" && !!hostCfg?.wsl_distro;
   checks.push(git.code === 0
     ? { name: "git", status: "ok", detail: git.stdout.trim() }
-    : { name: "git", status: "ko", detail: t("git is missing from the host (needed for /diff and checkpoints)") });
+    : wslHost
+      ? { name: "git", status: "warn", detail: t("git not found on Windows — not needed: /diff and checkpoints run in WSL ({0})", hostCfg!.wsl_distro!) }
+      : { name: "git", status: "ko", detail: t("git is missing from the host (needed for /diff and checkpoints)") });
 
   // 7. coffre (X4) : seulement si l'installation utilise OpenBao (sinon aucune ligne)
   if (dockerOk && composeReady) {

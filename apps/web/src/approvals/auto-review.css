@@ -1,0 +1,53 @@
+/* Automatic review on an approval card (APPROVALS.md §8). Tokens of theme.css only. */
+.ar-block {
+  display: grid;
+  gap: 6px;
+  margin: 4px 0 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.ar-head {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.ar-reason {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.ar-rollback {
+  display: grid;
+  gap: 4px;
+}
+.ar-rollback .fine,
+.ar-none {
+  margin: 0;
+}
+.ar-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.ar-files li {
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.ar-conflict {
+  color: var(--ko);
+  font-size: 12px;
+}
+.ar-conflicts {
+  margin-top: 4px;
+}
+/* Decided by the reviewer: compact, no waiting look. */
+.ar-compact {
+  display: grid;
+  gap: 4px;
+}
+.ar-compact .bubble-actions {
+  margin-top: 2px;
+}

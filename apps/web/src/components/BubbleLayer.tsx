@@ -280,7 +280,9 @@ export function BubbleLayer({
     return { x: r.left - L.left, y: r.top - L.top, w: r.width, h: r.height };
   }, []);
   const usable = useCallback((): Rect => {
-    const layer = layerRef.current!;
+    const layer = layerRef.current;
+    // Appelé par une minuterie ou un redimensionnement juste après un démontage : rien à poser.
+    if (!layer) return { x: 0, y: 0, w: 0, h: 0 };
     const drawer = rel(document.querySelector(".drawer"));
     const top = rel(document.querySelector(".topbar"));
     const x = (drawer ? drawer.x + drawer.w : 0) + 16;

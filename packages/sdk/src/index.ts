@@ -1,5 +1,7 @@
 export * from "./types.js";
 export * from "./onboarding.js";
+export * from "./connectors-multi.js";
+export * from "./connectors-oauth.js";
 export * from "./bubbles.js";
 export * from "./canonical.js";
 export * from "./sse.js";
@@ -17,6 +19,9 @@ export * from "./editor-session.js";
 export * from "./local-machine.js";
 export * from "./lsp.js";
 export * from "./local-setup.js";
+export * from "./account-models.js";
+export * from "./capabilities.js";
+export * from "./money.js";
 export * from "./team.js";
 export * from "./sso.js";
 export * from "./mirror.js";

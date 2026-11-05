@@ -7,16 +7,19 @@ import { Drawer } from "./components/Drawer.js";
 import { Chat } from "./components/Chat.js";
 import { BubbleLayer } from "./components/BubbleLayer.js";
 import { DeletingScreen } from "./components/DeletingScreen.js";
+import { TermsReaccept } from "./components/TermsReaccept.js";
 import { FirstSteps } from "./onboarding/FirstSteps.js";
 import { SessionModeBar, modeTarget } from "./modes/SessionModeBar.js";
 import { ConnectorsTab, uiLang } from "./components/ConnectorsTab.js";
-import { tr } from "./i18n/index.js";
-import { t } from "./onboarding/i18n.js";
+import { shellLang, tr } from "./i18n/index.js";
+import { normLang, t, type Lang } from "./onboarding/i18n.js";
 import { AccountMenu } from "./nav/AccountMenu.js";
 import { LearningView } from "./learning/LearningView.js";
 import { CommandPalette, type Command } from "./nav/CommandPalette.js";
 import { navViews, type ViewId } from "./nav/views.js";
 import { readJson, writeJson } from "./viewState.js";
+import { ACCOUNT_PATHS, CONNECTORS_PATHS, cleanAccountUrl, readBillingReturn, type BillingReturn } from "./account/links.js";
+import { capability, off } from "./capabilities.js";
 import { Icon } from "./icons.js";
 import { KnockIndicator } from "./knock/KnockIndicator.js";
 import { PresenceMenu } from "./presence/PresenceMenu.js";
@@ -28,6 +31,8 @@ import { ShowMeOverlay } from "./showme/ShowMeOverlay.js";
 import { pointLocally } from "./showme/local.js";
 import { GuidePanel } from "./guide/GuidePanel.js";
 import { guideEnabled, parseGuideCommand } from "./guide/model.js";
+import { PayPromptDock } from "./payments/PayPromptDock.js";
+import { ThreeDSDock } from "./payments/ThreeDSDock.js";
 
 // Tabs other than chat and connectors load on first opening: the first screen does not download them.
 const HouseView = lazy(() => import("./house/HouseView.js").then((m) => ({ default: m.HouseView })));
@@ -76,7 +81,20 @@ export function App(): React.ReactElement {
   const narrow = useMedia("(max-width: 760px)");
   // `/journey` : « Ce que Nokker a appris » ouvert d'emblée (lien direct, docs/LEARNING.md).
   const journey = typeof location !== "undefined" && location.pathname === "/journey";
-  const [wanted, setTab] = useState<Tab>(() => (journey ? "learning" : readJson<Tab>("tab", "chat")));
+  // Retour du KYC hébergé par Wise (PAY-AGENT §10.1, `?wise=kyc&status=…`) : on reprend sur Mon compte.
+  // Retour de Stripe Checkout (`/account?billing=success|cancel`, nokker/billing) et liens `/account`, `/pricing` :
+  // Mon compte, avec un message pour le retour de paiement ; l'adresse revient à « / » sans `billing`.
+  const [billingReturn] = useState<BillingReturn | null>(() => readBillingReturn(window.location.search));
+  const accountLink = typeof location !== "undefined" && ACCOUNT_PATHS.has(location.pathname);
+  // Retour d'une connexion OAuth (`/account/connectors?oauth=…`) : l'onglet Connecteurs, adresse nettoyée.
+  const connectorsLink = typeof location !== "undefined" && CONNECTORS_PATHS.has(location.pathname);
+  useEffect(() => {
+    if (!accountLink && !billingReturn && !connectorsLink) return;
+    history.replaceState(history.state, "", cleanAccountUrl(location.search, location.hash));
+  }, [accountLink, billingReturn, connectorsLink]);
+  const [wanted, setTab] = useState<Tab>(() =>
+    journey ? "learning" : connectorsLink ? "connectors" : accountLink || billingReturn || new URLSearchParams(window.location.search).has("wise") ? "account" : readJson<Tab>("tab", "chat"),
+  );
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [crewPulse, setCrewPulse] = useState(false);
   const [freshAgent, setFreshAgent] = useState<string | null>(null);
@@ -121,10 +139,44 @@ export function App(): React.ReactElement {
 
   useEffect(() => writeJson("tab", wanted), [wanted]);
 
+  // Conditions modifiées (core `terms_outdated`) : écran bloquant de réacceptation, comptes de nokker.ai seulement
+  // (Lokkal n'a pas de conditions de compte). Un noyau d'avant (champ absent) ou une erreur : rien ne bloque.
+  const [reaccept, setReaccept] = useState<Lang | null>(null);
+  const [langTick, setLangTick] = useState(0);
+  useEffect(() => {
+    if (!store.ready || store.authMode === "local") return;
+    let live = true;
+    store.client.getAccount().then(
+      (a) => {
+        if (!live) return;
+        setReaccept(a.terms_outdated === true ? normLang(a.terms_current?.lang ?? a.lang) : null);
+        // La langue du compte l'emporte sur celle du navigateur (nouveau navigateur, reconnexion par code) : elle est
+        // mémorisée comme à l'onboarding, et la coque se redessine une fois dans cette langue.
+        const L = a.lang ? normLang(a.lang) : null;
+        if (L && L !== readJson<string>("lang", "")) {
+          // Redessiner seulement si la langue AFFICHÉE change : à la première connexion la langue mémorisée est vide
+          // alors que l'interface est déjà dans la bonne langue (navigateur), et un redessin inutile démontait la
+          // couche des bulles sous ses propres minuteries.
+          const shown = shellLang();
+          writeJson("lang", L);
+          if (L !== shown) {
+            document.documentElement.lang = L;
+            setLangTick((n) => n + 1);
+          }
+        }
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [store.ready, store.authMode, store.client]);
+
   // X17 : l'onglet Équipe n'existe que si nokker.ai sert les projets (drapeau `team` ; sinon 404 comme avant).
   const [teamInvites, setTeamInvites] = useState<number | null>(null);
   useEffect(() => {
     if (!store.ready || store.authMode === "local") return;
+    if (off("team")) return setTeamInvites(null);
     let live = true;
     store.client.listProjects().then(
       (r) => live && setTeamInvites(r.invitations),
@@ -142,6 +194,7 @@ export function App(): React.ReactElement {
   const [learningTick, setLearningTick] = useState(0);
   useEffect(() => {
     if (!store.ready) return;
+    if (off("learning")) return setLearning(null);
     let live = true;
     const probe = (): void => {
       void Promise.allSettled([store.client.listPendingMemory(), store.client.listApprovalSuggestions(), store.client.getLearningJournal(1)]).then(([p, s, j]) => {
@@ -163,6 +216,7 @@ export function App(): React.ReactElement {
   const [householdInvites, setHouseholdInvites] = useState<number | null>(null);
   useEffect(() => {
     if (!store.ready || store.authMode === "local") return;
+    if (off("household")) return setHouseholdInvites(null);
     let live = true;
     store.client.listReceivedHouseholdInvitations().then(
       (r) => live && setHouseholdInvites(r.invitations.length),
@@ -177,6 +231,9 @@ export function App(): React.ReactElement {
   const [houseOn, setHouseOn] = useState(false);
   useEffect(() => {
     if (!store.ready || store.authMode === "local") return;
+    // `house` dit déjà si l'appelant est membre d'un foyer où la salle est allumée : plus de sonde.
+    const known = capability("house");
+    if (known !== null) return setHouseOn(known);
     let live = true;
     store.client.getHouse().then(
       () => live && setHouseOn(true),
@@ -193,14 +250,20 @@ export function App(): React.ReactElement {
   useEffect(() => {
     if (!store.ready) return;
     let live = true;
-    store.client.listIncidents({ state: "live" }).then(
-      (r) => live && setLiveIncidents(r.incidents.length),
-      () => live && setLiveIncidents(null),
-    );
-    store.client.listPlanCards({ roots: true }).then(
-      () => live && setPlanOn(true),
-      () => live && setPlanOn(false),
-    );
+    // `operate` / `plan` : une capacité absente (noyau d'avant) garde la sonde ; connue et vraie, le compte reste lu.
+    if (capability("operate") === false) setLiveIncidents(null);
+    else
+      store.client.listIncidents({ state: "live" }).then(
+        (r) => live && setLiveIncidents(r.incidents.length),
+        () => live && setLiveIncidents(null),
+      );
+    const plan = capability("plan");
+    if (plan !== null) setPlanOn(plan);
+    else
+      store.client.listPlanCards({ roots: true }).then(
+        () => live && setPlanOn(true),
+        () => live && setPlanOn(false),
+      );
     return () => {
       live = false;
     };
@@ -210,6 +273,9 @@ export function App(): React.ReactElement {
   const [packsOn, setPacksOn] = useState(false);
   useEffect(() => {
     if (!store.ready) return;
+    // `packs` = routes /v1/packs* d'un compte us_ ; Lokkal lit /v1/local/packs, qu'aucune capacité ne décrit : sonde.
+    const known = store.authMode === "local" ? null : capability("packs");
+    if (known !== null) return setPacksOn(known);
     let live = true;
     (store.authMode === "local" ? store.client.listLocalPacks() : store.client.listPacks()).then(
       () => live && setPacksOn(true),
@@ -224,6 +290,7 @@ export function App(): React.ReactElement {
   const [folderOn, setFolderOn] = useState(false);
   useEffect(() => {
     if (!store.ready || store.authMode !== "local") return;
+    if (off("local")) return setFolderOn(false);
     let live = true;
     store.client.listFolderRuns().then(
       () => live && setFolderOn(true),
@@ -238,6 +305,8 @@ export function App(): React.ReactElement {
   const [codeOn, setCodeOn] = useState(false);
   useEffect(() => {
     if (!store.ready || store.authMode === "local") return;
+    const code = capability("code");
+    if (code !== null) return setCodeOn(code);
     let live = true;
     store.client.listCodeSessions().then(
       () => live && setCodeOn(true),
@@ -389,10 +458,11 @@ export function App(): React.ReactElement {
   if (store.access !== "ready") {
     return <Welcome {...store} lang={uiLang()} />;
   }
+  if (reaccept !== null) return <TermsReaccept client={store.client} lang={reaccept} onDone={() => setReaccept(null)} />;
 
   return (
     <StoreContext.Provider value={store}>
-      <div className={`app ${narrow ? "narrow" : ""} ${narrow && drawerOpen ? "drawer-open" : ""}`}>
+      <div key={langTick} className={`app ${narrow ? "narrow" : ""} ${narrow && drawerOpen ? "drawer-open" : ""}`}>
         <a href="#nk-composer" className="skip">
           {tr("Skip to message")}
         </a>
@@ -628,6 +698,8 @@ export function App(): React.ReactElement {
               lang={uiLang()}
               onGone={store.markAccountGone}
               onSignOut={store.authMode === "device-key" || store.authMode === "passkey" ? store.forgetDeviceAndRetry : undefined}
+              signDecision={store.signDecision ?? null}
+              billingReturn={billingReturn}
             />
           ) : store.ready && tab === "connectors" ? (
             <ConnectorsTab client={store.client} lang={uiLang()} />
@@ -666,6 +738,8 @@ export function App(): React.ReactElement {
             }}
           />
         ) : null}
+        {store.ready ? <ThreeDSDock client={store.client} rev={store.payAgentRev} signDecision={store.authMode === "passkey" ? (store.signDecision ?? null) : null} /> : null}
+        {store.ready ? <PayPromptDock client={store.client} rev={store.payAgentRev} /> : null}
         <div className="toasts" aria-live="polite">
           {store.toasts.map((t) => (
             <div key={t.id} className={`toast ${t.tone ?? ""}`}>

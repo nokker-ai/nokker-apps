@@ -4,7 +4,7 @@ type IconName =
   | "disk" | "search" | "bell" | "timer" | "terminal" | "play" | "page" | "image" | "bot" | "shield" | "screen" | "pointer"
   | "chevronDown" | "chevronUp" | "share" | "close" | "send" | "plus" | "grip" | "arrowRight"
   | "link" | "check" | "soundOn" | "soundOff" | "menu" | "chat" | "crew" | "goto" | "sun" | "moon" | "folder"
-  | "user" | "users" | "home" | "box" | "plug" | "alert" | "plan" | "code" | "cpu" | "back" | "mic" | "micOff";
+  | "user" | "users" | "home" | "box" | "plug" | "alert" | "plan" | "code" | "cpu" | "back" | "mic" | "micOff" | "pause";
 
 const P: Record<IconName, React.ReactNode> = {
   disk: (<><ellipse cx="12" cy="6" rx="8" ry="3" /><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6" /><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></>),
@@ -31,6 +31,7 @@ const P: Record<IconName, React.ReactNode> = {
   link: (<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.5 1.5" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.5-1.5" /></>),
   check: <path d="M5 12l5 5 9-10" />,
   soundOn: (<><path d="M4 10v4h4l5 4V6L8 10z" /><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11" /></>),
+  pause: (<><path d="M9 6v12M15 6v12" /></>),
   soundOff: (<><path d="M4 10v4h4l5 4V6L8 10z" /><path d="M17 9l5 6M22 9l-5 6" /></>),
   menu: <path d="M4 7h16M4 12h16M4 17h16" />,
   chat: <path d="M5 5h14v10H9l-4 4z" />,

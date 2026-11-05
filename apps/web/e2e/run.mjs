@@ -15,6 +15,7 @@
  * Browsers: `playwright-core` downloads none; run `npx playwright-core install chromium` once if needed.
  */
 import { spawn, spawnSync } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -22,6 +23,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import { chromium } from "playwright-core";
+import { cspWatch, webCommand } from "./web-server.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const WEB = resolve(HERE, "..");
@@ -29,13 +31,17 @@ const MOCK = resolve(WEB, "../../packages/mock-server");
 const EMAIL = "alice@example.com";
 const CODE = "123456"; // MOCK_EMAIL_CODE
 const STEP_MS = Number(process.env.E2E_STEP_MS ?? 15000);
-const PREVIEW = !!process.env.E2E_PREVIEW;
+const PREVIEW = process.env.E2E_PREVIEW === "1";
 const SHOTS = process.env.E2E_SHOTS ? resolve(process.env.E2E_SHOTS) : null;
 
 /** 4xx that are part of the contract: feature probes off by default, local-only routes outside Lokkal. */
 const ALLOWED_4XX = [
-  [404, /\/v1\/(packs|code\/sessions|household\/invitations\/received|sso\/connections|glance\/devices|house|presence|memory\/consolidation\/runs|payments\/budgets|payments\/mandates|local\/folder\/runs)(\?|$)/],
+  [404, /\/v1\/(speech|billing\/voucher|account\/models|capabilities|packs|code\/sessions|household\/invitations\/received|sso\/connections|glance\/devices|house|presence|memory\/consolidation\/runs|payments\/budgets|payments\/mandates|payments\/method|local\/folder\/runs)(\?|$)/],
   [401, /\/v1\/local\//],
+  // « Ta carte » journey: approving before the machine has a passkey (the card says to create one).
+  [412, /\/v1\/local\/approvals\/[^/]+\/challenge$/],
+  // Models journey: a private address refused by the server (blocked_address).
+  [400, /\/v1\/account\/models\/test$/],
 ];
 
 const PHONE = {
@@ -87,15 +93,11 @@ async function startServers() {
   // Folder mode: a folder of files to sort (the mock only lists it, never writes).
   mkdirSync(join(work, "photos"), { recursive: true });
   for (const f of ["a.jpg", "b.jpg", "notes.txt"]) writeFileSync(join(work, "photos", f), "x");
-  const env = { ...process.env, NOKKER_CONFIG_DIR_OVERRIDE: cfg, MOCK_PORT: String(mockPort), MOCK_LOCAL_ROOTS: work, MOCK_CAST: "1", MOCK_HOUSE_ROOM: "1", MOCK_WHO_DOES_WHAT: "1", MOCK_CONSOLIDATION: "1", MOCK_PAYMENTS: "1", MOCK_FOLDER: "1", MOCK_SHOW_ME: "1", MOCK_GUIDE: "1" };
-  if (PREVIEW) {
-    // VITE_* flags are read at build time: « show me » must be on in the built web too, not only for `vite preview`.
-    const b = spawnSync("npx", ["vite", "build"], { cwd: WEB, stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, VITE_NOKKER_SHOW_ME: process.env.VITE_NOKKER_SHOW_ME ?? "1", VITE_NOKKER_GUIDE: process.env.VITE_NOKKER_GUIDE ?? "1" } });
-    if (b.status !== 0) throw new Error("vite build failed");
-  }
+  const env = { ...process.env, NOKKER_CONFIG_DIR_OVERRIDE: cfg, MOCK_PORT: String(mockPort), MOCK_LOCAL_ROOTS: work, MOCK_CAST: "1", MOCK_HOUSE_ROOM: "1", MOCK_WHO_DOES_WHAT: "1", MOCK_CONSOLIDATION: "1", MOCK_PAYMENTS: "1", MOCK_APPROVAL_BUBBLES: "1", MOCK_TTS: "1", MOCK_FOLDER: "1", MOCK_SHOW_ME: "1", MOCK_GUIDE: "1", MOCK_CLOUD_BYOK: "open" };
+  // E2E_PREVIEW=1 : build (VITE_NOKKER_SHOW_ME / VITE_NOKKER_GUIDE allumés) puis `vite preview`, voir web-server.mjs.
   const procs = [
     spawn("npx", ["tsx", "src/run.ts"], { cwd: MOCK, env, stdio: ["ignore", "ignore", "inherit"], detached: true }),
-    spawn("npx", [...(PREVIEW ? ["vite", "preview"] : ["vite"]), "--port", String(webPort), "--strictPort", "--host", "127.0.0.1"], {
+    spawn("npx", [...webCommand(), "--port", String(webPort), "--strictPort", "--host", "127.0.0.1"], {
       cwd: WEB,
       // « Show me » is a build flag (VITE_NOKKER_SHOW_ME), off by default: on here so its journey runs.
       env: { ...process.env, NOKKER_SERVER_URL: `http://127.0.0.1:${mockPort}`, VITE_NOKKER_SHOW_ME: process.env.VITE_NOKKER_SHOW_ME ?? "1", VITE_NOKKER_GUIDE: process.env.VITE_NOKKER_GUIDE ?? "1" },
@@ -127,6 +129,7 @@ async function startServers() {
 class StepError extends Error {}
 
 function watch(page, problems) {
+  cspWatch(page, () => page.url().replace(/^https?:\/\/[^/]+/, ""));
   page.on("pageerror", (e) => problems.push(`page error: ${e.message}`));
   page.on("response", (r) => {
     const s = r.status();
@@ -706,6 +709,12 @@ async function cast(page, base, t) {
     throw new StepError("no cast bubble (is the mock started with MOCK_CAST=1?)");
   });
   const frame = body.locator("iframe.cast-frame");
+  await frame.waitFor({ timeout: STEP_MS }).catch(() => {
+    throw new StepError("no cast preview frame");
+  });
+  // Cadre signé du noyau (p2/cast-frame) : src, jamais srcdoc (une page srcdoc hériterait de la CSP de l'app).
+  const src = await frame.getAttribute("src");
+  if (!src || !/\/v1\/cast\/[^/]+\/frame\?exp=\d+&sig=/.test(src) || (await frame.getAttribute("srcdoc")) !== null) throw new StepError(`cast preview is not the signed frame: src=${src}`);
   const sandbox = await frame.getAttribute("sandbox");
   if (sandbox !== "allow-scripts") throw new StepError(`cast preview sandbox is « ${sandbox} », expected « allow-scripts » only`);
   if (!/nothing is shown before you approve/i.test(await body.innerText())) throw new StepError("no « nothing is shown before you approve »");
@@ -716,6 +725,28 @@ async function cast(page, base, t) {
   await body.locator("button", { hasText: "Stop" }).click();
   await until(page, "cast stopped", () => !document.querySelector(".bubble-body.cast button"));
   await shot(page, "cast-stopped");
+}
+
+/** Page de l'agent (BUBBLES §10) : la bulle artifact montre la page signée dans son iframe (frame-src 'self' de la CSP),
+ * et le contenu de la page s'y affiche. */
+async function artifact(page, base, t) {
+  await login(page, base, t);
+  await newSession(page, `e2e page ${tag()}`);
+  await page.fill("#nk-composer", "create a page Budget review");
+  await page.click("button.send");
+  const frame = page.locator("iframe.artifact-iframe").first();
+  await frame.waitFor({ timeout: STEP_MS }).catch(() => {
+    throw new StepError("no page preview in the artifact bubble");
+  });
+  const src = await frame.getAttribute("src");
+  if (!src) throw new StepError("artifact iframe without src");
+  const inner = page.frameLocator("iframe.artifact-iframe").first().locator("body");
+  await inner.waitFor({ timeout: STEP_MS }).catch(() => {
+    throw new StepError(`the page did not load in its frame (src ${src.replace(/\?.*/, "")})`);
+  });
+  if (!(await inner.innerText()).trim()) throw new StepError("the page frame is empty");
+  await noOverflow(page, "artifact bubble");
+  await shot(page, "artifact");
 }
 
 /** A 320×200 PNG that looks like a screen: a bar, text lines, and a coral « button » around (72 %, 18 %). */
@@ -950,14 +981,15 @@ async function payments(page, base, t) {
     throw new StepError("no « to pay » block (is the mock started with MOCK_PAYMENTS=1?)");
   });
   const text = await block.innerText();
-  if (!/Papeterie Centrale/.test(text) || !/59\.80 CHF/.test(text)) throw new StepError(`the purchase is not shown: « ${text.slice(0, 80)} »`);
+  if (!/Papeterie Centrale/.test(text) || !/(?:59\.80\s?CHF|CHF\s?59\.80)/.test(text)) throw new StepError(`the purchase is not shown: « ${text.slice(0, 80)} »`);
   if (!/Only a passkey approves/.test(text)) throw new StepError("no « only a passkey approves »");
   const card = block.locator("xpath=ancestor::div[contains(@class,'bubble-body')][1]");
   if (await card.locator("form.totp").count()) throw new StepError("a TOTP form on a « to pay » card");
   await noOverflow(page, "to pay card");
   await shot(page, "pay-card");
   await openView(page, "account");
-  const spending = page.locator(".pay-card");
+  // The Spending card, not the payment method's (same look, `data-pay-method`, present when the payment agent is on).
+  const spending = page.locator(".pay-card:not([data-pay-method])");
   await spending.waitFor({ timeout: STEP_MS }).catch(() => {
     throw new StepError("no Spending card in My account");
   });
@@ -970,9 +1002,103 @@ async function payments(page, base, t) {
 
 /** Spending on a phone (no household: the account alone, payer of itself): the order of the caps is checked before
  * saving; a saved budget replaces the default one; back to the default. */
+/** Formules (SubscriptionCard) : chaque bouton « Choisir … » tient sur une ligne, sans débordement, puis capture. */
+async function planButtonsOneLine(page) {
+  const plans = page.locator("li[data-plan] > button");
+  await plans.first().waitFor({ timeout: STEP_MS });
+  // Lignes du libellé : les rectangles d'une plage sur son texte, groupés par ligne (deux hauteurs égales ne prouvent rien).
+  const wrapped = await plans.evaluateAll((bs) =>
+    bs
+      .map((b) => {
+        const r = document.createRange();
+        r.selectNodeContents(b);
+        return { text: b.textContent?.trim() ?? "", lines: new Set([...r.getClientRects()].map((x) => Math.round(x.top))).size };
+      })
+      .filter((x) => x.lines > 1),
+  );
+  if (wrapped.length) throw new StepError(`plan buttons on two lines: ${wrapped.map((x) => `« ${x.text} »`).join(", ")}`);
+  await page.locator("#acc-sub").scrollIntoViewIfNeeded();
+  await noOverflow(page, "subscription plans");
+  await shot(page, "account-plans");
+}
+
+/** Code d'essai (voucher, core docs/VOUCHERS.md ; mock ESSAI2026 / PERIME) : un lien `?code=` ouvre Mon compte avec le
+ * code vérifié d'emblée, les formules passent en « Commencer l'essai … » sur une ligne, puis un code périmé est refusé
+ * sous le champ. Le Checkout lui-même n'est pas suivi (page Stripe). */
+async function voucher(page, base, t) {
+  await login(page, base, t);
+  await page.goto(`${base}/account?code=essai2026`);
+  await page.locator("[data-voucher=ok]").waitFor({ timeout: STEP_MS }).catch(() => {
+    throw new StepError("a ?code= link did not give a checked trial code in My account");
+  });
+  const fr = (await page.evaluate(() => document.documentElement.lang)) === "fr";
+  const labels = await page.locator("li[data-plan] > button").allInnerTexts();
+  if (!labels.length || !labels.every((l) => (fr ? /Commencer l.essai/ : /Start the .* trial/).test(l)))
+    throw new StepError(`plan buttons are not trial buttons: ${labels.join(" | ")}`);
+  if (new URL(page.url()).searchParams.has("code")) throw new StepError("the code stays in the address bar");
+  await planButtonsOneLine(page);
+  await shot(page, "account-trial");
+  const input = page.locator("#acc-code-in");
+  await input.fill("perime");
+  await page.locator(".acc-code button[type=submit]").click();
+  await page.locator("[data-voucher=code_expired]").waitFor({ timeout: STEP_MS }).catch(() => {
+    throw new StepError("an expired code is not refused under the field");
+  });
+  await noOverflow(page, "trial code refused");
+}
+
+/** Noyau d'avant les codes d'essai (`GET /v1/billing/voucher` en 404) : un lien `?code=` ouvre Mon compte sans essai,
+ * sans champ ni « J'ai un code », sans message d'erreur ; les formules restent « Choisir … ». */
+async function voucherOff(page, base, t, local) {
+  if (!local?.api) return void (t.skipped = "no local token");
+  await login(page, base, t);
+  const mock = async (body) =>
+    (await fetch(`${local.api}/v1/dev/account-mock`, { method: "POST", headers: { Authorization: `Bearer ${local.token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) })).status;
+  if ((await mock({ vouchers: false })) !== 200) throw new StepError("account mock refused vouchers:false");
+  try {
+    await page.goto(`${base}/account?code=essai2026`);
+    await page.locator("li[data-plan] > button").first().waitFor({ timeout: STEP_MS });
+    await page.waitForResponse((r) => /\/v1\/billing\/voucher\?/.test(r.url()), { timeout: STEP_MS }).catch(() => undefined);
+    await page.waitForTimeout(300);
+    if (await page.locator("#acc-code-in").count()) throw new StepError("the code field stays when the core has no vouchers");
+    if (await page.locator(".acc-code-open").count()) throw new StepError("« I have a code » stays when the core has no vouchers");
+    if (await page.locator("#acc-sub ~ * [role=alert], section[aria-labelledby=acc-sub] [role=alert]").count()) throw new StepError("an error is shown for a core without vouchers");
+    const labels = await page.locator("li[data-plan] > button").allInnerTexts();
+    if (labels.some((l) => /trial|essai/i.test(l))) throw new StepError(`trial buttons without vouchers: ${labels.join(" | ")}`);
+    if (new URL(page.url()).searchParams.has("code")) throw new StepError("the code stays in the address bar");
+    await planButtonsOneLine(page);
+  } finally {
+    await mock({ vouchers: true });
+  }
+}
+
+/** Essai résilié (cancel_at_period_end pendant l'essai) : Mon compte dit qu'il s'arrête à la fin de l'essai sans débit,
+ * jamais « premier débit ce jour-là ». */
+async function trialCancelled(page, base, t, local) {
+  if (!local?.api) return void (t.skipped = "no local token");
+  await login(page, base, t);
+  const mock = async (body) =>
+    (await fetch(`${local.api}/v1/dev/account-mock`, { method: "POST", headers: { Authorization: `Bearer ${local.token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) })).status;
+  if ((await mock({ plan: "solo", status: "trialing", cancelling: true })) !== 200) throw new StepError("account mock refused a cancelled trial");
+  try {
+    await openView(page, "account");
+    const note = page.locator("[data-trial-end][data-cancelling]");
+    await note.waitFor({ timeout: STEP_MS }).catch(() => {
+      throw new StepError("a cancelled trial is not shown as cancelled");
+    });
+    const text = await note.innerText();
+    if (/premier débit|first charge/i.test(text)) throw new StepError(`a cancelled trial still announces a charge: ${text}`);
+    if (!/rien ne sera débité|nothing will be charged/.test(text)) throw new StepError(`no « nothing will be charged »: ${text}`);
+    await noOverflow(page, "cancelled trial");
+  } finally {
+    await mock({ plan: null, status: null, cancelling: false });
+  }
+}
+
 async function budgets(page, base, t) {
   await login(page, base, t);
   await openView(page, "account");
+  await planButtonsOneLine(page);
   const me = page.locator(".pay-lines > li").first();
   await me.waitFor({ timeout: STEP_MS }).catch(() => {
     throw new StepError("no budget line (is the mock started with MOCK_PAYMENTS=1?)");
@@ -988,11 +1114,84 @@ async function budgets(page, base, t) {
   await noOverflow(page, "budget editor");
   await shot(page, "budget-editor");
   await me.locator("button", { hasText: "Save" }).click();
-  await until(page, "own budget saved", () => /own budget/.test(document.querySelector(".pay-lines > li")?.textContent ?? "") && /80\.00 CHF per purchase/.test(document.querySelector(".pay-lines > li")?.textContent ?? ""));
+  await until(page, "own budget saved", () => /own budget/.test(document.querySelector(".pay-lines > li")?.textContent ?? "") && /(?:80\.00\s?CHF|CHF\s?80\.00) per purchase/.test(document.querySelector(".pay-lines > li")?.textContent ?? ""));
   await shot(page, "budget-saved");
   await me.locator("button", { hasText: "Change" }).click();
   await me.locator("button", { hasText: "Back to the default budget" }).click();
   await until(page, "back to the default budget", () => /default budget/.test(document.querySelector(".pay-lines > li")?.textContent ?? ""));
+}
+
+/** On a phone, typing folds the thread's bubbles into one bar: open it again. */
+async function unfoldBubbles(page) {
+  if (await page.locator(".bubble-fold").count()) await page.click(".bubble-fold");
+}
+
+/** Automatic review (APPROVALS.md §8): a file write approved by the reviewer is revoked from its card, the restore
+ * point lists the files, « Restore files » puts back the one unchanged since and says the other was modified since;
+ * after a reload the card says it was already restored; a calendar write has no restore point (a line, no button).
+ * Same journey in English and French. */
+async function autoReview(page, base, t) {
+  await login(page, base, t);
+  const fr = (await page.evaluate(() => document.documentElement.lang)) === "fr";
+  await newSession(page, `e2e review ${tag()}`);
+  await send(page, "auto-review", "restore the files");
+  await unfoldBubbles(page);
+  // Decided by the reviewer: a compact card, nothing that reads as waiting for a decision.
+  const compact = page.locator(".ar-compact[data-auto-review=approve]").last();
+  await compact.waitFor({ timeout: STEP_MS }).catch(() => {
+    throw new StepError("no compact card for the automatic approval");
+  });
+  if (!(fr ? /Approuvé automatiquement/ : /Approved automatically/).test(await compact.innerText())) throw new StepError("« Approved automatically » is not said");
+  // The bubble (stable), not the card body: the compact card is replaced by the full one after revoking.
+  const body = page.locator(`article[data-bubble-id="${await compact.locator("xpath=ancestor::article[@data-bubble-id][1]").getAttribute("data-bubble-id")}"]`);
+  if (await body.locator(".btn-brass, form.totp, .kv").count()) throw new StepError("the automatic approval reads like a card waiting for a decision");
+  await noOverflow(page, "compact card");
+  await shot(page, "auto-review-card");
+  await compact.locator("[data-ar=revoke]").click();
+  const block = body.locator(".ar-block[data-auto-review=approve]");
+  await block.locator("[data-ar=restore]").waitFor({ timeout: STEP_MS }).catch(() => {
+    throw new StepError("no « Restore files » after revoking");
+  });
+  const listed = await block.locator(".ar-files li").allInnerTexts();
+  if (listed.join("|") !== "notes/plan.md|src/settings.json") throw new StepError(`files of the restore point: ${listed.join(", ")}`);
+  if (await body.locator("[data-ar=revoke]").count()) throw new StepError("« Revoke » still offered after revoking");
+  await noOverflow(page, "restore point");
+  await shot(page, "auto-review-revoked");
+  await block.locator("[data-ar=restore]").click();
+  const done = block.locator("[data-ar=restored]");
+  await done.waitFor({ timeout: STEP_MS }).catch(() => {
+    throw new StepError("no result after « Restore files »");
+  });
+  const conflict = fr ? /src\/settings\.json\s+modifié depuis, non restauré/ : /src\/settings\.json\s+modified since, not restored/;
+  const text = await done.innerText();
+  if (!/notes\/plan\.md/.test(text)) throw new StepError("the restored file is not listed");
+  if (!conflict.test(text)) throw new StepError(`the conflict is not said: « ${text.slice(0, 120)} »`);
+  if (await block.locator("[data-ar=restore]").count()) throw new StepError("« Restore files » still offered after restoring");
+  await noOverflow(page, "restored");
+  await shot(page, "auto-review-restored");
+  // After a reload the card reads its restore point from GET: already restored, with what was put back.
+  await page.reload();
+  await page.waitForSelector("#nk-composer", { timeout: STEP_MS });
+  await unfoldBubbles(page);
+  const again = page.locator(".ar-block[data-auto-review=approve]").last();
+  await again.locator("[data-ar=already]").waitFor({ timeout: STEP_MS }).catch(() => {
+    throw new StepError("« Already restored » is not said after a reload");
+  });
+  const after = await again.innerText();
+  if (!/notes\/plan\.md/.test(after) || !conflict.test(after)) throw new StepError(`what was restored is lost after a reload: « ${after.slice(0, 160)} »`);
+  if (await again.locator("[data-ar=restore], [data-ar=revoke]").count()) throw new StepError("an action is offered on a card already restored");
+  await shot(page, "auto-review-reloaded");
+  // A session of its own: on a phone the bubbles of a thread stack, one shown at a time.
+  await newSession(page, `e2e review cal ${tag()}`);
+  await send(page, "auto-review agenda", "calendar entry");
+  await unfoldBubbles(page);
+  const cal = page.locator(".ar-compact[data-auto-review=approve]").last();
+  await cal.waitFor({ timeout: STEP_MS }).catch(() => {
+    throw new StepError("no calendar card from the automatic review");
+  });
+  await cal.locator("[data-ar=revoke]").click();
+  await until(page, "no restore point said", (want) => [...document.querySelectorAll(".ar-block .ar-none")].some((x) => x.textContent?.includes(want)), fr ? "Pas de point de retour" : "No restore point");
+  if (await page.locator(".ar-block [data-ar=restore]").count()) throw new StepError("« Restore files » offered without a restore point");
 }
 
 /** Folder mode on the Lokkal machine (FOLDER-MODE §6, mock with MOCK_FOLDER=1): ask a plan on a folder, approve it,
@@ -1080,10 +1279,56 @@ async function knockSetting(page, base, t) {
   await shot(page, "knock-unsupported-dark");
 }
 
+/** Mon compte → Modèles (BYOK cloud, core docs/CLOUD-BYOK.md; mock MOCK_CLOUD_BYOK=open): http refused before any
+ * call, a private address refused by the server, a public https endpoint tested, its model added and saved as the
+ * default; after a reload it is listed with « key stored » and the key is nowhere on the page; removed, the default
+ * goes back to the Router. */
+async function models(page, base, t) {
+  await login(page, base, t);
+  await openView(page, "account");
+  const card = page.locator("[data-account-models]");
+  await card.waitFor({ timeout: STEP_MS }).catch(() => {
+    throw new StepError("no Models card (is the mock started with MOCK_CLOUD_BYOK=open?)");
+  });
+  await planButtonsOneLine(page);
+  const fr = (await page.evaluate(() => document.documentElement.lang)) === "fr";
+  const KEY = "sk-e2e-never-shown-4242";
+  const test = async (url, key) => {
+    await card.locator("#acc-byok-url").fill(url);
+    await card.locator("#acc-byok-key").fill(key);
+    await card.locator("button", { hasText: fr ? "Tester" : "Test" }).click();
+  };
+  await test("http://api.example.com/v1", "");
+  await until(page, "http refused", () => /https:\/\//.test(document.querySelector("[data-account-models] .ob-error")?.textContent ?? ""));
+  await test("https://192.168.1.4/v1", "");
+  await until(page, "private address refused", () => /(public|publique)/.test(document.querySelector("[data-account-models] .ob-error")?.textContent ?? ""));
+  await test("https://api.example.com/v1", KEY);
+  await card.locator("#acc-byok-model").waitFor({ timeout: STEP_MS });
+  if ((await card.locator("#acc-byok-key").inputValue()) !== "") throw new StepError("the key stays in its field after the test");
+  await noOverflow(page, "models tested");
+  await shot(page, "models-tested");
+  await card.locator("button", { hasText: fr ? "Ajouter" : "Add" }).click();
+  if (!(await card.locator('input[name="acc-default-model"][value="byok:api-example-com"]').isChecked())) throw new StepError("the added endpoint is not the default");
+  await card.locator("button", { hasText: fr ? "Enregistrer" : "Save" }).click();
+  await until(page, "saved", () => /(Setting saved|Réglage enregistré)/.test(document.querySelector("[data-account-models]")?.textContent ?? ""));
+  await page.reload();
+  await card.waitFor({ timeout: STEP_MS });
+  await until(page, "listed with its key stored", () => /(key stored|clé rangée)/.test(document.querySelector("[data-account-models]")?.textContent ?? ""));
+  if (!(await card.locator('input[name="acc-default-model"][value="byok:api-example-com"]').isChecked())) throw new StepError("the default is not kept after a reload");
+  if ((await page.content()).includes(KEY)) throw new StepError("the key is on the page");
+  await noOverflow(page, "models saved");
+  await shot(page, "models-saved");
+  await card.locator(".lk-byok-ok button").click();
+  if (!(await card.locator('input[name="acc-default-model"][value="router"]').isChecked())) throw new StepError("removing the default does not fall back to the Router");
+  await card.locator("button", { hasText: fr ? "Enregistrer" : "Save" }).click();
+  await until(page, "saved without the endpoint", () => /(Setting saved|Réglage enregistré)/.test(document.querySelector("[data-account-models]")?.textContent ?? "") && !document.querySelector("[data-account-models] .lk-byok-ok"));
+}
+
 /** Lokkal opened without its local key (LOKKAL §7.1): on 127.0.0.1 served by a Lokkal core, the page explains how to
  * open it (installer link, key file) and never shows the nokker.ai sign-in; a wrong key is refused, the right one opens
- * this core and is kept in localStorage: a NEW tab opens the app without the key page. A revoked key (401) is forgotten
- * and the key page comes back. `/setup` without the key says the same. On the mock (`localhost`) the sign-in is unchanged. */
+ * this core and is kept in localStorage: a NEW tab opens the app without the key page. A revoked key (401, at start or
+ * during the session, confirmed by the core) is forgotten and the key page comes back; a 401 about something else keeps
+ * the session. `/setup` without the key says the same. On the mock (`localhost`) the sign-in is unchanged. */
 async function lokkalKey(page, base, t, local) {
   if (!local?.token) throw new StepError("no local key from the mock");
   const lk = base.replace("//localhost:", "//127.0.0.1:");
@@ -1128,6 +1373,25 @@ async function lokkalKey(page, base, t, local) {
     throw new StepError("a new tab with a kept key does not open the app");
   });
   if (await tab.locator("[data-local-key-page]").count()) throw new StepError("the key page shows with a kept key");
+  // During the session, a 401 about something else (the core still accepts the key): the session stays.
+  const fail401 = (r) => r.fulfill({ status: 401, contentType: "application/json", body: '{"error":{"message":"refused"}}' });
+  await tab.route("**/v1/chat/completions", fail401);
+  const probe = tab.waitForResponse((r) => r.url().includes("/v1/local/setup"), { timeout: STEP_MS });
+  await tab.fill("#nk-composer", "hello");
+  await tab.click("button.send");
+  if ((await probe).status() !== 200) throw new StepError("the key check did not accept the kept key");
+  await tab.waitForTimeout(300);
+  if (await tab.locator("[data-local-key-page]").count()) throw new StepError("a 401 about something else closed the session");
+  if ((await tab.evaluate(() => localStorage.getItem("nokker.local-token"))) !== local.token) throw new StepError("a 401 about something else forgot the key");
+  await tab.unroute("**/v1/chat/completions");
+  // Key revoked while the tab stays open (install reset): the core refuses it everywhere → forgotten, key page.
+  await tab.route("**/v1/**", fail401);
+  await tab.fill("#nk-composer", "hello again");
+  await tab.click("button.send");
+  await keyPage(tab, "key revoked during the session");
+  if ((await tab.evaluate(() => localStorage.getItem("nokker.local-token"))) !== null) throw new StepError("the key revoked during the session is not forgotten");
+  await shot(tab, "lokkal-key-revoked-live");
+  await tab.unroute("**/v1/**");
   // Revoked key (401): forgotten, the key page comes back.
   await tab.evaluate(() => localStorage.setItem("nokker.local-token", "revoked-key"));
   await tab.reload();
@@ -1144,6 +1408,127 @@ async function lokkalKey(page, base, t, local) {
 }
 
 // ---------- main ----------
+
+/** « Ta carte » on the Lokkal machine (PAY-AGENT §11, own_card): a « to pay » card flagged `local_passkey` is approved
+ * HERE with the machine's passkey (virtual authenticator, rpId localhost): first without a passkey (the card says to
+ * create one in My account), then signed. A « to pay » card that is not own_card keeps its strong-card text, no
+ * passkey button. */
+async function ownCard(page, base, t, local) {
+  if (!local?.api) return void (t.skipped = "no local token");
+  const api = async (path, body) => {
+    const r = await fetch(`${local.api}${path}`, { method: "POST", headers: { Authorization: `Bearer ${local.token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) throw new StepError(`${path}: HTTP ${r.status}`);
+    return r.json();
+  };
+  await page.goto(`${base}/#token=${local.token}`);
+  await page.waitForSelector("#nk-composer", { timeout: STEP_MS });
+  const own = await api("/v1/dev/owncard-card", {});
+  await page.goto(`${base}/approvals/${own.approval_id}`);
+  const box = page.locator("[data-local-passkey]");
+  await box.waitFor({ timeout: STEP_MS }).catch(() => {
+    throw new StepError("no « Approve with my passkey » on an own_card card");
+  });
+  const card = page.locator(".bubble-body").first();
+  await until(page, "the purchase shown", () => /Papeterie Centrale/.test(document.querySelector(".pay-block")?.textContent ?? ""));
+  // One text for the person, own_card: never the reason written for the model, never the generic « saved payment method ».
+  if (await page.locator(".bubble-body .notify-text").count()) throw new StepError("a « to pay » card shows the reason written for the model");
+  const note = await page.locator(".pay-note").innerText();
+  if (!/own card|propre carte/.test(note) || /saved payment method|moyen de paiement enregistré/.test(note)) throw new StepError(`the « to pay » note is not the own-card one: « ${note} »`);
+  if (/nokker\.ai|phone|terminal/i.test(await card.innerText())) throw new StepError("an own_card card speaks of nokker.ai, the phone or the terminal");
+  await noOverflow(page, "own card");
+  // Chromium sometimes refuses the very first capture of a freshly loaded phone page: one more try.
+  await shot(page, "owncard-card").catch(async () => {
+    await page.waitForTimeout(300);
+    await shot(page, "owncard-card");
+  });
+  // No passkey on the machine yet (first journey on this mock): said on the card, with the way to My account.
+  const keys = await (await fetch(`${local.api}/v1/local/passkeys`, { headers: { Authorization: `Bearer ${local.token}` } })).json();
+  if (!keys.passkeys?.length) {
+    await box.locator("[data-lp=approve]").click();
+    await until(page, "no passkey said", () => document.querySelector("[data-lp-error]")?.getAttribute("data-lp-error") === "no_passkey" && !!document.querySelector("[data-lp-error] a"));
+    await shot(page, "owncard-no-passkey");
+  }
+  // The machine's passkey: a virtual authenticator holding a P-256 key, registered with the core (mock only route).
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("WebAuthn.enable");
+  const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", { options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true } });
+  const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const credId = Buffer.from(`e2e-${tag()}`);
+  await cdp.send("WebAuthn.addCredential", { authenticatorId, credential: { credentialId: credId.toString("base64"), isResidentCredential: false, rpId: "localhost", privateKey: privateKey.export({ type: "pkcs8", format: "der" }).toString("base64"), signCount: 0 } });
+  await api("/v1/dev/local-passkey", { credential_id: credId.toString("base64url"), public_key_spki: publicKey.export({ type: "spki", format: "der" }).toString("base64url") });
+  await box.locator("[data-lp=approve]").click();
+  await until(page, "the card is approved", () => !document.querySelector("[data-local-passkey]") && /approved|approuvée/.test(document.querySelector(".bubble-body .chip")?.textContent ?? ""));
+  await shot(page, "owncard-approved");
+  if (/token|jeton/i.test(await page.locator(".pay-block").innerText())) throw new StepError("an own_card payment speaks of a token");
+  // The turn that follows the decision (`[Approbation]` block, `origin: "approval"`): a discreet line in the thread,
+  // never a message of the person, nothing of the instructions written for the model.
+  await page.goto(`${base}/`);
+  await page.waitForSelector("#nk-composer", { timeout: STEP_MS });
+  const fab = page.locator(".drawer-fab");
+  if (await fab.isVisible()) await fab.click();
+  await page.locator("button.session-row", { hasText: "Shopping (demo)" }).first().click();
+  if (await fab.isVisible()) await page.keyboard.press("Escape");
+  await until(page, "the decision line", () => !!document.querySelector(".msg.system[data-continuation]"));
+  const line = await page.locator(".msg.system[data-continuation]").last().innerText();
+  if (!/Payment approved|Paiement approuvé/.test(line)) throw new StepError(`the decision line says « ${line} »`);
+  if (await page.locator(".msg.user", { hasText: "Approbation" }).count()) throw new StepError("the [Approbation] block is shown as a message of the person");
+  if (/ne la relance pas|ne saisis aucun/i.test(await page.locator(".chat-scroll, main").first().innerText())) throw new StepError("instructions written for the model are visible");
+  // The approval bubble of the card: a human title in the interface language (never the raw tool name), one badge.
+  const titles = await page.locator("article[data-bubble-id] .bubble-title").allInnerTexts();
+  if (titles.some((x) => /pay_request|approved:/i.test(x))) throw new StepError(`an approval bubble is titled with the tool: « ${titles.join(" | ")} »`);
+  if (!titles.some((x) => /Payment approved|Paiement approuvé/i.test(x))) throw new StepError(`no « Payment approved » bubble title: « ${titles.join(" | ")} »`);
+  const pay = page.locator("article[data-bubble-id]", { has: page.locator(".pay-block") }).first();
+  if ((await pay.locator(".chip", { hasText: /^(approved|approuvée)$/ }).count()) > 1) throw new StepError("the « approved » badge appears twice on the « to pay » card");
+  await shot(page, "owncard-thread");
+  // Any other « to pay » card: unchanged (no local signature, the strong-card text).
+  const other = await api("/v1/dev/owncard-card", { own_card: false });
+  await page.goto(`${base}/approvals/${other.approval_id}`);
+  await until(page, "the other card", () => !!document.querySelector(".pay-block, .bubble-body .notify-text"));
+  await until(page, "strong-card text", () => /Action forte/.test(document.querySelector(".bubble-body")?.textContent ?? ""));
+  if (await page.locator("[data-local-passkey]").count()) throw new StepError("a « to pay » card that is not own_card offers the local passkey");
+  await cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId });
+}
+
+/** « Listen » to a reply (speaker, core p2/tts-stream; mock with MOCK_TTS=1): the button is on Nina's reply, playing
+ * starts while the audio still arrives (chunks), pause, resume, the end brings it back; with the keyboard too. The
+ * request carries no text: the server reads the reply itself. */
+async function listen(page, base, t) {
+  await login(page, base, t);
+  const fr = (await page.evaluate(() => document.documentElement.lang)) === "fr";
+  await newSession(page, `e2e listen ${tag()}`);
+  const bodies = [];
+  page.on("request", (r) => /\/messages\/\d+\/speech$/.test(r.url()) && bodies.push(r.postData() ?? ""));
+  await send(page, "hello", "");
+  const box = page.locator(".msg.nina .listen").last();
+  await box.waitFor({ timeout: STEP_MS }).catch(() => {
+    throw new StepError("no « Listen » button on Nina's reply (is the mock started with MOCK_TTS=1?)");
+  });
+  const btn = box.locator(".listen-btn");
+  if ((await btn.getAttribute("aria-label")) !== (fr ? "Écouter cette réponse" : "Listen to this reply")) throw new StepError(`aria-label « ${await btn.getAttribute("aria-label")} »`);
+  await noOverflow(page, "listen button");
+  await shot(page, "listen-idle");
+  await btn.click();
+  await until(page, "playing", () => [...document.querySelectorAll(".listen")].some((x) => x.getAttribute("data-listen") === "playing"));
+  if ((await btn.getAttribute("aria-pressed")) !== "true") throw new StepError("aria-pressed is not true while playing");
+  // Chromium has MediaSource for MP3: playing must start while the audio still arrives, not after the whole file.
+  if ((await box.getAttribute("data-listen-mode")) !== "stream") throw new StepError(`not played as a stream: « ${await box.getAttribute("data-listen-mode")} »`);
+  await shot(page, "listen-playing");
+  await btn.click();
+  await until(page, "paused", () => [...document.querySelectorAll(".listen")].some((x) => x.getAttribute("data-listen") === "paused"));
+  await btn.click();
+  await until(page, "playing again", () => [...document.querySelectorAll(".listen")].some((x) => x.getAttribute("data-listen") === "playing"));
+  await until(page, "back to « Listen » at the end", () => [...document.querySelectorAll(".listen")].every((x) => x.getAttribute("data-listen") === "idle"));
+  // Keyboard: Enter starts, Space pauses.
+  await btn.focus();
+  await page.keyboard.press("Enter");
+  await until(page, "playing (keyboard)", () => [...document.querySelectorAll(".listen")].some((x) => x.getAttribute("data-listen") === "playing"));
+  await page.keyboard.press("Space");
+  await until(page, "paused (keyboard)", () => [...document.querySelectorAll(".listen")].some((x) => x.getAttribute("data-listen") === "paused"));
+  if (!bodies.length) throw new StepError("no speech request seen");
+  const reply = await page.locator(".msg.nina .msg-body").last().innerText();
+  const words = reply.split(/\s+/).filter((w) => w.length > 4).slice(0, 3);
+  if (bodies.some((b) => words.some((w) => b.includes(w)))) throw new StepError(`the speech request carries text of the reply: ${bodies[0]}`);
+}
 
 async function main() {
   const only = process.env.E2E_ONLY;
@@ -1165,13 +1550,27 @@ async function main() {
     ["folder", PHONE, folder],
     ["glance", GLASSES, glance],
     ["cast", DESKTOP, cast],
+    ["artifact", DESKTOP, artifact],
     ["house", PHONE, house],
     ["presence", DESKTOP, presence],
     ["presence-phone", PHONE, presence],
     ["presence-phone-fr", { ...PHONE, locale: "fr-CH" }, presence],
     ["consolidation", DESKTOP, consolidation],
     ["payments", DESKTOP, payments],
+    ["auto-review", PHONE, autoReview],
+    ["auto-review-fr", { ...DESKTOP, locale: "fr-CH" }, autoReview],
+    ["listen", PHONE, listen],
+    ["listen-fr", { ...DESKTOP, locale: "fr-CH" }, listen],
+    ["own-card", PHONE, ownCard],
+    ["own-card-fr", { ...DESKTOP, locale: "fr-CH" }, ownCard],
     ["budgets", SMALL_PHONE, budgets],
+    ["voucher", PHONE, voucher],
+    ["voucher-fr", { ...PHONE, locale: "fr-CH" }, voucher],
+    ["voucher-off", PHONE, voucherOff],
+    ["trial-cancelled", PHONE, trialCancelled],
+    ["trial-cancelled-fr", { ...PHONE, locale: "fr-CH" }, trialCancelled],
+    ["models", PHONE, models],
+    ["models-fr", { ...DESKTOP, locale: "fr-CH" }, models],
     ["glance-pair", PHONE, glancePair],
     ["knock", PHONE, knockSetting],
     ["lokkal-key", PHONE, lokkalKey],
