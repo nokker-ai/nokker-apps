@@ -11,6 +11,7 @@
  * [approval:<id>] » et la ligne reste ouverte (⏸) ; approuvée, l'outil s'exécute en fond et son vrai résultat arrive
  * par un second `tool.result` du même `call_id` (avec `approval_id`) ; refusée ou expirée, `approval.decided` la ferme.
  */
+import { homedir } from "node:os";
 import { liveTail, type LocalToolEffect, type NokkerEvent } from "@nokker-apps/sdk";
 import { t } from "./i18n/index.js";
 
@@ -22,6 +23,8 @@ export interface ToolLine {
   /** `null` = en cours. */
   ok: boolean | null;
   ms: number | null;
+  /** Appel refusé d'emblée (permissions) : raison courte déjà traduite ; absent = pas refusé. */
+  refused?: string | null; // texte déjà traduit de ce qui suit « — » : « refused: <raison> » ou « refused by you »
   /** Aperçu du résultat (3 lignes au plus). */
   preview: string | null;
   /** 1 = ligne de sous-agent (indentée). */
@@ -76,8 +79,45 @@ export const EFFECT_COLOR: Record<LocalToolEffect, string> = {
   secret: "magenta",
 };
 
-/** Cible lisible : la commande pour `terminal`, sinon le chemin, le motif ou le premier champ texte. */
+/** Montage du dossier de la session dans le bac à sable docker du noyau (`WORKSPACE_MOUNT` de nokker/tools/code.py,
+ * `CodeToolSource.mount`). Le noyau ne l'envoie PAS au client (`POST /v1/local/sessions` rend `{thread_id, cwd}`) :
+ * valeur par défaut du noyau, supposée ici. En backend `local` (sans bac à sable) les chemins sont déjà réels. */
+export const SANDBOX_MOUNT = "/workspace";
+
+let workspaceView: { mount: string; local: string } | null = null;
+
+/** Dossier local de la session de code affichée (`null` : fil ordinaire, aucune réécriture). Posé par l'App à
+ * l'ouverture et au changement de session ; le mode `-p` ne le pose pas (sa sortie JSON garde les chemins du noyau). */
+export function setWorkspaceView(local: string | null, mount: string | null = SANDBOX_MOUNT): void {
+  // `mount` : le `workspace` rendu par le noyau (chaîne : montage ; `null` : pas de montage, rien n'est traduit) ;
+  // absent (ancien noyau) : le montage par défaut `/workspace`.
+  if (!local || !mount) {
+    workspaceView = null;
+    return;
+  }
+  const home = homedir();
+  const shown = home && (local === home || local.startsWith(home + "/")) ? `~${local.slice(home.length)}` : local;
+  workspaceView = { mount: mount.replace(/\/+$/, ""), local: shown.replace(/\/+$/, "") || "/" };
+}
+
+/** Réécrit pour l'écran les chemins du bac à sable (`/workspace/calc.py`) en chemins du dossier de l'utilisateur
+ * (`~/nokker/calc/calc.py`). Seulement un chemin entier qui COMMENCE par le montage (`/workspace`, `/workspace/…`), pas
+ * `/workspaces` ni `/x/workspace`. Affichage seulement : arguments, résultats et requêtes ne passent jamais par ici. */
+export function displayPath(text: string): string {
+  const v = workspaceView;
+  if (!v || !text.includes(v.mount)) return text;
+  const esc = v.mount.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`(^|[\\s"'\`=:(\\[,<>])${esc}(?=$|[/\\s"'\`)\\],:;<>])`, "gm");
+  return text.replace(re, (_m, pre: string) => pre + v.local);
+}
+
+/** Cible lisible : la commande pour `terminal`, sinon le chemin, le motif ou le premier champ texte (chemins du bac à
+ * sable réécrits en chemins locaux, `displayPath`). */
 export function toolTarget(name: string, args: Record<string, unknown>): string {
+  return displayPath(rawToolTarget(name, args));
+}
+
+function rawToolTarget(name: string, args: Record<string, unknown>): string {
   if (name === "terminal" && typeof args.command === "string") return args.command;
   for (const key of ["path", "pattern", "query", "url", "goal", "command"]) {
     const v = args[key];
@@ -98,11 +138,57 @@ export function formatToolLine(l: ToolLine): string {
   const head = `${l.name}${target ? ` ${target}` : ""}`;
   if (l.ok === null && l.approvalId) return l.approved ? t("⟳ {0} (approved, running…)", head) : t("⏸ {0} (waiting for approval)", head);
   if (l.ok === null) return `⟳ ${head}${l.effect ? ` (${effectName(l.effect) ?? l.effect})` : ""}`;
+  if (l.refused) return `✗ ${head} — ${l.refused}`;
   return `${l.ok ? "✓" : "✗"} ${head}${l.ms !== null ? ` ${l.ms} ms` : ""}`;
 }
 
+function isRefused(e: { status?: string; is_error?: boolean; reason?: string }): boolean {
+  return e.status === "refused" || (e.is_error === true && typeof e.reason === "string" && /^permissions:/.test(e.reason));
+}
+
+/** Ce qui suit « — » sur la ligne d'un appel refusé : la personne a refusé la carte (reason « declined ») : « refused by you » ;
+ * sinon refus d'emblée par les permissions : « refused: <raison> ». */
+export function refusedText(reason: string | undefined): string {
+  return (reason ?? "").replace(/^permissions:/, "") === "declined" ? t("refused by you") : t("refused: {0}", refusedReason(reason));
+}
+
+/** Raison courte d'un refus (`permissions:no_code_session`, `plan_mode`, `deny_rule`, `hardline`…). */
+export function refusedReason(reason: string | undefined): string {
+  const r = (reason ?? "").replace(/^permissions:/, "");
+  switch (r) {
+    case "no_code_session":
+      return t("no code session open");
+    case "plan_mode":
+      return t("plan mode: read-only");
+    case "deny_rule":
+      return t("blocked by one of your rules");
+    case "hardline":
+      return t("never allowed");
+    case "":
+      return t("not allowed");
+    default:
+      return r.replace(/_/g, " ");
+  }
+}
+
+/** Balise d'enveloppe du noyau (`<untrusted-data kind="terminal:output" id="…">`, `</untrusted-data id="…">`) : elle
+ * clôture pour le MODÈLE la sortie d'un tiers (nokker/qa/untrusted.py) ; le noyau neutralise toute balise semblable dans
+ * le contenu (« [balise retirée] »), donc une vraie balise ne vient que de lui. */
+const ENVELOPE_TAG = /<\/?untrusted-data\b[^>\n]*>/g;
+
+/** Retire l'enveloppe à l'affichage : une ligne qui n'est qu'une balise disparaît, une balise en ligne est ôtée ; le
+ * contenu reste intact. Le texte n'est modifié que pour l'écran (export, modèle et noyau ne passent pas par ici). */
+export function stripEnvelope(text: string): string {
+  if (!text.includes("untrusted-data")) return text;
+  return text
+    .split("\n")
+    .filter((l) => !(l.trim() !== "" && l.replace(ENVELOPE_TAG, "").trim() === ""))
+    .map((l) => l.replace(ENVELOPE_TAG, ""))
+    .join("\n");
+}
+
 export function previewLines(preview: string | null): string[] {
-  return preview ? preview.split("\n").slice(0, 3) : [];
+  return preview ? displayPath(stripEnvelope(preview)).split("\n").slice(0, 3) : [];
 }
 
 /** Les dernières lignes du bloc vivant (au plus `n`, coupées à `width`) ; vide sans bloc. */
@@ -162,7 +248,10 @@ export function applyToolEvent(lines: ToolLine[], e: NokkerEvent): ToolLine[] {
               ...l,
               ok: e.is_error !== undefined ? !e.is_error : e.ok !== false,
               ms: e.ms ?? null,
-              preview: e.preview ?? null,
+              ...(isRefused(e) ? { ok: false, refused: refusedText(e.reason) } : {}),
+              // Refus par la personne : la ligne dit déjà « refused by you » ; l'aperçu du noyau (« refusé par <identifiant
+              // interne> ») n'est jamais montré.
+              preview: isRefused(e) && (e.reason ?? "").replace(/^permissions:/, "") === "declined" ? null : e.preview ?? null,
               effect: l.effect ?? e.effect ?? null,
               live: null,
               approvalId: null,

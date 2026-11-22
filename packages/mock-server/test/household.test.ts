@@ -3,8 +3,8 @@ import { NokkerApiError, NokkerClient } from "@nokker-apps/sdk";
 import { startMockServer, type MockServerHandle } from "../src/index.js";
 
 let mock: MockServerHandle;
-const start = async (household: "off" | "payer" | "member" | "minor" | "none"): Promise<NokkerClient> => {
-  mock = await startMockServer({ speed: 0.01, household });
+const start = async (household: "off" | "payer" | "member" | "minor" | "none", householdMinors: "open" | "denied" = "open"): Promise<NokkerClient> => {
+  mock = await startMockServer({ speed: 0.01, household, householdMinors });
   const c = new NokkerClient({ baseUrl: mock.url });
   await c.demoSessionMockExtension();
   return c;
@@ -186,5 +186,13 @@ describe("foyer (X23, §7.29)", () => {
       you: { payer: boolean };
     };
     expect(h).toMatchObject({ name: "Foyer de Bob", you: { payer: false } });
+  });
+  it("bêta : foyer hors de la liste de l'opérateur → 403 minors_not_enabled (invitation mineure et déclaration de profil)", async () => {
+    const c = await start("payer", "denied");
+    const t = await c.getHouseholdConsentText("fr");
+    const at = { version: t.version, lang: "fr" as const, legal_guardian: true as const };
+    expect(await code(c.inviteToHousehold("kid@example.org", "child", at))).toBe("minors_not_enabled");
+    expect(await code(c.setHouseholdProfile("sam", "teen", at))).toBe("minors_not_enabled");
+    expect(await c.inviteToHousehold("adulte@example.org")).toMatchObject({ profile: "adult" });
   });
 });

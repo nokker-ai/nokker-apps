@@ -54,6 +54,26 @@ interface H {
 }
 const all = new WeakMap<MockState, H>();
 
+// Prénoms des profils (noyau p2/member-first-name ebb9ae3, nokker/tenancy/names.py) : un par compte, vide si aucun.
+const firstNames = new WeakMap<MockState, Map<string, string>>();
+const names = (state: MockState): Map<string, string> => {
+  let m = firstNames.get(state);
+  if (!m) firstNames.set(state, (m = new Map([["lea", "Léa"]])));
+  return m;
+};
+/** `clean_first_name` : lettres, espaces, `-`, `'` et `.` seulement, 40 caractères au plus ; null si refusé. */
+export function cleanFirstName(v: unknown): string | null {
+  const s = (typeof v === "string" ? v : "").split(/\s+/).filter(Boolean).join(" ");
+  return s.length <= 40 && /^[\p{L}\p{M} .'’-]*$/u.test(s) ? s : null;
+}
+/** `member_name` : le prénom tel que saisi, sinon la partie locale de l'adresse. */
+export const memberName = (first: string, email: string): string => first || email.split("@")[0]!;
+export const firstNameOf = (state: MockState, account: string): string => names(state).get(account) ?? "";
+export function setFirstName(state: MockState, account: string, first: string): void {
+  if (first) names(state).set(account, first);
+  else names(state).delete(account);
+}
+
 function member(account: string, profile: HouseholdProfile, payer: boolean, today: number, week: number, cap: HouseholdMember["cap"], daysAgo: number): Omit<HouseholdMember, "you"> {
   return {
     account_id: account,
@@ -258,7 +278,7 @@ function quota(h: H): Household["quota"] {
   };
 }
 
-function view(h: H, user: string): Household {
+function view(h: H, user: string, state: MockState): Household {
   const me = h.members.get(user)!;
   const payer = me.payer;
   const pending = h.invitations.filter((iv) => iv.state === "pending");
@@ -269,7 +289,12 @@ function view(h: H, user: string): Household {
     counted: h.members.size + pending.length,
     you: { account_id: user, payer, profile: me.profile },
     quota: quota(h),
-    members: [...h.members.values()].filter((m) => payer || m.account_id === user).map((m) => ({ ...m, you: m.account_id === user })),
+    members: [...h.members.values()]
+      .filter((m) => payer || m.account_id === user)
+      .map((m) => {
+        const first = firstNameOf(state, m.account_id);
+        return { ...m, first_name: first, name: memberName(first, m.email), you: m.account_id === user };
+      }),
     ...(payer
       ? {
           invitations: pending,
@@ -330,7 +355,7 @@ export async function handleHousehold(state: MockState, user: string, method: st
     h.members.set(iv.from, member(iv.from, "adult", true, 12, 58, { turns_per_day: null, source: "none" }, 20));
     h.members.set(user, member(user, iv.profile, false, 0, 0, { turns_per_day: 40, source: "default" }, 0));
     h.mode = "member";
-    return (send(200, view(h, user)), true);
+    return (send(200, view(h, user, state)), true);
   }
   if (path === "/v1/household" && method === "POST") {
     if (me) return err(send, 409, "household_exists", "tu as déjà un foyer");
@@ -345,11 +370,11 @@ export async function handleHousehold(state: MockState, user: string, method: st
     h.members = new Map([[user, member(user, "adult", true, 0, 0, { turns_per_day: null, source: "none" }, 0)]]);
     h.invitations = [];
     h.mode = "payer";
-    return (send(201, view(h, user)), true);
+    return (send(201, view(h, user, state)), true);
   }
   if (!me) return err(send, 404, "not_found", "aucun foyer");
 
-  if (path === "/v1/household" && method === "GET") return (send(200, view(h, user)), true);
+  if (path === "/v1/household" && method === "GET") return (send(200, view(h, user, state)), true);
   if (path === "/v1/household" && method === "DELETE") {
     if (payerOnly()) return true;
     h.members = new Map();
@@ -364,12 +389,16 @@ export async function handleHousehold(state: MockState, user: string, method: st
     const b = await readBody();
     const email = typeof b.email === "string" ? b.email.trim().toLowerCase() : "";
     const profile = (PROFILES.includes(b.profile as HouseholdProfile) ? b.profile : "adult") as HouseholdProfile;
+    const first = cleanFirstName(b.first_name);
+    if (first === null) return err(send, 400, "bad_first_name", "prénom invalide : lettres, espaces, trait d'union, apostrophe et point seulement, 40 caractères au plus");
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err(send, 400, "invalid", "adresse invalide");
     if ([...h.members.values()].some((m) => m.email === email)) return err(send, 409, "already_member", "déjà membre");
     if (h.invitations.some((iv) => iv.state === "pending" && iv.email === email)) return err(send, 409, "already_invited", "déjà invitée");
     if (h.members.size + h.invitations.filter((iv) => iv.state === "pending").length >= h.hh.max_members) return err(send, 409, "household_full", "foyer complet");
     if (profile !== "adult") {
       if (!h.minors) return err(send, 400, "minors_disabled", "profils mineurs fermés");
+      // Bêta (`household_minors_mode: allowlist`) : seuls les foyers autorisés un par un par l'opérateur.
+      if (state.householdMinors === "denied") return err(send, 403, "minors_not_enabled", "profils mineurs non ouverts à ce foyer");
       if (!checkAttestation(h, b.attestation, send)) return true;
       const a = b.attestation as { version: string; lang: string };
       h.consents.push({
@@ -386,6 +415,7 @@ export async function handleHousehold(state: MockState, user: string, method: st
     const iv: HouseholdInvitation = {
       id: id("iv"),
       email,
+      first_name: first,
       profile,
       state: "pending",
       created_at: new Date().toISOString(),
@@ -441,6 +471,8 @@ export async function handleHousehold(state: MockState, user: string, method: st
       if (!PROFILES.includes(p)) return err(send, 400, "invalid", "profil invalide");
       if (p !== "adult") {
         if (!h.minors) return err(send, 400, "minors_disabled", "profils mineurs fermés");
+      // Bêta (`household_minors_mode: allowlist`) : seuls les foyers autorisés un par un par l'opérateur.
+      if (state.householdMinors === "denied") return err(send, 403, "minors_not_enabled", "profils mineurs non ouverts à ce foyer");
         if (!checkAttestation(h, b.attestation, send)) return true;
         const a = b.attestation as { version: string; lang: string };
         h.consents.push({

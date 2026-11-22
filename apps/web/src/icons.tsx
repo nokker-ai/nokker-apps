@@ -4,7 +4,8 @@ type IconName =
   | "disk" | "search" | "bell" | "timer" | "terminal" | "play" | "page" | "image" | "bot" | "shield" | "screen" | "pointer"
   | "chevronDown" | "chevronUp" | "share" | "close" | "send" | "plus" | "grip" | "arrowRight"
   | "link" | "check" | "soundOn" | "soundOff" | "menu" | "chat" | "crew" | "goto" | "sun" | "moon" | "folder"
-  | "user" | "users" | "home" | "box" | "plug" | "alert" | "plan" | "code" | "cpu" | "back" | "mic" | "micOff" | "pause";
+  | "user" | "users" | "home" | "box" | "plug" | "alert" | "plan" | "code" | "cpu" | "back" | "mic" | "micOff" | "pause"
+  | "cloud" | "cloudSun" | "rain" | "snow" | "storm" | "fog" | "lock";
 
 const P: Record<IconName, React.ReactNode> = {
   disk: (<><ellipse cx="12" cy="6" rx="8" ry="3" /><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6" /><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></>),
@@ -38,6 +39,13 @@ const P: Record<IconName, React.ReactNode> = {
   crew: (<><rect x="3" y="5" width="7" height="14" rx="2" /><rect x="14" y="5" width="7" height="9" rx="2" /></>),
   sun: (<><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>),
   moon: <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" />,
+  cloud: <path d="M7 18h10a4 4 0 0 0 .5-8 6 6 0 0 0-11.4 1.6A3.3 3.3 0 0 0 7 18z" />,
+  cloudSun: (<><path d="M9 4.5V3M4.6 6.1 3.5 5M3 10.5H1.5M13.4 6.1 14.5 5" /><path d="M5.6 11a3.6 3.6 0 0 1 6.9-1.5" /><path d="M9 20h9a3.5 3.5 0 0 0 .4-7 5 5 0 0 0-9.6 1.4A2.8 2.8 0 0 0 9 20z" /></>),
+  rain: (<><path d="M7 15h10a4 4 0 0 0 .5-8 6 6 0 0 0-11.4 1.6A3.3 3.3 0 0 0 7 15z" /><path d="M8 18l-1 3M12 18l-1 3M16 18l-1 3" /></>),
+  snow: (<><path d="M7 15h10a4 4 0 0 0 .5-8 6 6 0 0 0-11.4 1.6A3.3 3.3 0 0 0 7 15z" /><path d="M8 19h.01M12 21h.01M16 19h.01M10 18.5h.01M14 18.5h.01" /></>),
+  storm: (<><path d="M7 15h10a4 4 0 0 0 .5-8 6 6 0 0 0-11.4 1.6A3.3 3.3 0 0 0 7 15z" /><path d="M12.5 15l-2 3.5h3l-2 3.5" /></>),
+  fog: <path d="M4 9h16M3 13h18M5 17h14" />,
+  lock: (<><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></>),
   user: (<><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>),
   users: (<><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0" /><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5" /></>),
   home: (<><path d="M4 11l8-7 8 7" /><path d="M6 9.5V20h12V9.5" /><path d="M10 20v-5h4v5" /></>),

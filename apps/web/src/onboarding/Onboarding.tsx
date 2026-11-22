@@ -8,16 +8,10 @@ import { InstallCard } from "../pwa/InstallCard.js";
 import { Markdown } from "../Markdown.js";
 import { ConnectorsStep, ErrorLine, TelegramStep } from "./Connectors.js";
 import { errorCode, errorKey, invitationFailure } from "./errors.js";
-import { canSubmit, initialState, reduce, type FlowState, type Step } from "./flow.js";
+import { canSubmit, initialState, reduce, stepsFor, type FlowState } from "./flow.js";
+import { PersonaStep } from "./Persona.js";
 import { normLang, t, type Key, type Lang } from "./i18n.js";
 import { BETA_URL } from "../welcome/Welcome.js";
-
-const STEPS: { step: Step; label: Key }[] = [
-  { step: "terms", label: "stepTerms" },
-  { step: "connectors", label: "stepConnectors" },
-  { step: "telegram", label: "stepTelegram" },
-  { step: "done", label: "stepDone" },
-];
 
 function inviteToken(): string {
   try {
@@ -96,7 +90,8 @@ export function Onboarding(): React.ReactElement {
     }
   }, [client, s]);
 
-  const inFlow = STEPS.some((x) => x.step === s.step);
+  const steps = stepsFor(s.avatarStep);
+  const inFlow = steps.some((x) => x.step === s.step);
 
   return (
     <div className="ob">
@@ -106,7 +101,7 @@ export function Onboarding(): React.ReactElement {
           <img className="ob-mark only-dark" src="/brand/nokker-emblem-dark.svg" alt="" width={36} height={36} />
           <span className="ob-brand">{BRAND.productName}</span>
         </header>
-        {inFlow && <Progress step={s.step} lang={L} />}
+        {inFlow && <StepsNav steps={steps} current={s.step} lang={L} />}
         {s.step === "invitation" && <p className="ob-status" role="status">{t(L, "loading")}</p>}
         {s.step === "invalid" && (
           <section aria-live="polite">
@@ -134,8 +129,10 @@ export function Onboarding(): React.ReactElement {
             onLinked={(kind, linked) => dispatch({ type: "connector_linked", kind, linked })}
             onNext={() => dispatch({ type: "next" })}
             onStartNow={() => window.location.assign("/")}
+            nextKey={s.avatarStep ? "nextPersona" : "nextTelegram"}
           />
         )}
+        {s.step === "persona" && s.persona && <PersonaStep client={client} lang={L} p={s.persona} dispatch={dispatch} />}
         {s.step === "telegram" && (
           <TelegramStep client={client} lang={L} onGenerated={() => dispatch({ type: "telegram_generated" })} onNext={() => dispatch({ type: "next" })} />
         )}
@@ -143,10 +140,6 @@ export function Onboarding(): React.ReactElement {
       </main>
     </div>
   );
-}
-
-function Progress({ step, lang }: { step: Step; lang: Lang }): React.ReactElement {
-  return <StepsNav steps={STEPS} current={step} lang={lang} />;
 }
 
 /** Fil d'étapes du parcours, partagé avec la page `/setup` de Lokkal. */

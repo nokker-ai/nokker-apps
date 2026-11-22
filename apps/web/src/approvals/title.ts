@@ -20,6 +20,11 @@ export function approvalTitle(b: { state?: Partial<ApprovalBubbleState> | null; 
       return pay ? tr("Payment refused") : tr("Action refused");
     case "expired":
       return pay ? tr("Payment expired") : tr("Action expired");
+    case "executing":
+      // Approuvée, l'outil tourne : ni « en attente » ni « échec ».
+      return pay ? tr("Payment in progress") : tr("Action in progress");
+    case "interrupted":
+      return pay ? tr("Payment interrupted") : tr("Action interrupted");
     default:
       return pay ? tr("Payment stopped") : tr("Action failed");
   }

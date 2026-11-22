@@ -48,7 +48,7 @@ describe("dernier fil par dossier (local-threads.json)", () => {
 describe("openLocal après redémarrage du noyau (liste vide)", () => {
   const mem = () => {
     const m = new Map<string, string>();
-    return { get: (c: string) => m.get(c) ?? null, set: (c: string, t: string) => void m.set(c, t), m };
+    return { get: (c: string) => m.get(c) ?? null, set: (c: string, t: string) => void m.set(c, t), forget: (c: string) => void m.delete(c), m };
   };
 
   it("redemande le dernier fil du dossier par POST {cwd, thread_id} et relit son historique", async () => {
@@ -83,6 +83,80 @@ describe("openLocal après redémarrage du noyau (liste vide)", () => {
     expect(posts).toHaveLength(2);
     expect(s.threadId).toBe("th_neuf");
     expect(store.get("/w/calc")).toBe("th_neuf");
+  });
+
+  it("entrée fantôme (le noyau ne connaît pas le fil : pile purgée, port repris) : oubliée, fil neuf sans thread_id, pas de reprise", async () => {
+    const posts: { cwd: string; thread_id?: string }[] = [];
+    const fake = {
+      listLocalSessions: async () => [],
+      // Le noyau accepterait l'id inconnu sans rien dire : c'est la CLI qui ne doit pas le renvoyer.
+      createLocalSession: async (req: { cwd: string; thread_id?: string }) => (posts.push(req), { thread_id: req.thread_id ?? "th_neuf", cwd: req.cwd, skills: "off" }),
+      getThread: async () => { throw new NokkerApiError("/v1/threads/th_fantome → 404", 404, { error: { code: "thread_not_found" } }); },
+    };
+    const store = mem();
+    store.set("/w/calc", "th_fantome");
+    const s = new CliSession(fake as never, null);
+    const r = await s.openLocal("/w/calc", store);
+    expect(posts).toEqual([{ cwd: "/w/calc" }]); // jamais le thread_id fantôme
+    expect(r.resumed).toBe(false);
+    expect(r.messages).toEqual([]);
+    expect(s.threadId).toBe("th_neuf");
+    expect(store.get("/w/calc")).toBe("th_neuf"); // entrée nettoyée, remplacée par le fil neuf
+  });
+
+  it("fil connu du noyau (200) : reprise inchangée ; réponse illisible (500) : on ne perd pas la reprise", async () => {
+    for (const getThread of [async () => ({ messages: [{ role: "user", content: "avant" }] }), async () => { throw new NokkerApiError("500", 500, null); }]) {
+      const posts: unknown[] = [];
+      const fake = {
+        listLocalSessions: async () => [],
+        createLocalSession: async (req: { cwd: string; thread_id?: string }) => (posts.push(req), { thread_id: req.thread_id ?? "th_neuf", cwd: req.cwd, skills: "off" }),
+        getThread,
+      };
+      const store = mem();
+      store.set("/w/calc", "th_ancien");
+      await new CliSession(fake as never, null).openLocal("/w/calc", store);
+      expect(posts).toEqual([{ cwd: "/w/calc", thread_id: "th_ancien" }]);
+      expect(store.get("/w/calc")).toBe("th_ancien");
+    }
+  });
+
+  it("noyau muet (délai) ou réseau coupé : on ne perd pas la reprise — un fil ne s'oublie que sur un 404 franc", async () => {
+    // Seule la VÉRIFICATION échoue (1er appel) ; la relecture de l'historique qui suit répond.
+    const failFirst = (first: () => Promise<never>) => {
+      let n = 0;
+      return async () => (n++ === 0 ? first() : { messages: [] });
+    };
+    for (const getThread of [failFirst(() => new Promise<never>(() => undefined)), failFirst(async () => { throw new TypeError("fetch failed"); })]) {
+      const posts: unknown[] = [];
+      const fake = {
+        listLocalSessions: async () => [],
+        createLocalSession: async (req: { cwd: string; thread_id?: string }) => (posts.push(req), { thread_id: req.thread_id ?? "th_neuf", cwd: req.cwd, skills: "off" }),
+        getThread,
+      };
+      const store = mem();
+      store.set("/w/calc", "th_ancien");
+      const s = new CliSession(fake as never, null);
+      s.ghostCheckMs = 50;
+      const t0 = Date.now();
+      await s.openLocal("/w/calc", store);
+      expect(Date.now() - t0).toBeLessThan(1500);
+      expect(posts).toEqual([{ cwd: "/w/calc", thread_id: "th_ancien" }]);
+      expect(store.get("/w/calc")).toBe("th_ancien");
+    }
+  });
+
+  it("le fichier : forget retire la seule entrée du dossier, les autres restent", () => {
+    const p = tmp();
+    const s = fileLastThreadStore("http://127.0.0.1:8744", p);
+    s.set("/w/a", "th_a");
+    s.set("/w/b", "th_b");
+    fileLastThreadStore("http://127.0.0.1:9999", p).set("/w/a", "th_autre");
+    s.forget!("/w/a");
+    expect(s.get("/w/a")).toBeNull();
+    expect(s.get("/w/b")).toBe("th_b");
+    expect(fileLastThreadStore("http://127.0.0.1:9999", p).get("/w/a")).toBe("th_autre"); // autre serveur : intact
+    expect(statSync(p).mode & 0o777).toBe(0o600);
+    s.forget!("/w/absent"); // sans effet, sans erreur
   });
 
   it("le noyau connaît la session : pas de POST, et elle est mémorisée", async () => {
@@ -137,5 +211,27 @@ describe("textes de contrôle cachés", () => {
     expect(hideGoalMarker("Fini.\nGOAL: D")).toBe("Fini.\nGOAL: D"); // historique : pas de préfixe partiel retiré
     expect(hideGoalMarker("Texte normal\nGO", false)).toBe("Texte normal\nGO");
     expect(hideGoalMarker("Le marqueur GOAL: DONE est au milieu, pas à la fin.")).toBe("Le marqueur GOAL: DONE est au milieu, pas à la fin.");
+  });
+});
+
+describe("historique relu : bloc [Approbation] jamais brut", () => {
+  const block = '[Approbation]\nOutil : terminal\nDécision : approved\nDécideur : u\nRésultat : <untrusted-data kind="terminal:output" id="x1">\n42\n</untrusted-data id="x1">\n[/Approbation]';
+  it("origin approval → une ligne courte, sans balise", () => {
+    setLang("en");
+    const s = shownUserText(block, "approval");
+    expect(s).toBe("terminal : approved");
+    expect(s).not.toContain("untrusted");
+    expect(s).not.toContain("[Approbation]");
+  });
+  it("tour d'avant le champ origin : reconnu à son en-tête ; refus et expiration", () => {
+    setLang("en");
+    expect(shownUserText(block)).toBe("terminal : approved");
+    expect(shownUserText("[Approbation]\nOutil : write_file\nDécision : rejected\n[/Approbation]")).toBe("write_file : rejected");
+    setLang("fr");
+    expect(shownUserText("[Approbation]\nOutil : terminal\nDécision : expired\n[/Approbation]", "approval")).toBe("terminal : expiré");
+    setLang("en");
+  });
+  it("un message ordinaire est rendu tel quel", () => {
+    expect(shownUserText("bonjour")).toBe("bonjour");
   });
 });

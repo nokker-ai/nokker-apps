@@ -6,6 +6,17 @@ import { tr } from "../i18n/index.js";
 import { NewCodeSession } from "../lokkal/NewCodeSession.js";
 import type { NavView, ViewId } from "../nav/views.js";
 import { anchor } from "../showme/model.js";
+import { CLOUD, filterRows, offlineMinutes, type OriginInfo, type SearchRow, type UnifiedRow } from "../sessions/origins.js";
+
+/** Liste unique cloud + machines (LOKKAL-PHONE §1.2) : lignes fusionnées, origines, ouverture d'un fil d'une machine. */
+export interface UnifiedDrawer {
+  rows: UnifiedRow[];
+  origins: OriginInfo[];
+  onOpenRemote: (row: { origin: string; id: string }) => void;
+  /** Fil ouvert, avec son origine (`cloud` ou la machine). */
+  current?: { origin: string; id: string } | null;
+  search: (q: string) => Promise<{ rows: SearchRow[]; silent: string[] }>;
+}
 
 /** Tiroir gauche : les sessions (fils permanents). Chaque ligne est aussi une cible de dépôt de bulle. Sur téléphone, il
  * glisse par-dessus le chat (App : bouton en bas à gauche). */
@@ -27,6 +38,7 @@ export function Drawer({
   onOpenView,
   crewPulse = false,
   crewTarget = true,
+  unified,
 }: {
   id?: string;
   /** Téléphone, tiroir rentré : hors de l'ordre de tabulation et de l'arbre d'accessibilité. */
@@ -52,7 +64,20 @@ export function Drawer({
   crewPulse?: boolean;
   /** L'entrée Crew est la cible du vol de la carte d'agent (`data-crew-tab`) ; au téléphone c'est le bouton du tiroir. */
   crewTarget?: boolean;
+  /** app.nokker.ai avec au moins une machine liée : liste unique. */
+  unified?: UnifiedDrawer;
 }): React.ReactElement {
+  const [filter, setFilter] = useState("all");
+  const [query, setQuery] = useState("");
+  const [found, setFound] = useState<{ q: string; rows: SearchRow[]; silent: string[] } | null>(null);
+  const multi = !!unified && unified.origins.length > 0;
+  const nameOf = (origin: string): string => (origin === CLOUD ? tr("cloud") : unified?.origins.find((o) => o.id === origin)?.name ?? origin);
+  const runSearch = (q: string): void => {
+    setQuery(q);
+    if (!unified || q.trim().length < 2) return setFound(null);
+    const want = q.trim();
+    void unified.search(want).then((r) => setQuery((cur) => (cur.trim() === want && setFound({ q: want, ...r }), cur)));
+  };
   // Lokkal : le « + » propose d'abord le choix (conversation ou session de code).
   const [creating, setCreating] = useState<false | "choose" | "chat" | "code">(false);
   const [title, setTitle] = useState("");
@@ -151,7 +176,92 @@ export function Drawer({
       ) : null}
 
       <nav className="drawer-list" aria-label={tr("Session list")} {...anchor("sessions")}>
-        {threads.filter(isSessionThread).map((t) => {
+        {multi ? (
+          <div className="origin-tools">
+            <input
+              type="search"
+              className="origin-search"
+              aria-label={tr("Search all sessions")}
+              placeholder={tr("Search everywhere")}
+              value={query}
+              onChange={(e) => runSearch(e.target.value)}
+            />
+            <div className="origin-filter" role="group" aria-label={tr("Sessions from")}>
+              {["all", CLOUD, ...unified!.origins.map((o) => o.id)].map((o) => (
+                <button key={o} type="button" className={`origin-chip ${filter === o ? "on" : ""}`} aria-pressed={filter === o} onClick={() => setFilter(o)}>
+                  {o === "all" ? tr("All") : nameOf(o)}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {multi && found ? (
+          <div className="origin-results" aria-live="polite" data-search-results>
+            {found.rows.length === 0 ? <p className="fine">{tr("Nothing found for “{0}”.", found.q)}</p> : null}
+            {found.rows.map((r) => (
+              <button key={`${r.origin}/${r.thread_id}/${r.turn_index ?? "t"}`} type="button" className="session-row search-hit" onClick={() => (r.origin === CLOUD ? onSelect(r.thread_id) : unified!.onOpenRemote({ origin: r.origin, id: r.thread_id }))}>
+                <span className="session-text">
+                  <span className="session-name">
+                    {r.title || tr("Untitled session")} <span className="origin-pill">{nameOf(r.origin)}</span>
+                  </span>
+                  {r.snippet ? <span className="session-snippet">{r.snippet}</span> : null}
+                </span>
+              </button>
+            ))}
+            {found.silent.map((n) => (
+              <p key={n} className="fine origin-silent">{tr("{0} did not answer.", n)}</p>
+            ))}
+          </div>
+        ) : multi ? (
+          filterRows(unified!.rows.filter((r) => r.origin !== CLOUD || (r.thread && isSessionThread(r.thread))), filter).map((r) => (r.origin === CLOUD && r.thread ? cloudRow(r.thread) : remoteRow(r)))
+        ) : (
+          threads.filter(isSessionThread).map((t) => cloudRow(t))
+        )}
+      </nav>
+
+      <div className="drawer-foot">
+        <span>{tr("Sessions are permanent and talk to each other.")}</span>
+        <span>{tr("Drag a bubble onto a session to move or copy it.")}</span>
+      </div>
+    </aside>
+  );
+
+  function remoteRow(r: UnifiedRow): React.ReactElement {
+    const o = unified!.origins.find((x) => x.id === r.origin);
+    const mins = o && !o.online ? offlineMinutes(o) : null;
+    const title = r.title || tr("Untitled session");
+    return (
+      <div key={`${r.origin}/${r.id}`} className="session-wrap">
+        <button
+          type="button"
+          className={`session-row remote ${r.offline ? "offline" : ""} ${r.state === "working" ? "working" : ""} ${unified!.current?.origin === r.origin && unified!.current.id === r.id ? "current" : ""}`}
+          aria-current={unified!.current?.origin === r.origin && unified!.current.id === r.id && view === "chat" ? "page" : undefined}
+          data-thread-id={r.id}
+          data-origin={r.origin}
+          aria-label={[tr("Session {0}", title), tr("on {0}", r.originName), r.offline ? tr("offline") : ""].filter(Boolean).join(", ")}
+          title={title}
+          onClick={() => unified!.onOpenRemote({ origin: r.origin, id: r.id })}
+        >
+          <span className="session-initial" aria-hidden="true">
+            {title.slice(0, 1).toUpperCase()}
+            <span className="session-dot" />
+          </span>
+          <span className="session-text">
+            <span className="session-name">
+              {title} <span className="origin-pill">{r.originName}</span>
+              {r.state === "working" ? <span className="session-working">{tr("working")}</span> : null}
+              {r.state === "awaiting_approval" ? <span className="session-working">{tr("awaiting approval")}</span> : null}
+            </span>
+            <span className="session-snippet">
+              {r.offline ? (mins ? tr("{0} offline for {1} min", r.originName, String(mins)) : tr("{0} offline", r.originName)) : r.snippet || "—"}
+            </span>
+          </span>
+        </button>
+      </div>
+    );
+  }
+
+  function cloudRow(t: Thread): React.ReactElement {
           const selected = t.id === currentId;
           const current = selected && view === "chat";
           const unread = t.unread || (selected ? 0 : unseen[t.id] ?? 0);
@@ -184,6 +294,7 @@ export function Drawer({
               <span className="session-text">
                 <span className="session-name">
                   {t.title}
+                  {multi ? <span className="origin-pill">{tr("cloud")}</span> : null}
                   {t.working ? <span className="session-working">{tr("working")}</span> : null}
                 </span>
                 <span className={`session-snippet ${cwd ? "mono" : ""}`} title={cwd}>
@@ -211,13 +322,5 @@ export function Drawer({
             )}
             </div>
           );
-        })}
-      </nav>
-
-      <div className="drawer-foot">
-        <span>{tr("Sessions are permanent and talk to each other.")}</span>
-        <span>{tr("Drag a bubble onto a session to move or copy it.")}</span>
-      </div>
-    </aside>
-  );
+  }
 }

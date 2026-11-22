@@ -3,11 +3,12 @@
  * Reproduit `docs/CLIENT-API.md`, `APPROVALS.md` et `BUBBLES.md` SAUF simplifications
  * explicitement commentées (le vrai serveur de ces routes n'existe pas encore côté noyau).
  */
+import { withTarget } from "./approval-target.js";
 import type { MockPage } from "./pages.js";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { LocalMemoryStatus, PermissionMode, PermissionSettings } from "@nokker-apps/sdk";
+import type { LocalMemoryStatus, PermissionMode, PermissionSettings, PhoneFetched, PhoneFetchOffer, PhoneTaskNote, RedactionMeta } from "@nokker-apps/sdk";
 import type {
   Agent,
   Approval,
@@ -66,7 +67,16 @@ export interface MockTurn {
   /** X7 : images jointes au message user (octets dans `MockState.images`). */
   images?: { sha256: string; media_type: string; size: number; name?: string | null }[];
   /** Tour qui suit une décision (bloc `[Approbation]`) : `origin: "approval"` sur le message user, comme le noyau. */
-  origin?: "approval";
+  origin?: "approval" | "phone_fetch" | "phone_continue";
+  /** P7b : tâches du téléphone au-delà des 20 s (message assistant), mises à jour à la clôture. */
+  phone_tasks?: PhoneTaskNote[];
+  /** P11 : offre « Ouvrir par mon téléphone » et pages ouvertes par le téléphone (message assistant). */
+  phone_fetch_offers?: PhoneFetchOffer[];
+  phone_fetched?: PhoneFetched[];
+  /** P9b : compteurs du masquage fait sur l'appareil (message de la personne). */
+  redaction?: RedactionMeta;
+  /** P9 : pièces texte reconnues sur l'appareil (texte dans `MockState.attachments`). */
+  attachments?: { id: string; kind: "text"; source: "device_ocr" | "device_stt" | "device_dictation"; name: string; chars: number }[];
 }
 
 export interface MockThreadRecord {
@@ -120,10 +130,16 @@ export interface MockStateOptions {
   goals?: boolean;
   /** Drapeau `household` (X23, §7.29) et rôle de la démo : `off` (défaut), `payer`, `member`, `minor`, `none`. */
   household?: "off" | "payer" | "member" | "minor" | "none";
+  /** `household_minors_mode: allowlist` : `denied` = ce foyer n'est pas sur la liste de l'opérateur (403 `minors_not_enabled`). */
+  householdMinors?: "open" | "denied";
   /** Drapeau `code.enabled` (LOKKAL §7.28, sessions de code des comptes) : éteint par défaut, comme dans le noyau. */
   code?: boolean;
   /** Flag `local.cast.enabled` (SCREEN-CAST §7). */
   cast?: boolean;
+  /** V3 « l'agent qui montre » (BROWSER-LIVE) : session navigateur scriptée ; `MOCK_BROWSER_LIVE=1`. */
+  browserLive?: boolean;
+  /** Flag `ambient.screens.enabled` (core docs/SCREENS.md, lot V7). */
+  screens?: boolean;
   /** Flag `show_me` (core docs/SHOW-ME.md): Nina points instead of clicking. */
   showMe?: boolean;
   /** Reading a reply aloud (`tts`, core p2/tts-stream) ; `MOCK_TTS=1`. */
@@ -153,6 +169,8 @@ export interface MockStateOptions {
 export interface PendingContinuation {
   threadId: string;
   run: () => Promise<void>;
+  /** Refus (noyau n27) : le modèle reçoit le refus et CONTINUE le tour (`tool.result` « refused/declined », puis le tour de suite). */
+  refuse?: () => Promise<void>;
 }
 
 export interface LocalSessionMeta {
@@ -207,6 +225,24 @@ export class MockState {
   continuations = new Map<string, PendingContinuation>();
   /** Modifiable en cours de route (tests). */
   approvalStyle: "inline" | "kernel";
+  /** Recette : le flux de chat reste ouvert ce nombre de ms après le dernier mot (avant le chunk final), tour toujours en cours (course d'une décision de carte partie pendant la requête, puis tour de suite démarré avant sa fin). Défaut 0. */
+  /** Fils ordinaires du noyau : `turn.cost` part AVANT le texte (test d'ordre de la ligne de jetons). */
+  costBeforeText = false;
+  /** `GET|POST /v1/local/approvals` couvrent aussi les fils ordinaires (hors session de code) : cartes décidables au jeton local. */
+  localAllThreads = false;
+  /** Drapeau de test : `POST /v1/local/sessions` répond 503 `sandbox_unavailable` ; `message` null = corps vide. */
+  sandboxUnavailable: { message: string | null } | null = null;
+  /** Fils pour lesquels `DELETE /v1/local/sessions/{fil}` a été appelé (tests). */
+  closeCalls: string[] = [];
+  /** ACCORD (appareil Autoriser / Refuser) : drapeau `local.accord.enabled`, éteint par défaut (404). */
+  accordEnabled = process.env.MOCK_ACCORD === "1";
+  /** `X-Nokker-Surface` reçu à chaque appel de chat (`null` : absent) — tests. */
+  chatSurfaces: (string | null)[] = [];
+  /** `Accept-Language` reçu à chaque appel de chat (`null` : absent) — tests. */
+  chatLanguages: (string | null)[] = [];
+  /** Drapeau de test : la route de fermeture ne répond jamais (noyau muet). */
+  closeHang = false;
+  chatTailMs = Number(process.env.MOCK_CHAT_TAIL_MS) || 0;
   /** Machine liée : cartes fortes déposées chez nokker.ai (modifiable, tests). */
   strongRelay: boolean;
   /** Écritures réelles du scénario local et points de retour photographiés (modifiable, tests). */
@@ -222,6 +258,7 @@ export class MockState {
   /** Notes du correcteur sous le seuil avant la note qui passe (défaut 1). */
   goalGradesBeforePass = 1;
   readonly household: "off" | "payer" | "member" | "minor" | "none";
+  householdMinors: "open" | "denied";
   private memTrusted: { root: string; sha256: string }[] = [];
   /** Délai du dépôt après la pose de la carte (ms, mis à l'échelle de `speed`). */
   strongRelayMs = 300;
@@ -258,6 +295,10 @@ export class MockState {
   crewMail: "on" | "off" | "nobox";
   readonly code: boolean;
   readonly cast: boolean;
+  readonly browserLive: boolean;
+  readonly screens: boolean;
+  /** Screens for the wall: the published screen, `null` when none (screens.ts). */
+  wallScreen: { id: string; version: number; title: string; html: string } | null = null;
   readonly showMe: boolean;
   readonly tts: boolean;
   readonly guide: boolean;
@@ -296,9 +337,12 @@ export class MockState {
     this.goalChecksBeforeDone = opts.goalChecksBeforeDone ?? 1;
     this.goals = opts.goals ?? false;
     this.household = opts.household ?? "off";
+    this.householdMinors = opts.householdMinors ?? "open";
     this.crewMail = opts.crewMail ?? "on";
     this.code = opts.code ?? false;
     this.cast = opts.cast ?? false;
+    this.browserLive = opts.browserLive ?? false;
+    this.screens = opts.screens ?? false;
     this.showMe = opts.showMe ?? false;
     this.tts = opts.tts ?? false;
     this.guide = opts.guide ?? false;
@@ -452,6 +496,8 @@ export class MockState {
   }
 
   publish(event: NokkerEvent): void {
+    // `approval.requested` porte aussi `target` (noyau 3509c9bb), comme la carte lue par GET.
+    if (event.type === "approval.requested") event = { ...event, approval: withTarget(event.approval) };
     for (const send of this.sseClients) send(event);
   }
 
@@ -510,7 +556,10 @@ export class MockState {
   }
 
   /** Ajoute un tour (user + reply) et publie turn.started / turn.delta (UNIQUE) / turn.cost / turn.done (§8). */
-  appendTurn(threadId: string, user: string, reply: string, opts: { sender?: string | null; channel?: string; silent?: boolean; images?: MockTurn["images"]; origin?: "approval" } = {}): MockTurn {
+  /** P9 : texte des pièces jointes, par id. */
+  attachments = new Map<string, { thread: string; id: string; kind: "text"; source: string; name: string; text: string; lang?: string; pages?: number; duration_s?: number }>();
+
+  appendTurn(threadId: string, user: string, reply: string, opts: { sender?: string | null; channel?: string; silent?: boolean; images?: MockTurn["images"]; origin?: "approval" | "phone_fetch" | "phone_continue"; attachments?: MockTurn["attachments"]; phone_fetch_offers?: PhoneFetchOffer[]; phone_fetched?: PhoneFetched[]; phone_tasks?: PhoneTaskNote[]; redaction?: RedactionMeta } = {}): MockTurn {
     const rec = this.ensureThread(threadId, user);
     const turn: MockTurn = {
       index: rec.turns.length,
@@ -521,6 +570,11 @@ export class MockState {
       created_at: new Date().toISOString(),
       ...(opts.images?.length ? { images: opts.images } : {}),
       ...(opts.origin ? { origin: opts.origin } : {}),
+      ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
+      ...(opts.phone_fetch_offers?.length ? { phone_fetch_offers: opts.phone_fetch_offers } : {}),
+      ...(opts.phone_fetched?.length ? { phone_fetched: opts.phone_fetched } : {}),
+      ...(opts.phone_tasks?.length ? { phone_tasks: opts.phone_tasks } : {}),
+      ...(opts.redaction ? { redaction: opts.redaction } : {}),
     };
     rec.turns.push(turn);
     rec.thread.updated_at = turn.created_at;
@@ -548,8 +602,8 @@ export class MockState {
     const turns = rec.turns.filter((t) => before === undefined || t.index < before).slice(-Math.max(1, Math.min(200, limit)));
     const out: ThreadMessage[] = [];
     for (const t of turns) {
-      out.push({ index: t.index, role: "user", content: t.user, sender: t.sender, channel: t.channel, created_at: t.created_at, ...(t.images ? { images: t.images } : {}), ...(t.origin ? { origin: t.origin } : {}) });
-      out.push({ index: t.index, role: "assistant", content: t.reply, created_at: t.created_at });
+      out.push({ index: t.index, role: "user", content: t.user, sender: t.sender, channel: t.channel, created_at: t.created_at, ...(t.images ? { images: t.images } : {}), ...(t.attachments ? { attachments: t.attachments } : {}), ...(t.origin ? { origin: t.origin } : {}), ...(t.redaction ? { redaction: t.redaction } : {}) });
+      out.push({ index: t.index, role: "assistant", content: t.reply, created_at: t.created_at, ...(t.phone_fetch_offers ? { phone_fetch_offers: t.phone_fetch_offers } : {}), ...(t.phone_fetched ? { phone_fetched: t.phone_fetched } : {}), ...(t.phone_tasks ? { phone_tasks: t.phone_tasks.map((x) => ({ ...x })) } : {}) });
     }
     return out;
   }

@@ -55,6 +55,8 @@ export class CliSession {
   public threadId: string;
   /** Dossier de la session locale (`null` = fil ordinaire). */
   public cwd: string | null = null;
+  /** `workspace` de la session de code ouverte (voir `LocalSession.workspace`) : chaîne, `null` (pas de montage) ou `undefined` (ancien noyau). */
+  public workspace: string | null | undefined = undefined;
   private turn: AbortController | null = null;
   /** `/btw` : fil séparé (créé à la première question, réutilisé ensuite) et sa requête, distincte de celle du tour. */
   public btwThreadId: string | null = null;
@@ -77,10 +79,35 @@ export class CliSession {
     this.user = user;
   }
 
+  /** Fils des sessions de code ouvertes PAR ce processus (`openLocal`) : à la sortie on les ferme toutes, quel que soit
+   * le fil actif (un /thread ou /goto ne ferme pas la session de code ouverte plus tôt). */
+  public readonly openedCode = new Set<string>();
+
   /** Nouveau fil ordinaire (jamais envoyé au serveur avant le premier message). */
   newThread(): void {
     this.threadId = newThreadId();
     this.cwd = null;
+  }
+
+  /** Délai de la vérification d'un fil mémorisé (ms) ; au-delà, on le suppose connu (ancien comportement). */
+  public ghostCheckMs = 1500;
+
+  /** Le fil n'existe pas chez le noyau : un 404 FRANC seulement. Délai dépassé, erreur réseau, 5xx : on le suppose connu
+   * (reprise inchangée) — on n'oublie jamais un fil sur un doute. */
+  private async threadIsUnknown(id: string): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const limit = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("timeout")), this.ghostCheckMs);
+        timer.unref?.();
+      });
+      await Promise.race([this.client.getThread(id, { limit: 1 }), limit]);
+      return false;
+    } catch (err) {
+      return err instanceof NokkerApiError && err.status === 404;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /** Session de code sur `cwd` : reprend le fil local le plus récent de ce dossier, sinon en crée un
@@ -98,7 +125,13 @@ export class CliSession {
     let opened: Awaited<ReturnType<NokkerClient["createLocalSession"]>> | null = null;
     let reopened = false;
     if (!existing) {
-      const remembered = lastThreads?.get(cwd) ?? null;
+      let remembered = lastThreads?.get(cwd) ?? null;
+      if (remembered && (await this.threadIsUnknown(remembered))) {
+        // Le noyau ne connaît pas ce fil (pile purgée, port repris par une installation neuve) : entrée fantôme. On
+        // l'oublie et on ouvre un fil neuf, sans « reprise » — le noyau accepterait sinon l'id inconnu sans rien dire.
+        lastThreads?.forget?.(cwd);
+        remembered = null;
+      }
       if (remembered) {
         try {
           opened = await this.client.createLocalSession({ cwd, thread_id: remembered });
@@ -111,6 +144,9 @@ export class CliSession {
     }
     this.threadId = existing ? existing.thread_id : opened!.thread_id;
     this.cwd = cwd;
+    this.openedCode.add(this.threadId);
+    // Montage du dossier dans le bac à sable (`workspace`, noyau du 15.11) ; `undefined` : noyau plus ancien.
+    this.workspace = existing ? existing.workspace : opened!.workspace;
     lastThreads?.set(cwd, this.threadId);
     // Skills du dépôt (§7.21.3) : dans la réponse d'ouverture ; une session reprise les relit par
     // `GET /v1/local/sessions/{id}/skills` (§7.21.4) — sans cela, un dépôt non fiable (ou modifié depuis) n'affichait aucune
@@ -310,6 +346,31 @@ export class CliSession {
    * sur une bulle déjà fermée (lecture a posteriori, pas l'usage par défaut de `/bubbles`). */
   listBubbles(includeClosed = false): Promise<Bubble[]> {
     return this.client.listBubbles(this.threadId, { includeClosed });
+  }
+
+  /** Recale les bulles d'approbation sur l'état RÉEL des cartes : une bulle reprise d'un ancien fil peut rester « working »
+   * (spinner sans fin) alors que la carte est décidée, expirée ou disparue. Une carte encore en attente garde son état. */
+  async reconcileBubbles(list: Bubble[]): Promise<Bubble[]> {
+    const stale = list.filter((b) => b.kind === "approval" && b.status === "working");
+    if (!stale.length) return list;
+    // Cartes en attente : celles du noyau (/v1/approvals) et celles des sessions locales (/v1/local/approvals) ; l'une des
+    // deux routes peut refuser le jeton ou manquer. Aucune des deux ne répond : état inconnu, on n'invente rien.
+    const [glob, local] = await Promise.all([
+      this.client.listApprovals("pending").catch(() => null),
+      this.client.listLocalApprovals().catch(() => null),
+    ]);
+    if (!glob && !local) return list;
+    const pending = new Set([...(glob ?? []), ...(local ?? [])].filter((x) => x.status === "pending").map((x) => x.id));
+    const settled = new Map<string, Bubble["status"]>();
+    await Promise.all(
+      stale.map(async (b) => {
+        const id = (b.state as { approval_id?: string }).approval_id;
+        if (id && pending.has(id)) return;
+        const a = id ? await this.client.getApproval(id).catch(() => null) : null;
+        settled.set(b.id, a && (a.status === "rejected" || a.status === "expired" || a.status === "failed") ? "failed" : a ? "done" : "idle");
+      }),
+    );
+    return list.map((b) => (settled.has(b.id) ? ({ ...b, status: settled.get(b.id)! } as Bubble) : b));
   }
 
   getBubble(id: string): Promise<Bubble> {

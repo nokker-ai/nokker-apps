@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { NokkerClient, type Healthz } from "@nokker-apps/sdk";
 import { BRAND } from "@nokker-apps/brand";
-import { lokkalProblem, readLokkal, composeArgs, hostCommand, type LokkalConfig } from "./lokkal.js";
+import { lokkalProblem, readLokkal, composeArgs, hostCommand, scriptEnv, type LokkalConfig } from "./lokkal.js";
 import { lokkalFilePath } from "./config.js";
 import { t } from "./i18n/index.js";
 import { firstLine, run as realRun, type Runner } from "./proc.js";
@@ -385,7 +385,8 @@ export async function runUpdate(opts: UpdateOptions): Promise<number> {
       out(`${t("Updating through {0} --update…", inst.path)}\n`);
       const h = installerCommand(cfg, inst.path, target);
       try {
-        const r = await run(h.cmd, h.args, { inherit: true, timeoutMs: 1_800_000 });
+        // Messages de l'installeur dans la langue de cette commande (NOKKER_LANG, par WSLENV sous WSL).
+        const r = await run(h.cmd, h.args, { inherit: true, timeoutMs: 1_800_000, env: scriptEnv(cfg) });
         if (r.code !== 0) {
           err(`${t("install.sh --update failed.")}\n`);
           return 1;

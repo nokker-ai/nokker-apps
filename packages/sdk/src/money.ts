@@ -24,7 +24,13 @@ export function formatMoney(amount: number, currency: string, lang: MoneyLang = 
   const bare = opts.whole === true && Number.isInteger(v);
   try {
     const digits = bare ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : {};
-    return new Intl.NumberFormat(LOCALE[lang] ?? LOCALE.fr, { style: "currency", currency: cur, ...digits }).format(v);
+    // Séparateurs FIXÉS ici, pas laissés à l'ICU du moteur (ICU 78.3 groupe fr-CH par apostrophe, 78.2 par espace fine) :
+    // milliers U+202F en fr, « ' » en en ; point décimal ; U+00A0 entre montant et devise.
+    const group = lang === "en" ? "'" : "\u202f";
+    return new Intl.NumberFormat(LOCALE[lang] ?? LOCALE.fr, { style: "currency", currency: cur, ...digits })
+      .formatToParts(v)
+      .map((p) => (p.type === "group" ? group : p.type === "decimal" ? "." : p.type === "literal" && /^\s+$/u.test(p.value) ? "\u00a0" : p.value))
+      .join("");
   } catch {
     // Code de devise que l'Intl ne connaît pas : même forme, sans séparateur de milliers.
     const digits = bare ? 0 : currencyExponent(cur);

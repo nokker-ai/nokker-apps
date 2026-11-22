@@ -61,6 +61,7 @@ import type {
   AccountExportFile,
   AccountConsentResult,
   AccountInfo,
+  AccountLang,
   CurrentTerms,
   TermsAcceptResult,
   AccountUsage,
@@ -71,12 +72,16 @@ import type { LocalProcess, LocalSecrets } from "./local-machine.js";
 import type { AccountModels, AccountModelTestRequest, AccountModelTestResult, PutAccountModelsRequest } from "./account-models.js";
 import type { Capabilities } from "./capabilities.js";
 import type { ImportReport, ImportSource } from "./importers.js";
+import type { LongMemory, LongNoteInput, LongNoteResult, LongScope } from "./longmemory.js";
 import type { ApprovalSuggestions, ImportedMemoryEntry, JournalEntry, LearnedSkill, LearnedSkillDetail, PendingNote, PendingStatus, SkillRevertResult } from "./learning.js";
 import type { PackDetail, PackInstallResult, PackRemoveResult, PackSummary } from "./packs.js";
 import type { PageLocalityResult, PublishPageResult, UnpublishPageResult } from "./pages.js";
+import type { AddSiteRequest, SealedValue, SiteCard, SiteRequest, SitesListing } from "./sites.js";
 import type { OAuthStartRequest, OAuthStartResult, PickedFile, PickerGrant } from "./connectors-oauth.js";
 import type { ConnectorLevel, ConnectorsMultiListing, CreateConnectorRequest, GrantResult, MultiConnector, PatchConnectorRequest } from "./connectors-multi.js";
 import type { LocalConnectorsListing, LocalMailCard, PutLocalMailRequest } from "./local-connectors.js";
+import type { AccordDevice, AccordStatus } from "./accord.js";
+import type { AccessScope, AccessSession, SessionCode, SessionExchange } from "./session-code.js";
 import type { LocalMirrorPage, LocalMirrorProject, LocalMirrorStatus, MirrorSpace, QuarantinedNote } from "./mirror.js";
 import type { AlertSource, AlertSourceSecret, BriefDelivery, Incident, IncidentState, PlanCard, PlanCardDetail, PlanCardInput, PlanContext, PlanProposal } from "./ops.js";
 import type {
@@ -106,7 +111,12 @@ import type {
   SsoConnectionInput,
   SsoDomain,
 } from "./sso.js";
-import type { DeckView, LinkApproveResult, LinkDecision, LinkedMachines, LinkPending, RemoteApproval, RemoteDecision, RemoteDecisionProof } from "./link.js";
+import type { HomeScenarios, Zone, ZoneEventRequest, ZoneEventResult } from "./zones.js";
+import type { DeviceCaps, DeviceError, DeviceItem } from "./device.js";
+import type { EgressHosts } from "./egress.js";
+import type { RedactionMeta, RedactRules } from "./redact.js";
+import type { PhoneInfo, PhoneRegisterRequest, PhoneRegistered, PhoneTaskLog } from "./node.js";
+import type { DeckView, ThreadSearch, LinkApproveResult, LinkDecision, LinkedMachines, LinkPending, RemoteApproval, RemoteDecision, RemoteDecisionProof } from "./link.js";
 import type {
   LocalLinkStart,
   LocalLinkRemoved,
@@ -121,9 +131,12 @@ import type { PatchThreadRequest } from "./bubbles.js";
 import type { CodeCredential, CodeSession, CodeSessionClosed, CodeSessionCreate, CodeSessionList, CodeSkillsTrusted, CodeToolName } from "./code-sessions.js";
 import type { PermissionMode } from "./permissions.js";
 import type { SessionModeState } from "./session-mode.js";
-import type { GlanceClaim, GlanceDevice, GlanceOffer, GlanceView } from "./glance.js";
+import type { CameraThumb, CameraWatchResult } from "./camera.js";
+import type { GlanceClaim, GlanceDevice, GlanceOffer, GlanceSurface, GlanceView } from "./glance.js";
 import type { HouseMessagesPage, HousePostResult, HouseView } from "./house.js";
 import type { PresenceView } from "./presence.js";
+import type { Persona, PersonaCatalog, PersonaPreviewRequest, PutPersonaRequest, TimedSpeech } from "./persona.js";
+import type { NinaLiveSession, NinaLiveUsage } from "./ninaLive.js";
 import type { GuideAnswer, GuideTurn, GuideView } from "./guide.js";
 import type { FolderRun, FolderRunCreate, FolderRunSummary } from "./folder.js";
 import type { BudgetInput, BudgetLine, BudgetsView, MandateDetail, MandateVerification, PayCard, PayMethod, LocalPasskey, LocalPasskeyOptions, LocalPasskeyRegistration, OwnCard, OwnCardInput, PayBalance, PayLink, PayLinkPerson, PayMethodProof, PayMethodView, ThreeDSPending } from "./payments.js";
@@ -150,6 +163,9 @@ import type {
   TransferMode,
   TransferResult,
 } from "./bubbles.js";
+import type { BrowserSessionStatus, BrowserSessionView, BrowserTakeover } from "./browser-live.js";
+import type { GlanceHousehold, GlanceHouseholdRead } from "./household-wall.js";
+import type { KioskView } from "./kiosk.js";
 
 /** `Retry-After` in seconds when the server sent the numeric form. */
 function retryAfterOf(res: ResponseLike): number | null {
@@ -203,6 +219,20 @@ export interface NokkerClientOptions {
   token?: string;
   fetchImpl?: FetchLike;
   userAgent?: string;
+  /** Surface du client, posée sur les appels de chat (`X-Nokker-Surface`) : le noyau la range dans le bloc [Environnement]
+   * du tour (ligne « Canal »). Valeur fixe par client : `web`, `pwa`, `cli`, `vscode`, `acp`. Absente : en-tête omis. */
+  surface?: ClientSurface;
+  /** Langue de la personne, posée en `Accept-Language` (clients hors navigateur : un navigateur l'envoie déjà) : sans
+   * elle le noyau retombe sur le français. Une fonction est relue à chaque appel (la langue peut changer en cours de route). */
+  language?: string | (() => string | undefined);
+}
+
+export type ClientSurface = "web" | "pwa" | "cli" | "vscode" | "acp";
+
+/** Langue de base seulement : `en_US.UTF-8` → `en`, `fr-CH` → `fr`, `de_DE@euro` → `de` ; `C`/`POSIX`/vide/illisible → `en`. */
+export function acceptLanguageOf(raw: string): string {
+  const m = /^([A-Za-z]{2,3})(?:[-_.@]|$)/.exec(raw.trim());
+  return m && !/^(c|posix)$/i.test(m[1]!) ? m[1]!.toLowerCase() : "en";
 }
 
 function defaultFetch(): FetchLike {
@@ -222,12 +252,16 @@ export class NokkerClient {
   private token: string | undefined;
   private fetchImpl: FetchLike;
   private userAgent: string | undefined;
+  private surface: ClientSurface | undefined;
+  private language: string | (() => string | undefined) | undefined;
 
   constructor(opts: NokkerClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
     this.token = opts.token;
     this.fetchImpl = opts.fetchImpl ?? defaultFetch();
     this.userAgent = opts.userAgent;
+    this.surface = opts.surface;
+    this.language = opts.language;
   }
 
   setToken(token: string): void {
@@ -238,6 +272,8 @@ export class NokkerClient {
     const h: Record<string, string> = { ...extra };
     if (this.token) h.Authorization = `Bearer ${this.token}`;
     if (this.userAgent) h["User-Agent"] = this.userAgent;
+    const lang = typeof this.language === "function" ? this.language() : this.language;
+    if (lang && !h["Accept-Language"]) h["Accept-Language"] = acceptLanguageOf(lang);
     return h;
   }
 
@@ -334,6 +370,18 @@ export class NokkerClient {
   async listLocalApprovals(): Promise<Approval[]> {
     const r = await this.request<Approval[] | { approvals?: Approval[] }>("/v1/local/approvals");
     return Array.isArray(r) ? r : (r.approvals ?? []);
+  }
+
+  /** `DELETE /v1/local/sessions/{fil}` (jeton local) : ferme la session de code (le noyau supprime son bac docker ;
+   * dossier de travail et historique restent). 404 `session_not_found` = déjà fermée : ce n'est pas une erreur. */
+  async closeLocalSession(threadId: string, signal?: AbortSignal): Promise<{ closed: boolean }> {
+    try {
+      await this.request<unknown>(`/v1/local/sessions/${encodeURIComponent(threadId)}`, { method: "DELETE", ...(signal ? { signal } : {}) });
+      return { closed: true };
+    } catch (e) {
+      if (e instanceof NokkerApiError && e.status === 404) return { closed: false };
+      throw e;
+    }
   }
 
   /** `POST /v1/local/approvals/{id}/decide` — décision locale (once|session|always). `POST /v1/approvals/{id}/decision`
@@ -492,6 +540,21 @@ export class NokkerClient {
     });
   }
 
+  /** V3 (BROWSER-LIVE §2) : état courant d'une session navigateur — à l'ouverture de la bulle et après une coupure. */
+  async getBrowserSession(id: string): Promise<BrowserSessionView> {
+    return this.request<BrowserSessionView>(`/v1/browser/sessions/${encodeURIComponent(id)}`);
+  }
+
+  /** « Je prends la main » : échange le code à usage unique (Bearer) → l'URL de l'écran + le cookie de reprise. */
+  async takeOverBrowser(takeoverUrl: string): Promise<BrowserTakeover> {
+    return this.request<BrowserTakeover>(takeoverUrl.replace(/^https?:\/\/[^/]+/, ""), { method: "POST", body: "{}" });
+  }
+
+  /** « J'ai fini » après une reprise en main (idempotent : 200 si la session tourne déjà ou est finie). */
+  async resumeBrowserSession(id: string): Promise<{ state: BrowserSessionStatus }> {
+    return this.request(`/v1/browser/sessions/${encodeURIComponent(id)}/resume`, { method: "POST", body: "{}" });
+  }
+
   async getBubble(id: string): Promise<Bubble> {
     return this.request<Bubble>(`/v1/bubbles/${encodeURIComponent(id)}`);
   }
@@ -549,6 +612,64 @@ export class NokkerClient {
       throw new NokkerApiError(`speech → ${res.status}`, res.status, body, Number.isFinite(retry) && retry > 0 ? retry : null);
     }
     return res;
+  }
+
+  /** `POST /v1/threads/{id}/messages/{index}/speech/timed` : la voix d'UNE réponse avec le minutage de chaque mot, pour
+   * un avatar qui parle. Erreurs comme `speechStream` (404 not_found, 409 not_a_reply, 413 too_long, 429 rate_limited,
+   * 502 provider_failed, 503 tts_off). */
+  async timedSpeech(threadId: string, index: number, opts: { lang?: string } = {}): Promise<TimedSpeech> {
+    return this.request<TimedSpeech>(`/v1/threads/${encodeURIComponent(threadId)}/messages/${index}/speech/timed`, {
+      method: "POST",
+      body: JSON.stringify(opts.lang ? { lang: opts.lang } : {}),
+    });
+  }
+
+  /** `POST /v1/browser/sessions/{id}/narrations/{seq}/speech/timed` : la voix de Nina pour UN point désigné (`seq` d'un
+   * `browser.point`) ; le texte est celui que le NOYAU a émis pour ce seq (`why`, repli `label`), jamais un texte du
+   * client. Même réponse et mêmes erreurs que `timedSpeech` (404 : rien à dire ou route absente, 429, 502, 503 tts_off). */
+  async narrationSpeech(sessionId: string, seq: number, opts: { lang?: string } = {}): Promise<TimedSpeech> {
+    return this.request<TimedSpeech>(`/v1/browser/sessions/${encodeURIComponent(sessionId)}/narrations/${seq}/speech/timed`, {
+      method: "POST",
+      body: JSON.stringify(opts.lang ? { lang: opts.lang } : {}),
+    });
+  }
+
+  // -- Persona de l'assistant (nom, voix, avatar) ---------------------------------------------------------------------
+
+  /** `GET /v1/persona/catalog` : voix et avatars proposés (liste fermée), bornes du nom, valeurs par défaut. */
+  async getPersonaCatalog(): Promise<PersonaCatalog> {
+    return this.request<PersonaCatalog>("/v1/persona/catalog");
+  }
+
+  async getPersona(): Promise<Persona> {
+    return this.request<Persona>("/v1/persona");
+  }
+
+  /** 400 `{error: {code: "bad_name" | "bad_voice" | "bad_avatar"}}`. */
+  async putPersona(req: PutPersonaRequest): Promise<Persona> {
+    return this.request<Persona>("/v1/persona", { method: "PUT", body: JSON.stringify(req) });
+  }
+
+  /** `POST /v1/persona/preview` : une phrase fixe dite par cette voix, horodatée ; 429 si trop d'aperçus. */
+  async previewPersona(req: PersonaPreviewRequest): Promise<TimedSpeech> {
+    return this.request<TimedSpeech>("/v1/persona/preview", { method: "POST", body: JSON.stringify(req) });
+  }
+
+  /** Nina en direct : ouvre la session vidéo du titulaire (jeton LiveKit éphémère). */
+  async openNinaLive(opts: { threadId?: string } = {}): Promise<NinaLiveSession> {
+    return this.request<NinaLiveSession>("/v1/nina-live/session", {
+      method: "POST",
+      body: JSON.stringify(opts.threadId ? { thread_id: opts.threadId } : {}),
+    });
+  }
+
+  /** `keepalive` : la fin part même si la page se ferme (sinon l'appel est coupé et la session court jusqu'au plafond). */
+  async endNinaLive(sessionId: string, opts: { keepalive?: boolean } = {}): Promise<NinaLiveUsage> {
+    return this.request<NinaLiveUsage>(`/v1/nina-live/session/${encodeURIComponent(sessionId)}/end`, { method: "POST", body: "{}", ...(opts.keepalive ? { keepalive: true } : {}) });
+  }
+
+  async ninaLiveUsage(): Promise<NinaLiveUsage> {
+    return this.request<NinaLiveUsage>("/v1/nina-live/usage");
   }
 
   /** Remplace la liste de partage (membres = personnes, threads = fils). */
@@ -646,6 +767,17 @@ export class NokkerClient {
     });
   }
 
+  /** `PATCH /v1/account {first_name}` : prénom du profil ; vide l'efface. 400 `bad_first_name` (chiffre, balisage, > 40). */
+  async setFirstName(firstName: string): Promise<{ first_name: string; name: string }> {
+    return this.request<{ first_name: string; name: string }>("/v1/account", { method: "PATCH", body: JSON.stringify({ first_name: firstName }) });
+  }
+
+  /** `PATCH /v1/account {lang}` : la langue du compte (fr|en|de|it ; `null` : suivre la détection). Rend le compte. 400 `bad_lang`.
+   * Cloud seulement : un Lokkal garde la langue posée à l'installation. */
+  async setAccountLang(lang: AccountLang | null): Promise<AccountInfo> {
+    return this.request<AccountInfo>("/v1/account", { method: "PATCH", body: JSON.stringify({ lang }) });
+  }
+
   async getAccount(): Promise<AccountInfo> {
     return this.request<AccountInfo>("/v1/account");
   }
@@ -697,6 +829,100 @@ export class NokkerClient {
   }
 
   /** X15 : deck de toutes les machines (404 tant que `cloud_link.crew` est éteint : le web n'affiche pas la vue). */
+  /** `POST /v1/gateway/token {host}` (session du compte) → jeton d'accès de 900 s pour `https://<host>/v1/*`. */
+  async gatewayAccessToken(host: string): Promise<{ access_token: string; expires_in: number }> {
+    return this.request<{ access_token: string; expires_in: number }>("/v1/gateway/token", { method: "POST", body: JSON.stringify({ host }) });
+  }
+
+  /** « Continuer dans le cloud » : nouveau fil cloud amorcé, côté serveur, par la copie du miroir d'un fil Lokkal (les 40
+   * derniers messages caviardés, plus une ligne « suite de … ») ; 404 `not_mirrored`, 403 si pas au propriétaire. */
+  async continueInCloud(seed: { machine_id: string; thread_id: string }, title?: string): Promise<{ thread_id: string; title: string }> {
+    return this.request<{ thread_id: string; title: string }>("/v1/threads", { method: "POST", body: JSON.stringify({ ...(title ? { title } : {}), seed_from: seed }) });
+  }
+
+  /** Texte d'une pièce jointe d'un message (P9). */
+  async getAttachment(threadId: string, attId: string): Promise<{ id: string; kind: "text"; source: string; name: string; text: string; lang?: string; pages?: number; duration_s?: number }> {
+    return this.request(`/v1/threads/${encodeURIComponent(threadId)}/attachments/${encodeURIComponent(attId)}`);
+  }
+
+  /** `GET /v1/threads/search` (C3), même route dans le noyau cloud et dans celui d'une machine. */
+  async searchThreads(q: string, limit = 20): Promise<ThreadSearch> {
+    return this.request<ThreadSearch>(`/v1/threads/search?q=${encodeURIComponent(q)}&limit=${limit}`);
+  }
+
+  // -- Données du téléphone à la demande (LOKKAL-PHONE §4.3, P8 ; voir device.ts) --
+  async putDeviceCaps(deviceId: string, caps: DeviceCaps): Promise<DeviceCaps> {
+    return this.request<DeviceCaps>(`/v1/me/devices/${encodeURIComponent(deviceId)}/caps`, { method: "PUT", body: JSON.stringify(caps) });
+  }
+  async getDeviceCaps(deviceId: string): Promise<DeviceCaps> {
+    return this.request<DeviceCaps>(`/v1/me/devices/${encodeURIComponent(deviceId)}/caps`);
+  }
+  async deleteDeviceCaps(deviceId: string): Promise<void> {
+    await this.request<unknown>(`/v1/me/devices/${encodeURIComponent(deviceId)}/caps`, { method: "DELETE" });
+  }
+  async answerDeviceRequest(requestId: string, body: { device_id: string; items: DeviceItem[] } | { device_id: string; error: DeviceError }): Promise<void> {
+    await this.request<unknown>(`/v1/me/device-requests/${encodeURIComponent(requestId)}/result`, { method: "POST", body: JSON.stringify(body) });
+  }
+
+  // -- Nœud téléphone, côté session du membre (LOKKAL-PHONE §3, P7 ; voir node.ts) --
+  async registerPhone(body: PhoneRegisterRequest): Promise<{ approval_id: string; key_fingerprint: string; expires_at: string }> {
+    return this.request(`/v1/link/phone`, { method: "POST", body: JSON.stringify(body) });
+  }
+  /** `{status: "pending"}` tant que la carte attend ; le jeton de machine, une seule fois, une fois approuvée. 403 refusée, 410 échue. */
+  async phoneRegistration(approvalId: string): Promise<{ status: "pending" } | PhoneRegistered> {
+    return this.request(`/v1/link/phone/registrations/${encodeURIComponent(approvalId)}`);
+  }
+  async listPhones(): Promise<{ phones: PhoneInfo[] }> {
+    return this.request(`/v1/link/phone`);
+  }
+  async phoneTasks(machineId: string, limit = 200): Promise<{ tasks: PhoneTaskLog[] }> {
+    return this.request(`/v1/link/phone/${encodeURIComponent(machineId)}/tasks?limit=${limit}`);
+  }
+
+  // -- Masquage sur l'appareil (LOKKAL-PHONE §4.3.2, P9b ; voir redact.ts) --
+  /** Motifs publiés par le noyau (source unique), avec leurs vecteurs. */
+  async getRedactRules(): Promise<RedactRules> {
+    return this.request(`/v1/redact/rules`);
+  }
+
+  // -- Pages par le téléphone (LOKKAL-PHONE §4.5, P11 ; voir egress.ts) --
+  /** P10c : événements (texte) de la caméra de veille d'un nœud maison du titulaire, lus à la demande. */
+  async phoneCameraEvents(machineId: string, after = 0): Promise<CameraWatchResult> {
+    return this.request<CameraWatchResult>(`/v1/link/phone/${encodeURIComponent(machineId)}/camera/events?after=${Math.max(0, Math.floor(after))}`);
+  }
+  /** P10c : URL LAN à usage unique et clé de la vignette (jamais journalisées ; à passer au natif seulement). */
+  async phoneCameraThumb(machineId: string, id: string): Promise<CameraThumb> {
+    return this.request<CameraThumb>(`/v1/link/phone/${encodeURIComponent(machineId)}/camera/thumb`, { method: "POST", body: JSON.stringify({ id }) });
+  }
+  /** P10d : appareils du réseau local vus par un nœud maison du titulaire (noms et types seulement). */
+  async phoneLanServices(machineId: string, types?: string[]): Promise<{ services: { id: string; types: string[]; name: string }[]; at: string }> {
+    return this.request(`/v1/link/phone/${encodeURIComponent(machineId)}/lan/services${types?.length ? `?types=${encodeURIComponent(types.join(","))}` : ""}`);
+  }
+  async getEgressHosts(): Promise<EgressHosts> {
+    return this.request(`/v1/me/egress/hosts`);
+  }
+  async putEgressHosts(hosts: string[]): Promise<EgressHosts> {
+    return this.request(`/v1/me/egress/hosts`, { method: "PUT", body: JSON.stringify({ hosts }) });
+  }
+  /** Geste « Ouvrir par mon téléphone » sur une offre : un tour de la personne avec un droit signé par le noyau. */
+  async phoneFetch(threadId: string, body: { url: string; call_id: string }): Promise<{ turn_id: string }> {
+    return this.request(`/v1/threads/${encodeURIComponent(threadId)}/phone-fetch`, { method: "POST", body: JSON.stringify(body) });
+  }
+
+  // -- Zones du membre (LOKKAL-PHONE §4.2, P6 ; voir zones.ts) --
+  async getZones(): Promise<{ zones: Zone[] }> {
+    return this.request<{ zones: Zone[] }>("/v1/me/zones");
+  }
+  async putZones(zones: Zone[]): Promise<{ zones: Zone[] }> {
+    return this.request<{ zones: Zone[] }>("/v1/me/zones", { method: "PUT", body: JSON.stringify({ zones }) });
+  }
+  async postZoneEvent(zoneId: string, e: ZoneEventRequest): Promise<ZoneEventResult> {
+    return this.request<ZoneEventResult>(`/v1/me/zones/${encodeURIComponent(zoneId)}/event`, { method: "POST", body: JSON.stringify(e) });
+  }
+  async getHomeScenarios(): Promise<HomeScenarios> {
+    return this.request<HomeScenarios>("/v1/home/scenarios");
+  }
+
   async getDeck(): Promise<DeckView> {
     return this.request<DeckView>("/v1/link/deck");
   }
@@ -741,6 +967,21 @@ export class NokkerClient {
   /** Sans corps. 409 already_decided, 503 no_memory (la note reste en attente), 403 machine_only (par la passerelle). */
   async decidePendingMemory(id: string, decision: "approve" | "reject"): Promise<{ note: PendingNote }> {
     return this.request<{ note: PendingNote }>(`/v1/memory/pending/${encodeURIComponent(id)}/${decision}`, { method: "POST", body: "{}" });
+  }
+
+  // ── Mémoire longue côté nuage (404 : fonction éteinte) ──
+
+  async getLongMemory(scope?: LongScope): Promise<LongMemory> {
+    return this.request<LongMemory>(`/v1/memory/long${scope ? `?scope=${scope}` : ""}`);
+  }
+
+  /** 400 bad_note (titre ≤ 120, texte ≤ 1500), 403, 409. */
+  async writeLongNote(input: LongNoteInput): Promise<LongNoteResult> {
+    return this.request<LongNoteResult>("/v1/memory/long/notes", { method: "POST", body: JSON.stringify(input) });
+  }
+
+  async deleteLongNote(name: string): Promise<{ deleted: boolean }> {
+    return this.request<{ deleted: boolean }>(`/v1/memory/long/notes/${encodeURIComponent(name)}`, { method: "DELETE" });
   }
 
   /** Plus récent d'abord ; pas de curseur : plus d'entrées = un `limit` plus grand (1–1000). */
@@ -829,6 +1070,64 @@ export class NokkerClient {
   /** Lokkal (jeton local ; par la passerelle : 403) : même retrait que l'outil `pack_remove`. */
   async removeLocalPack(name: string, threadId?: string): Promise<PackRemoveResult> {
     return this.request<PackRemoveResult>(`/v1/local/packs/${encodeURIComponent(name)}/remove`, { method: "POST", body: JSON.stringify(threadId ? { thread_id: threadId } : {}) });
+  }
+
+  // -- ACCORD (appareil Autoriser / Refuser ; propriétaire local seulement ; drapeau éteint : 404) -------------------
+
+  /** État : empreinte de l'hôte, fenêtre d'appairage, demandes (key8), appareils. 404 : ACCORD éteint sur cette machine. */
+  async getLocalAccord(): Promise<AccordStatus> {
+    return this.request<AccordStatus>("/v1/local/accord");
+  }
+  /** « Ajouter un appareil » : ouvre la fenêtre de 2 min ; rend l'état. 423 `pairing_locked` si l'appairage est bloqué. */
+  async openAccordPairing(): Promise<AccordStatus> {
+    return this.request<AccordStatus>("/v1/local/accord/pair/open", { method: "POST" });
+  }
+  /** Code à 6 chiffres lu sur l'appareil → l'appareil appairé. 400 `bad_code`, 409 `pairing_closed` | `ambiguous`,
+   * 423 `pairing_locked`. */
+  async pairAccordDevice(code: string): Promise<AccordDevice> {
+    return this.request<AccordDevice>("/v1/local/accord/pair", { method: "POST", body: JSON.stringify({ code }) });
+  }
+  /** Nom de l'appareil (1 à 40 caractères, NFC, sans caractère de contrôle ; vide : retour à « ACCORD <key8> »). 400 `bad_name`,
+   * 404 : inconnu ou révoqué. Rend l'appareil à jour. */
+  async renameAccordDevice(deviceId: string, name: string): Promise<AccordDevice> {
+    return this.request<AccordDevice>(`/v1/local/accord/devices/${encodeURIComponent(deviceId)}`, { method: "PATCH", body: JSON.stringify({ name }) });
+  }
+  /** Révocation : la clé est oubliée, toute réponse de l'appareil est refusée ensuite. 404 : inconnu ou déjà révoqué. */
+  async revokeAccordDevice(deviceId: string): Promise<{ device_id: string; revoked: true }> {
+    return this.request<{ device_id: string; revoked: true }>(`/v1/local/accord/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
+  }
+
+  // -- Accès sans jeton dans l'URL (code à usage unique → jeton de session) ----------------------------------------
+
+  /** Un code d'ouverture (60 s, une fois) pour `#code=` ; jeton LOCAL seulement (une session d'accès est refusée : 403). */
+  async mintSessionCode(scope?: AccessScope): Promise<SessionCode> {
+    return this.request<SessionCode>("/v1/local/session-code", { method: "POST", ...(scope ? { body: JSON.stringify({ scope }) } : {}) });
+  }
+  /** Échange le code contre un jeton de session. SANS Authorization (le code est le secret) : 410 `code_used` | `code_expired`.
+   * `expect` : la portée que la page attend ; un autre code → 409 `wrong_scope`, le code n'est PAS consommé (noyau qui le sait). */
+  async exchangeSessionCode(code: string, expect?: AccessScope): Promise<SessionExchange> {
+    const res = await this.fetchImpl(`${this.baseUrl}/v1/local/session-code/exchange`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(this.userAgent ? { "User-Agent": this.userAgent } : {}) },
+      body: JSON.stringify(expect ? { code, expect } : { code }),
+    });
+    const text = await readAllText(res);
+    let parsed: unknown = undefined;
+    try {
+      parsed = text ? JSON.parse(text) : undefined;
+    } catch {
+      parsed = text;
+    }
+    if (!res.ok) throw new NokkerApiError(`/v1/local/session-code/exchange → ${res.status}`, res.status, parsed, retryAfterOf(res));
+    return parsed as SessionExchange;
+  }
+  /** Les sessions d'accès de la machine (jeton local seulement). */
+  async listAccessSessions(): Promise<{ sessions: AccessSession[] }> {
+    return this.request<{ sessions: AccessSession[] }>("/v1/local/access-sessions");
+  }
+  /** Révoque une session d'accès (jeton local seulement) ; 404 : inconnue ou déjà révoquée. */
+  async revokeAccessSession(id: string): Promise<{ id: string; revoked: true }> {
+    return this.request<{ id: string; revoked: true }>(`/v1/local/access-sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 
   // -- Boîte mail de la machine (LOKKAL §7.25, jeton local ; passerelle : 403) -------------------
@@ -1198,8 +1497,9 @@ export class NokkerClient {
   async listHouseholdInvitations(): Promise<{ invitations: HouseholdInvitation[] }> {
     return this.request<{ invitations: HouseholdInvitation[] }>("/v1/household/invitations");
   }
-  async inviteToHousehold(email: string, profile: HouseholdProfile = "adult", attestation?: HouseholdAttestation): Promise<HouseholdInvitation> {
-    return this.request<HouseholdInvitation>("/v1/household/invitations", { method: "POST", body: JSON.stringify({ email, profile, ...(attestation ? { attestation } : {}) }) });
+  async inviteToHousehold(email: string, profile: HouseholdProfile = "adult", attestation?: HouseholdAttestation, firstName?: string): Promise<HouseholdInvitation> {
+    const first = firstName?.trim();
+    return this.request<HouseholdInvitation>("/v1/household/invitations", { method: "POST", body: JSON.stringify({ email, profile, ...(attestation ? { attestation } : {}), ...(first ? { first_name: first } : {}) }) });
   }
   async revokeHouseholdInvitation(id: string): Promise<{ revoked: true }> {
     return this.request<{ revoked: true }>(`/v1/household/invitations/${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -1324,11 +1624,62 @@ export class NokkerClient {
 
   // -- Connecteurs (session requise) ------------------------------------------------------
 
+  // -- Sites connectés (noyau Lokkal, docs/CONNECTED-SITES.md §15 ; voir sites.ts) --
+  async listSites(): Promise<SitesListing> {
+    return this.request<SitesListing>("/v1/local/sites");
+  }
+  async acceptSiteConsent(site: string, version: string): Promise<void> {
+    await this.request<unknown>("/v1/local/sites/consent", { method: "POST", body: JSON.stringify({ site, version }) });
+  }
+  /** Ajoute un compte et lance la connexion : jamais de mot de passe ici (le noyau ouvre une demande `password`). */
+  async addSite(req: AddSiteRequest): Promise<SiteCard & { flow: string }> {
+    return this.request<SiteCard & { flow: string }>("/v1/local/sites", { method: "POST", body: JSON.stringify(req) });
+  }
+  async getSite(id: string): Promise<SiteCard> {
+    return this.request<SiteCard>(`/v1/local/sites/${encodeURIComponent(id)}`);
+  }
+  async connectSite(id: string, opts: { answer_here?: true } = {}): Promise<{ status: string }> {
+    return this.request<{ status: string }>(`/v1/local/sites/${encodeURIComponent(id)}/connect`, { method: "POST", body: JSON.stringify(opts) });
+  }
+  /** Arrête une connexion en cours : la demande ouverte tombe, rien n'est rejoué (`failed`, signal `cancelled`). */
+  async cancelSite(id: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>(`/v1/local/sites/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+  }
+  /** Lien de passation `/sites/h/<jeton>` → adresse de l'écran du navigateur du site (une seule fois, 15 min). */
+  async openSiteHandoff(token: string): Promise<{ screen_url: string }> {
+    return this.request<{ screen_url: string }>(`/v1/local/sites/handoff/${encodeURIComponent(token)}`, { method: "POST" });
+  }
+  async patchSite(id: string, req: { label?: string; default?: true }): Promise<SiteCard> {
+    return this.request<SiteCard>(`/v1/local/sites/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(req) });
+  }
+  async liftSitePause(id: string): Promise<SiteCard> {
+    return this.request<SiteCard>(`/v1/local/sites/${encodeURIComponent(id)}/pause`, { method: "DELETE" });
+  }
+  async deleteSite(id: string, forgetCredentials = true): Promise<{ deleted: boolean }> {
+    return this.request<{ deleted: boolean }>(`/v1/local/sites/${encodeURIComponent(id)}?forget_credentials=${forgetCredentials}`, { method: "DELETE" });
+  }
+  async getSiteRequest(rid: string): Promise<SiteRequest> {
+    return this.request<SiteRequest>(`/v1/local/sites/requests/${encodeURIComponent(rid)}`);
+  }
+  async answerSiteRequest(rid: string, answer: { sealed: SealedValue } | { done: true }): Promise<void> {
+    await this.request<unknown>(`/v1/local/sites/requests/${encodeURIComponent(rid)}/answer`, { method: "POST", body: JSON.stringify(answer) });
+  }
+  /** Remplacer le mot de passe enregistré : ouvre une demande `password`, à laquelle la page répond scellé. */
+  async replaceSitePassword(id: string): Promise<{ request: SiteRequest }> {
+    return this.request<{ request: SiteRequest }>(`/v1/local/sites/${encodeURIComponent(id)}/credentials`, { method: "POST" });
+  }
+
   /** Cadre de l'aperçu cast (SCREEN-CAST, noyau Lokkal p2/cast-frame b48cc48) : URL signée de 2 min, servie par le noyau
    * avec sa propre CSP (sandbox allow-scripts, default-src 'none'). 404 : pas au propriétaire, inconnu, ou noyau d'avant ;
    * 413 `html_too_large`. */
   async castFrameUrl(castId: string): Promise<{ url: string; expires_at: string }> {
     return this.request<{ url: string; expires_at: string }>(`/v1/cast/${encodeURIComponent(castId)}/frame-url`, { method: "POST" });
+  }
+
+  /** Screens for the wall (core docs/SCREENS.md §3): signed URL (5 min) of the preview of the LATEST version, served by
+   * the core under its own CSP (sandbox without scripts). 404 on an older core: fall back to `srcdoc`. */
+  async screenFrameUrl(screenId: string): Promise<{ url: string; version: number }> {
+    return this.request<{ url: string; version: number }>(`/v1/screens/${encodeURIComponent(screenId)}/frame-url`, { method: "POST" });
   }
 
   /** OAuth : URL du fournisseur à suivre dans le même onglet. 404 `provider_off`, 400 `bad_service`. */
@@ -1751,8 +2102,8 @@ export class NokkerClient {
   // -- Glance view for display glasses (AMBIENT.md §6) --------------------------------------------------------------
 
   /** From the phone (account session; Lokkal: local token): a code and a QR to pair glasses, 5 minutes. */
-  async pairGlance(name?: string): Promise<GlanceOffer> {
-    return this.request<GlanceOffer>("/v1/glance/pair", { method: "POST", body: JSON.stringify(name ? { name } : {}) });
+  async pairGlance(name?: string, surface?: GlanceSurface): Promise<GlanceOffer> {
+    return this.request<GlanceOffer>("/v1/glance/pair", { method: "POST", body: JSON.stringify({ ...(name ? { name } : {}), ...(surface ? { surface } : {}) }) });
   }
   /** From the glasses, without any session: the code (any case, dash or not) or the QR text → a read-only token. */
   async claimGlance(code: string): Promise<GlanceClaim> {
@@ -1762,8 +2113,48 @@ export class NokkerClient {
   async getGlance(): Promise<GlanceView> {
     return this.request<GlanceView>("/v1/glance");
   }
+  /** V6, nkg_ d'un mur : l'annonce du brief déjà affiché, en parole minutée. 403 not_wall | brief_hidden, 404 no_brief,
+   * 429 glance_speech_rate (retry_after), 503 tts_off. */
+  async getGlanceBriefSpeech(): Promise<TimedSpeech> {
+    return this.request<TimedSpeech>("/v1/glance/brief/speech");
+  }
+  /** Kiosque HDMI d'un Lokkal (jeton local du titulaire, sur la machine seulement) : vue locale en lecture seule. */
+  async getKiosk(): Promise<KioskView> {
+    return this.request<KioskView>("/v1/local/kiosk");
+  }
+  /** F1, nkg_ d'un mur : la vue « Foyer » ; `etag` → `{status: 304}` si rien n'a bougé. `household: null` quand le
+   * foyer n'a rien de partagé avec le mur. */
+  async getGlanceHousehold(etag?: string | null): Promise<GlanceHouseholdRead> {
+    const res = await this.fetchImpl(`${this.baseUrl}/v1/glance/household`, { headers: this.headers(etag ? { "If-None-Match": etag } : undefined) });
+    if (res.status === 304) return { status: 304 };
+    const text = await readAllText(res);
+    let parsed: unknown = undefined;
+    try {
+      parsed = text ? JSON.parse(text) : null;
+    } catch {
+      parsed = text;
+    }
+    if (!res.ok) throw new NokkerApiError(`/v1/glance/household → ${res.status}`, res.status, parsed, retryAfterOf(res));
+    return { status: 200, household: (parsed as GlanceHousehold | null) ?? null, etag: res.headers?.get("etag") ?? null };
+  }
+  /** F1 : coche d'une tâche depuis le mur (idempotente, sans effet externe). */
+  async glanceTaskDone(id: string, done: boolean): Promise<{ id: string; done: boolean }> {
+    return this.request(`/v1/glance/tasks/${encodeURIComponent(id)}/done`, { method: "POST", body: JSON.stringify({ done }) });
+  }
+  /** F1 : coche d'un article de courses depuis le mur. */
+  async glanceShoppingDone(id: string, done: boolean): Promise<{ id: string; done: boolean }> {
+    return this.request(`/v1/glance/shopping/${encodeURIComponent(id)}/done`, { method: "POST", body: JSON.stringify({ done }) });
+  }
+  /** F1 : mode invité du mur (on: false seulement après le code du propriétaire de l'appareil, côté natif). */
+  async setGlanceGuest(on: boolean): Promise<{ guest: boolean; until: string | null }> {
+    return this.request(`/v1/glance/guest`, { method: "POST", body: JSON.stringify({ on }) });
+  }
   async listGlanceDevices(): Promise<{ devices: GlanceDevice[] }> {
     return this.request<{ devices: GlanceDevice[] }>("/v1/glance/devices");
+  }
+  /** P10b: wall only — show the brief summary and event titles to anyone in the room. */
+  async setGlanceShowBrief(id: string, show_brief: boolean): Promise<GlanceDevice> {
+    return this.request<GlanceDevice>(`/v1/glance/devices/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ show_brief }) });
   }
   async revokeGlanceDevice(id: string): Promise<{ revoked: true }> {
     return this.request<{ revoked: true }>(`/v1/glance/devices/${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -1826,7 +2217,7 @@ export class NokkerClient {
   async chatCompletion(threadId: string, messages: ChatMessage[], model = "nokker"): Promise<ChatCompletion> {
     return this.request<ChatCompletion>("/v1/chat/completions", {
       method: "POST",
-      headers: { "X-Session-Id": threadId },
+      headers: { "X-Session-Id": threadId, ...(this.surface ? { "X-Nokker-Surface": this.surface } : {}) },
       body: JSON.stringify({ model, messages, stream: false }),
     });
   }
@@ -1845,17 +2236,20 @@ export class NokkerClient {
     messages: ChatMessage[],
     onChunk: (chunk: ChatCompletionChunk) => void,
     model = "nokker",
-    opts: { liveTokens?: boolean; signal?: AbortSignal; attachments?: ChatAttachment[]; metadata?: Record<string, string> } = {},
+    opts: { liveTokens?: boolean; signal?: AbortSignal; attachments?: ChatAttachment[]; metadata?: Record<string, string>; redaction?: RedactionMeta } = {},
   ): Promise<void> {
     const extra: Record<string, string> = { "X-Session-Id": threadId };
     if (opts.liveTokens !== false) extra["X-Nokker-Stream-Tokens"] = "1";
+    if (this.surface) extra["X-Nokker-Surface"] = this.surface; // chat seulement : pas de pré-vol CORS sur les autres appels
     const res = await this.fetchImpl(`${this.baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { ...this.headers(extra), "Content-Type": "application/json" },
       // Images du dernier message user (LOKKAL.md §7.6) : `attachments` à côté de `content`, jamais d'adresse http(s).
       // `metadata` (ex. `cli_control`) : étiquette du tour, stockée par le noyau ; un noyau plus ancien l'ignore.
       body: JSON.stringify({ model, messages, stream: true, ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
-        ...(opts.metadata && Object.keys(opts.metadata).length ? { metadata: opts.metadata } : {}) }),
+        ...(opts.metadata && Object.keys(opts.metadata).length ? { metadata: opts.metadata } : {}),
+        // P9b : le message tapé a été masqué sur l'appareil (compteurs seulement).
+        ...(opts.redaction ? { redaction: opts.redaction } : {}) }),
       timeout: false, // un tour peut attendre une approbation plus de 5 min (délai d'inactivité par défaut de bun)
       ...(opts.signal ? { signal: opts.signal } : {}),
     });

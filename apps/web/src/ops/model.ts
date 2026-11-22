@@ -53,6 +53,12 @@ export function approvalStatusLabel(status: string): string {
       return tr("forwarded");
     case "executed":
       return tr("executed");
+    case "executing":
+      return tr("in progress");
+    case "interrupted":
+      return tr("interrupted");
+    case "failed":
+      return tr("failed");
     default:
       return status;
   }

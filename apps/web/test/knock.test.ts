@@ -34,4 +34,18 @@ describe("knock to call (KNOCK.md §7)", () => {
     expect(js.match(/fetch\(/g)).toHaveLength(2);
     expect(js).not.toMatch(/XMLHttpRequest|sendBeacon|WebSocket/);
   });
+
+  it("coupé en mode nœud maison (pièce commune) : arrêt, aucun démarrage possible, pas de reprise à la sortie", async () => {
+    const { startKnock } = await import("../src/knock/controller.js");
+    const { applyHomeGuard } = await import("../src/platform/homeGuard.js");
+    applyHomeGuard({ home: { on: true } as never });
+    expect(knockStore.get()).toMatchObject({ blocked: "home", state: "off" });
+    await startKnock(); // un clic sur « Écouter » ne fait rien
+    expect(knockStore.get().state).toBe("off");
+    applyHomeGuard({ home: { on: false } as never });
+    expect(knockStore.get()).toMatchObject({ blocked: null, state: "off" }); // pas de reprise automatique
+    applyHomeGuard(null);
+    expect(knockStore.get().blocked).toBeNull();
+  });
 });
+

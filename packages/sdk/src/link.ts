@@ -21,7 +21,10 @@ export interface LinkApproveResult {
 export interface LinkedMachine {
   machine_id: string;
   name: string;
-  /** `<nom>.nokker.app` : la passerelle de la machine. */
+  /** `lokkal` (absent chez un noyau d'avant P7) ou `phone` : un téléphone-nœud (LOKKAL-PHONE §3), sans passerelle, hors
+   * du deck. Une seule liste « mes machines ». */
+  kind?: "lokkal" | "phone";
+  /** `<nom>.nokker.app` : la passerelle de la machine ; vide pour un téléphone. */
   host: string;
   /** Secondes epoch. */
   created_at: number;
@@ -122,11 +125,27 @@ export interface DeckAgent {
   defined_at: "nokker.ai" | "machine";
 }
 
+/** Deck v2 (docs/APP-CORE-CONTRACTS.md C5) : les fils récents d'une machine, pour la liste unique quand elle est éteinte. */
+export interface DeckThread {
+  thread_id: string;
+  state: "idle" | "working" | "awaiting_approval";
+  updated_at: string;
+  channel: "api" | "telegram" | "code" | "agent" | (string & {});
+  /** Sous la règle du miroir : `null` si les fils de la machine ne sont pas en miroir. */
+  title: string | null;
+}
+
 export interface DeckMachine {
   machine_id: string;
   name: string;
   host: string;
   online: boolean;
+  /** Deck v2 : 100 fils les plus récents (absent d'un noyau v1). */
+  threads?: DeckThread[];
+  /** Deck v2 : miroir allumé (copie en lecture seule chez nokker.ai, « Continuer dans le cloud »). */
+  mirror?: boolean;
+  /** Version du deck publiée par CETTE machine (noyau p2/app-core 9827885) : 1 = sessions de code seulement. */
+  deck_v?: number;
   load_age_s: number | null;
   load: DeckLoad | null;
   deck_at: number | null;
@@ -138,6 +157,8 @@ export interface DeckMachine {
 }
 
 export interface DeckView {
+  /** 2 : deck v2 (fils des machines). Absent : v1. */
+  v?: number;
   at: number;
   machines: DeckMachine[];
   web: { engine: boolean; agents: DeckAgent[] };
@@ -150,4 +171,21 @@ export interface MoveMissing {
   name?: string;
   machine_id?: string;
   message: string;
+}
+
+/** Résultat de `GET /v1/threads/search` (C3). */
+export interface ThreadSearchResult {
+  thread_id: string;
+  title: string | null;
+  /** ≤ 160 caractères autour de l'occurrence, caviardé. */
+  snippet: string;
+  turn_index: number | null;
+  at: string;
+  channel: string;
+  /** Copie en miroir d'un fil Lokkal (recherche cloud) : le fil d'origine ; `title` est alors `null`. */
+  copy_of?: { machine_id: string; thread_id: string } | null;
+}
+export interface ThreadSearch {
+  results: ThreadSearchResult[];
+  truncated: boolean;
 }

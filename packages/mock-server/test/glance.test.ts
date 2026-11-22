@@ -39,7 +39,10 @@ describe("glance view for glasses (AMBIENT.md §6)", () => {
     expect(await fail(new NokkerClient({ baseUrl: mock!.url }).claimGlance(offer.code))).toEqual({ status: 404, code: "unknown_code" });
     const reader = new NokkerClient({ baseUrl: mock!.url, token: claim.token });
     const v = await reader.getGlance();
-    expect(Object.keys(v).sort()).toEqual(["approvals", "at", "brief", "brief_last_run", "incidents", "unavailable"]);
+    // P10b (noyau p2/glance-wall) : les lunettes gagnent approvals_count et next_event (avec titre).
+    expect(Object.keys(v).sort()).toEqual(["approvals", "approvals_count", "at", "brief", "brief_last_run", "incidents", "next_event", "show_brief", "surface", "unavailable"]);
+    expect(v.approvals_count).toBe(v.approvals.length);
+    expect(v.next_event?.title).toBeTruthy();
     expect(Array.isArray(v.approvals)).toBe(true);
     expect((await phone.listGlanceDevices()).devices.map((d) => [d.name, d.revoked])).toEqual([["Ray-Ban", false]]);
   });
@@ -85,5 +88,39 @@ describe("glance view for glasses (AMBIENT.md §6)", () => {
   it("normalizeGlanceCode accepts what the core accepts", () => {
     expect(normalizeGlanceCode(" abcd-efgh ")).toBe("ABCDEFGH");
     expect(normalizeGlanceCode("NOKKER-GLANCE:ABCDEFGH")).toBe("ABCDEFGH");
+  });
+
+  it("P10b mur : surface fixée à l'appairage, minimum filtré par le serveur, show_brief par le titulaire seulement", async () => {
+    const phone = await boot();
+    const raw = (path: string, init: { method: string; body: string }) => (phone as unknown as { request: (p: string, i: unknown) => Promise<unknown> }).request(path, init);
+    expect((await fail(raw("/v1/glance/pair", { method: "POST", body: JSON.stringify({ surface: "tv" }) }))).code).toBe("bad_surface");
+    const offer = await phone.pairGlance("Mur — salon", "wall");
+    const claim = await new NokkerClient({ baseUrl: mock!.url }).claimGlance(offer.code);
+    const wall = new NokkerClient({ baseUrl: mock!.url });
+    wall.setToken(claim.token);
+    const v = await wall.getGlance();
+    expect(v).toMatchObject({ surface: "wall", show_brief: false, approvals: [], brief: null, brief_last_run: null });
+    expect(v.unavailable.filter((x) => x === "brief")).toHaveLength(1);
+    expect(typeof v.approvals_count).toBe("number");
+    expect(v.next_event).toBeTruthy();
+    expect(v.next_event).not.toHaveProperty("title");
+    for (const i of v.incidents) expect(Object.keys(i).sort()).toEqual(["id", "title"]);
+    const dev = (await phone.listGlanceDevices()).devices.find((d) => d.id === claim.device.id)!;
+    expect(dev).toMatchObject({ surface: "wall", show_brief: false });
+    expect(await fail(raw(`/v1/glance/devices/${dev.id}`, { method: "PATCH", body: JSON.stringify({ show_brief: true, x: 1 }) }))).toEqual({ status: 400, code: "bad_request" });
+    expect((await phone.setGlanceShowBrief(dev.id, true)).show_brief).toBe(true);
+    await new Promise((r) => setTimeout(r, 10));
+    // 2 lectures par minute : la deuxième passe encore.
+    const v2 = await wall.getGlance();
+    expect(v2.show_brief).toBe(true);
+    expect(v2.next_event?.title).toBeTruthy();
+    expect(v2.approvals).toEqual([]); // jamais le contenu des cartes sur un mur
+    // Lunettes : pas de réglage show_brief ; le mur ne peut rien d'autre que lire.
+    const g = await phone.pairGlance("Ray-Ban");
+    const gc = await new NokkerClient({ baseUrl: mock!.url }).claimGlance(g.code);
+    expect(await fail(phone.setGlanceShowBrief(gc.device.id, false))).toEqual({ status: 400, code: "not_wall" });
+    expect((await fail(wall.listGlanceDevices())).code).toBe("glance_scope");
+    await phone.revokeGlanceDevice(dev.id);
+    expect(await fail(phone.setGlanceShowBrief(dev.id, false))).toEqual({ status: 404, code: "not_found" });
   });
 });

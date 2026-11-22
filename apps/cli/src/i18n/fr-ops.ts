@@ -23,7 +23,28 @@ export const FR_OPS: Record<string, string> = {
   "default model {0} no longer exists": "le modèle par défaut {0} n'existe plus",
   "default model {0} has no key": "le modèle par défaut {0} n'a pas de clé",
   "default model {0} has no model name": "le modèle par défaut {0} n'a pas de nom de modèle",
-  "{0} — open {1}": "{0} — ouvre {1}",
+  "{0} — run {1}": "{0} — lance {1}",
+  "open expects one path, for example: nokker open /setup": "open attend un seul chemin, par exemple : nokker open /setup",
+  "sessions expects nothing (list) or: revoke <id>": "sessions n'attend rien (liste) ou : revoke <id>",
+  "the local key was refused (is this the machine that runs Nokker? nokker doctor)": "la clé locale a été refusée (est-ce bien la machine où tourne Nokker ? nokker doctor)",
+  "this Nokker does not offer opening links yet (update it: nokker update)": "ce Nokker ne propose pas encore de liens d'ouverture (mets-le à jour : nokker update)",
+  "too many codes in a short time: wait a minute": "trop de codes en peu de temps : attends une minute",
+  "Nokker is not responding (nokker doctor)": "Nokker ne répond pas (nokker doctor)",
+  "open expects a path of this machine, for example: nokker open /setup": "open attend un chemin de cette machine, par exemple : nokker open /setup",
+  "no Lokkal install found here: the web address is read from lokkal.json (nokker doctor)": "aucune installation de Lokkal ici : l'adresse web se lit dans lokkal.json (nokker doctor)",
+  "Open this link in your browser within {0} s: it works once.": "Ouvre ce lien dans ton navigateur dans les {0} s : il ne sert qu'une fois.",
+  "No access session: no browser holds a key for this machine.": "Aucune session d'accès : aucun navigateur ne tient de clé pour cette machine.",
+  "id": "id",
+  "created": "créée",
+  "last used": "dernière utilisation",
+  "expires": "expire",
+  "agent": "agent",
+  "Session {0} revoked: its browser must be opened again with: nokker open": "Session {0} révoquée : son navigateur doit être rouvert avec : nokker open",
+  "no such session (nokker sessions)": "session inconnue (nokker sessions)",
+  "open and sessions only work against this machine's own Nokker (--server is not local)": "open et sessions ne marchent que sur le Nokker de cette machine (--server n'est pas local)",
+  "no local key found here: run this on the machine that runs Nokker (nokker doctor)": "aucune clé locale ici : lance ceci sur la machine où tourne Nokker (nokker doctor)",
+  "print a link that opens the web app of this machine: it carries a one-time code (60 s), never the local key": "affiche un lien qui ouvre l'appli web de cette machine : il porte un code à usage unique (60 s), jamais la clé locale",
+  "list the browsers that hold access to this machine (when created, last used), or revoke one": "liste les navigateurs qui ont accès à cette machine (créé, dernière utilisation), ou en révoque un",
   "default {0}": "par défaut {0}",
   "setup unreadable ({0})": "réglage illisible ({0})",
 
@@ -41,7 +62,7 @@ export const FR_OPS: Record<string, string> = {
   "embeddings {0} dim": "plongements {0} dim",
   "last recall {0} ms": "dernier rappel {0} ms",
   " — last error: {0}": " — dernière erreur : {0}",
-  "kernel without GET /v1/local/memory (predates direct memory)": "noyau sans GET /v1/local/memory (antérieur à la mémoire directe)",
+  "kernel without GET /v1/local/memory (predates direct memory)": "serveur sans GET /v1/local/memory (antérieur à la mémoire directe)",
   "cannot be checked without the local token": "non vérifiable sans le jeton local",
   "status unreadable ({0})": "état illisible ({0})",
   "timed out": "délai dépassé",
@@ -72,14 +93,14 @@ export const FR_OPS: Record<string, string> = {
   // doctor : authentification, version, git, réparation
   "cannot be checked without a server": "non vérifiable sans serveur",
   "local token accepted (no enrolment needed)": "jeton local accepté (aucun enrôlement nécessaire)",
-  "local token present but rejected by the server (stale? restart the kernel)": "jeton local présent mais refusé par le serveur (périmé ? relance le noyau)",
+  "local token present but rejected by the server (stale? restart the kernel)": "jeton local présent mais refusé par le serveur (périmé ? relance Nokker)",
   "device enrolled, session of {0} valid until {1}": "appareil enrôlé, session de {0} valide jusqu'à {1}",
   "device session expired — rerun nokker to sign in again": "session d'appareil expirée — relance nokker pour te reconnecter",
   "neither a local token nor an enrolled device — the first run of nokker will enrol you":
     "ni jeton local ni appareil enrôlé — le premier lancement de nokker t'enrôlera",
   "{0} (minimum unknown: server unreachable)": "{0} (minimale inconnue : serveur injoignable)",
   "{0} (the server announces no minimum)": "{0} (le serveur n'annonce pas de minimale)",
-  "{0} < minimum {1} — run 'nokker update'": "{0} < minimale {1} — lancez « nokker update »",
+  "{0} < minimum {1} — run 'nokker update'": "{0} < minimale {1} — lance « nokker update »",
   "{0} ≥ minimum {1}": "{0} ≥ minimale {1}",
   "git is missing from the host (needed for /diff and checkpoints)": "git absent de l'hôte (nécessaire pour /diff et les points de retour)",
   "git not found on Windows — not needed: /diff and checkpoints run in WSL ({0})": "git introuvable sous Windows — pas nécessaire : /diff et les points de retour tournent dans WSL ({0})",
@@ -111,7 +132,7 @@ export const FR_OPS: Record<string, string> = {
   "Client replaced: {0} (release {1}{2}).": "Client remplacé : {0} (release {1}{2}).",
   ", sha256 + cosign verified": ", sha256 + cosign vérifiés",
   ", sha256 verified": ", sha256 vérifié",
-  "Cannot update the kernel: {0}.": "Mise à jour du noyau impossible : {0}.",
+  "Cannot update the kernel: {0}.": "Mise à jour de Nokker impossible : {0}.",
   "Installed: {0}": "Installé : {0}",
   "Latest release: unknown (GitHub unreachable — no network?)": "Dernière release : inconnue (GitHub injoignable — pas de réseau ?)",
   "Latest release: {0}": "Dernière release : {0}",
@@ -121,19 +142,19 @@ export const FR_OPS: Record<string, string> = {
   "Cannot reach GitHub to find the latest release (network?): nothing was changed.":
     "Impossible de joindre GitHub pour connaître la dernière release (réseau ?) : rien n'a été modifié.",
   "docker is not installed (or not in PATH): the kernel cannot be updated from here.":
-    "docker n'est pas installé (ou pas dans le PATH) : le noyau ne peut pas être mis à jour d'ici.",
+    "docker n'est pas installé (ou pas dans le PATH) : Nokker ne peut pas être mis à jour d'ici.",
   "The docker daemon does not respond ({0}).": "Le démon docker ne répond pas ({0}).",
-  "Kernel already up to date ({0}).": "Noyau déjà à jour ({0}).",
+  "Kernel already up to date ({0}).": "Nokker déjà à jour ({0}).",
   "Updating through {0} --update…": "Mise à jour par {0} --update…",
   "install.sh --update failed.": "install.sh --update a échoué.",
   "Cannot write NOKKER_VERSION to {0}.": "Impossible d'écrire NOKKER_VERSION dans {0}.",
   "NOKKER_VERSION={0} written to {1}. Downloading images…": "NOKKER_VERSION={0} écrit dans {1}. Téléchargement des images…",
   "docker compose pull failed (network, registry or permissions).": "docker compose pull a échoué (réseau, registre ou droits).",
-  "Restarting the kernel…": "Redémarrage du noyau…",
+  "Restarting the kernel…": "Redémarrage de Nokker…",
   "docker compose up -d failed.": "docker compose up -d a échoué.",
   "The kernel does not respond on /healthz yet after the update — check with nokker doctor.":
-    "Le noyau ne répond pas encore sur /healthz après la mise à jour — vérifie avec nokker doctor.",
-  "Kernel: version {0} → {1}": "Noyau : version {0} → {1}",
+    "Nokker ne répond pas encore sur /healthz après la mise à jour — vérifie avec nokker doctor.",
+  "Kernel: version {0} → {1}": "Nokker : version {0} → {1}",
   "download of install.sh failed (HTTP {0})": "téléchargement d'install.sh impossible (HTTP {0})",
   "download of install.sh failed ({0})": "téléchargement d'install.sh impossible ({0})",
   "no install.sh.sha256 in the release (HTTP {0}): cannot verify": "pas d'install.sh.sha256 dans la release (HTTP {0}) : vérification impossible",
@@ -142,13 +163,28 @@ export const FR_OPS: Record<string, string> = {
   "cosign verification of install.sh failed ({0})": "vérification cosign d'install.sh échouée ({0})",
   "--version expects a version like 1.2.3 (got {0}).": "--version attend une version comme 1.2.3 (reçu : {0}).",
   "Kernel {0} is newer than {1}: downgrades are not supported (migrations only go forward).":
-    "Le noyau {0} est plus récent que {1} : pas de retour en arrière (les migrations ne vont que vers l'avant).",
+    "Nokker {0} est plus récent que {1} : pas de retour en arrière (les migrations ne vont que vers l'avant).",
   "Update refused: {0}. Nothing was run.": "Mise à jour refusée : {0}. Rien n'a été exécuté.",
   "install.sh {0}: sha256 and cosign signature verified.": "install.sh {0} : sha256 et signature cosign vérifiés.",
   "install.sh {0}: sha256 verified; signature NOT verified (cosign is not installed).":
     "install.sh {0} : sha256 vérifié ; signature NON vérifiée (cosign n'est pas installé).",
   "Release {0} publishes no install.sh: updating through the compose file.":
     "La release {0} ne publie pas d'install.sh : mise à jour par le fichier compose.",
+
+  // sites connectés (nokker sites enable|update)
+  "sites expects enable or update": "sites attend enable ou update",
+  "turn on connected sites: fetch the sites browser image, verify its signature, start it (machine linked to a nokker.ai account)":
+    "allume les sites connectés : tire l'image du navigateur des sites, vérifie sa signature, la démarre (machine liée à un compte nokker.ai)",
+  "fetch and verify the sites browser image again (nokker update also does it)":
+    "tire et revérifie l'image du navigateur des sites (nokker update le fait aussi)",
+  "install.sh not found ({0}): rerun the installer, or update with nokker update.":
+    "install.sh introuvable ({0}) : relance l'installeur, ou mets à jour avec nokker update.",
+  "this Lokkal version has no connected sites: run nokker update first":
+    "cette version de Lokkal n'a pas les sites connectés : lance d'abord nokker update",
+  "Turning on connected sites through {0} --sites-only…": "Allumage des sites connectés par {0} --sites-only…",
+  "Updating connected sites through {0} --sites-only…": "Mise à jour des sites connectés par {0} --sites-only…",
+  "{0} not found: cannot run install.sh.": "{0} introuvable : impossible de lancer install.sh.",
+  "install.sh --sites-only did not finish in time.": "install.sh --sites-only n'a pas fini à temps.",
 
   // backup / restore
   "update --version expects a version like 1.2.3": "update --version attend une version comme 1.2.3",
@@ -179,10 +215,10 @@ export const FR_OPS: Record<string, string> = {
 
   // logs
   "Kernel logs unavailable: {0}.\nThe client log is still readable: nokker logs --component cli":
-    "Logs du noyau indisponibles : {0}.\nLe journal du client reste lisible : nokker logs --component cli",
+    "Logs de Nokker indisponibles : {0}.\nLe journal du client reste lisible : nokker logs --component cli",
   "docker is not installed (or not in PATH): cannot read the kernel logs.\nThe client log is still readable: nokker logs --component cli":
-    "docker n'est pas installé (ou pas dans le PATH) : impossible de lire les logs du noyau.\nLe journal du client reste lisible : nokker logs --component cli",
-  "The docker daemon does not respond ({0}): cannot read the kernel logs.": "Le démon docker ne répond pas ({0}) : impossible de lire les logs du noyau.",
+    "docker n'est pas installé (ou pas dans le PATH) : impossible de lire les logs de Nokker.\nLe journal du client reste lisible : nokker logs --component cli",
+  "The docker daemon does not respond ({0}): cannot read the kernel logs.": "Le démon docker ne répond pas ({0}) : impossible de lire les logs de Nokker.",
   "docker compose logs failed (code {0}).": "docker compose logs a échoué (code {0}).",
   "No client log yet ({0}).": "Pas encore de journal client ({0}).",
 
@@ -222,20 +258,20 @@ export const FR_OPS: Record<string, string> = {
   "Sub-agent finished ({0}): {1} commit(s)": "Sous-agent terminé ({0}) : {1} commit(s)",
   "Sub-agent finished ({0})": "Sous-agent terminé ({0})",
   "Image not read: the model has no vision.": "Image non lue : le modèle n'a pas la vision.",
-  "Approved: run by the kernel.": "Approuvée : exécutée par le noyau.",
+  "Approved: run by the kernel.": "Approuvée : exécutée par Nokker.",
   "Run failed.": "Échec de l'exécution.",
   "Card expired: not run.": "Carte expirée : non exécutée.",
   "Rejected: not run.": "Refusée : non exécutée.",
   "terminal: {0}": "terminal : {0}",
   "\n{0}:\n```\n{1}\n```\n": "\n{0} :\n```\n{1}\n```\n",
   "At most {0} images per message": "{0} images au plus par message",
-  "local token rejected by the kernel (nokker doctor)": "jeton local refusé par le noyau (nokker doctor)",
+  "local token rejected by the kernel (nokker doctor)": "jeton local refusé par Nokker (nokker doctor)",
   "folder {0} is in the WSL distribution {1}, but Lokkal runs in {2}: open the project in {2}":
-    "le dossier {0} est dans la distribution WSL {1}, mais Lokkal tourne dans {2} : ouvrez le projet dans {2}",
+    "le dossier {0} est dans la distribution WSL {1}, mais Lokkal tourne dans {2} : ouvre le projet dans {2}",
   "folder {0} is on the Windows drive {1} ({2} in WSL), outside the roots declared in Lokkal: open the project inside WSL (\\\\wsl.localhost\\{3}\\home\\<you>\\<project>)":
-    "le dossier {0} est sur le disque Windows {1} ({2} dans WSL), hors des racines déclarées de Lokkal : ouvrez le projet dans WSL (\\\\wsl.localhost\\{3}\\home\\<vous>\\<projet>)",
+    "le dossier {0} est sur le disque Windows {1} ({2} dans WSL), hors des racines déclarées de Lokkal : ouvre le projet dans WSL (\\\\wsl.localhost\\{3}\\home\\<toi>\\<projet>)",
   "folder outside the roots declared in Lokkal: {0} ({1})": "dossier hors des racines déclarées de Lokkal : {0} ({1})",
-  "kernel unreachable (is Lokkal running? nokker doctor)": "noyau injoignable (Lokkal tourne-t-il ? nokker doctor)",
+  "kernel unreachable (is Lokkal running? nokker doctor)": "Nokker injoignable (Lokkal tourne-t-il ? nokker doctor)",
   "unknown session: {0}": "session inconnue : {0}",
   "cwd missing": "cwd absent",
   "sessionId and cwd required": "sessionId et cwd requis",
@@ -249,7 +285,7 @@ export const FR_OPS: Record<string, string> = {
   "No plan on this thread.": "Aucun plan sur ce fil.",
   "{0}. `{1}` {2} — {3} ({4} file(s))": "{0}. `{1}` {2} — {3} ({4} fichier(s))",
   "No checkpoints on this thread.": "Aucun point de retour sur ce fil.",
-  "A turn is in progress, try again afterwards.": "Un tour est en cours, réessayez après.",
+  "A turn is in progress, try again afterwards.": "Un tour est en cours, réessaie après.",
   "Not available on this server.": "Non disponible sur ce serveur.",
   "Error: {0}": "Erreur : {0}",
   "connection closed": "connexion fermée",
@@ -260,7 +296,7 @@ export const FR_OPS: Record<string, string> = {
 
   // import
   "take over another agent's install: the kernel lists what it reads, those paths are mounted read-only (never credentials or identity files) into a one-off container; dry run, then --apply writes after confirmation; --project (claude-code, cursor) also reads a repository. Not followed: a custom home folder of a compatible agent, an OpenClaw agents.defaults.workspace outside ~/.openclaw":
-    "reprendre l'installation d'un autre agent : le noyau liste ce qu'il lit, ces chemins sont montés en lecture seule (jamais les identifiants ni l'identité) dans un conteneur jetable ; à blanc, puis --apply écrit après confirmation ; --project (claude-code, cursor) lit aussi un dépôt. Non suivis : un dossier personnel personnalisé d'un agent compatible, un agents.defaults.workspace d'OpenClaw hors de ~/.openclaw",
+    "reprendre l'installation d'un autre agent : Nokker liste ce qu'il lit, ces chemins sont montés en lecture seule (jamais les identifiants ni l'identité) dans un conteneur jetable ; à blanc, puis --apply écrit après confirmation ; --project (claude-code, cursor) lit aussi un dépôt. Non suivis : un dossier personnel personnalisé d'un agent compatible, un agents.defaults.workspace d'OpenClaw hors de ~/.openclaw",
   "import expects one of: {0}": "import attend l'une de ces sources : {0}",
   "--project expects the root folder of a repository": "--project attend le dossier racine d'un dépôt",
   "--project only applies to {0}: {1} reads nothing in a project.": "--project ne vaut que pour {0} : {1} ne lit rien dans un projet.",
@@ -268,19 +304,19 @@ export const FR_OPS: Record<string, string> = {
   "--project: {0} is (or contains) the home folder: give the root of a repository.": "--project : {0} est (ou contient) le dossier personnel : donnez la racine d'un dépôt.",
   "--project: {0} contains a colon: it cannot be mounted.": "--project : {0} contient un deux-points : il ne peut pas être monté.",
   "import --apply writes to the state of Nokker: confirm with --yes (no terminal to ask).":
-    "import --apply écrit dans l'état de Nokker : confirmez avec --yes (pas de terminal pour poser la question).",
+    "import --apply écrit dans l'état de Nokker : confirme avec --yes (pas de terminal pour poser la question).",
   "Cannot import: {0}.": "Import impossible : {0}.",
   "nokker import is not available under WSL yet: run it from a shell inside the {0} distribution.":
-    "nokker import n'est pas encore disponible sous WSL : lancez-le depuis un shell dans la distribution {0}.",
+    "nokker import n'est pas encore disponible sous WSL : lance-le depuis un shell dans la distribution {0}.",
   "The home folder {0} contains a colon: it cannot be mounted.": "Le dossier personnel {0} contient un deux-points : il ne peut pas être monté.",
-  "{0} not found: cannot run the kernel container.": "{0} introuvable : impossible de lancer le conteneur du noyau.",
-  "The kernel did not list the paths in time.": "Le noyau n'a pas listé les chemins à temps.",
+  "{0} not found: cannot run the kernel container.": "{0} introuvable : impossible de lancer le conteneur de Nokker.",
+  "The kernel did not list the paths in time.": "Nokker n'a pas listé les chemins à temps.",
   "The kernel does not know --list-paths {0} (exit code 2): it may predate it, try nokker update.":
-    "Le noyau ne connaît pas --list-paths {0} (code 2) : il est peut-être antérieur, essayez nokker update.",
-  "The kernel could not list the paths to import (exit code {0}): {1}": "Le noyau n'a pas pu lister les chemins à importer (code {0}) : {1}",
+    "Nokker ne connaît pas --list-paths {0} (code 2) : il est peut-être antérieur, essaie nokker update.",
+  "The kernel could not list the paths to import (exit code {0}): {1}": "Nokker n'a pas pu lister les chemins à importer (code {0}) : {1}",
   "no message": "aucun message",
   "Invalid answer from the kernel to --list-paths (one JSON line {source, paths:[{path, kind}], project_paths} expected): {0}":
-    "Réponse invalide du noyau à --list-paths (une ligne JSON {source, paths:[{path, kind}], project_paths} attendue) : {0}",
+    "Réponse invalide de Nokker à --list-paths (une ligne JSON {source, paths:[{path, kind}], project_paths} attendue) : {0}",
   "empty output": "sortie vide",
   "absolute path": "chemin absolu",
   "contains ..": "contient ..",
@@ -295,14 +331,14 @@ export const FR_OPS: Record<string, string> = {
   "✗ refused: {0} ({1})": "✗ refusé : {0} ({1})",
   "Not on this machine, ignored: {0}": "Absent de cette machine, ignoré : {0}",
   "Nothing to import from {0} on this machine: no container was started.": "Rien à importer de {0} sur cette machine : aucun conteneur lancé.",
-  "Mounted read-only into a one-off kernel container (never copied or shown here):": "Monté en lecture seule dans un conteneur jetable du noyau (jamais copié ni affiché ici) :",
+  "Mounted read-only into a one-off kernel container (never copied or shown here):": "Monté en lecture seule dans un conteneur jetable de Nokker (jamais copié ni affiché ici) :",
   "hidden (credentials): {0}": "masqué (identifiants) : {0}",
-  "Report and imported data go to the kernel state: {0} → {1}": "Le rapport et les données importées vont dans l'état du noyau : {0} → {1}",
+  "Report and imported data go to the kernel state: {0} → {1}": "Le rapport et les données importées vont dans l'état de Nokker : {0} → {1}",
   "Report: {0}": "Rapport : {0}",
   "Dry run (nothing is written):": "À blanc (rien n'est écrit) :",
   "The dry run failed: nothing was written.": "L'essai à blanc a échoué : rien n'a été écrit.",
   "No terminal: MCP servers found by the import will not be added (the kernel asks for each one on a terminal).":
-    "Pas de terminal : les serveurs MCP trouvés par l'import ne seront pas ajoutés (le noyau demande chacun sur un terminal).",
+    "Pas de terminal : les serveurs MCP trouvés par l'import ne seront pas ajoutés (Nokker demande chacun sur un terminal).",
   "Apply this import to the state of Nokker? [y/N] ": "Appliquer cet import à l'état de Nokker ? [o/N] ",
   "Import cancelled: nothing was written.": "Import annulé : rien n'a été écrit.",
   "Applying the import…": "Application de l'import…",
@@ -311,7 +347,7 @@ export const FR_OPS: Record<string, string> = {
   "{0} is too large to check for credentials files (or holds a link to one): it cannot be mounted for writing.":
     "{0} est trop gros pour y chercher des fichiers d'identifiants (ou contient un lien vers l'un d'eux) : il ne peut pas être monté en écriture.",
   "--apply will write:": "--apply écrira :",
-  "{0} (kernel state: skills, settings, MCP servers, memory, report)": "{0} (état du noyau : skills, réglages, serveurs MCP, mémoire, rapport)",
+  "{0} (kernel state: skills, settings, MCP servers, memory, report)": "{0} (état de Nokker : skills, réglages, serveurs MCP, mémoire, rapport)",
   "{0}/ (repository skills and hooks) → {1}, read-write{2}": "{0}/ (skills et hooks du dépôt) → {1}, en écriture{2}",
   " (created)": " (créé)",
   "{0} (only if it does not exist: written to a temporary folder, then copied)": "{0} (seulement s'il n'existe pas : écrit dans un dossier temporaire, puis recopié)",

@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CAPACITOR_DEBUG</key>
+	<string>$(CAPACITOR_DEBUG)</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>fr</string>
+	<key>CFBundleDisplayName</key>
+	<string>Nokker</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>fr</string>
+		<string>en</string>
+	</array>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>ai.nokker.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>nokker</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_googlecast._tcp</string>
+		<string>_airplay._tcp</string>
+		<string>_raop._tcp</string>
+		<string>_home-assistant._tcp</string>
+		<string>_spotify-connect._tcp</string>
+		<string>_sonos._tcp</string>
+	</array>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Nokker lit ton agenda du téléphone seulement quand tu le demandes à Nina, pour la période demandée. Rien n'est gardé hors du fil de la conversation.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Nokker lit ton agenda du téléphone seulement quand tu le demandes à Nina, pour la période demandée. Rien n'est gardé hors du fil de la conversation.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Nokker cherche dans tes contacts du téléphone seulement quand tu le demandes à Nina (par exemple pour retrouver une adresse). Rien n'est gardé hors du fil de la conversation.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>En mode caméra de veille, Nokker détecte les mouvements sur cet appareil. Les images restent sur cet appareil 24 heures et ne partent jamais sur Internet.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Nokker utilise Face ID pour que personne d'autre que toi ne puisse quitter l'écran mural.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>En mode nœud maison, Nokker parle à ton Home Assistant sur le réseau de la maison. Home Assistant n'a pas besoin d'être exposé à Internet, et son jeton reste sur cet appareil.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Nokker collecte ta position pour savoir quand tu arrives ou pars de tes zones (Maison, Travail…) et lancer tes scénarios, même quand l'app est fermée ou inutilisée. Seuls l'arrivée et le départ sont envoyés, jamais ta position.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Nokker utilise ta position pour poser tes zones (Maison, Travail…) sur la carte. Seuls l'arrivée et le départ de tes zones sont envoyés, jamais ta position.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Nokker utilise le micro pour reconnaître trois coups frappés, quand c'est allumé, et pour la dictée. La reconnaissance se fait sur cet appareil : le son n'est ni enregistré ni envoyé, seul le texte dicté part.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Nokker lit tes rappels du téléphone seulement quand tu le demandes à Nina. Rien n'est gardé hors du fil de la conversation.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Nokker lit tes rappels du téléphone seulement quand tu le demandes à Nina. Rien n'est gardé hors du fil de la conversation.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Nokker transcrit tes notes vocales et les fichiers audio que tu joins, sur ce téléphone uniquement : l'audio n'est jamais envoyé pour être reconnu.</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default Configuration</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+					<key>UISceneStoryboardFile</key>
+					<string>Main</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>UIStatusBarStyle</key>
+	<string>UIStatusBarStyleDefault</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
+</dict>
+</plist>

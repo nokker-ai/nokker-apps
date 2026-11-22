@@ -1,0 +1,83 @@
+[
+  {
+    "step": 1,
+    "tool": "browser_navigate",
+    "frame": "01-recherche.webp",
+    "nokker_action": {
+      "seq": 1,
+      "tool": "navigate",
+      "label": "ouvrir sejours.test:8080/recherche",
+      "url": "http://sejours.test:8080/recherche",
+      "t": "2026-11-07T13:21:20.281Z",
+      "ok": true,
+      "sensitive": false,
+      "frame": true,
+      "title": "séjours — Lisbonne"
+    },
+    "nokker_box": null,
+    "nokker_block": null
+  },
+  {
+    "step": 2,
+    "tool": "browser_scroll",
+    "frame": "02-defilement.webp",
+    "nokker_action": {
+      "seq": 2,
+      "tool": "scroll",
+      "label": "faire défiler",
+      "url": "http://sejours.test:8080/recherche",
+      "t": "2026-11-07T13:21:21.392Z",
+      "ok": true,
+      "sensitive": false,
+      "frame": true,
+      "title": "séjours — Lisbonne"
+    },
+    "nokker_box": null,
+    "nokker_block": null
+  },
+  {
+    "step": 3,
+    "tool": "browser_scroll",
+    "frame": "03-defilement.webp",
+    "nokker_action": {
+      "seq": 3,
+      "tool": "scroll",
+      "label": "faire défiler",
+      "url": "http://sejours.test:8080/recherche",
+      "t": "2026-11-07T13:21:22.805Z",
+      "ok": true,
+      "sensitive": false,
+      "frame": true,
+      "title": "séjours — Lisbonne"
+    },
+    "nokker_box": null,
+    "nokker_block": null
+  },
+  {
+    "step": 4,
+    "tool": "browser_box",
+    "frame": "04-box-alfama.webp",
+    "nokker_action": {
+      "seq": 4,
+      "tool": "box",
+      "label": "montrer un élément",
+      "url": "http://sejours.test:8080/recherche",
+      "t": "2026-11-07T13:21:23.585Z",
+      "ok": true,
+      "sensitive": false,
+      "frame": true,
+      "title": "séjours — Lisbonne"
+    },
+    "nokker_box": {
+      "ref": "e42",
+      "x": 0.029,
+      "y": 0.103,
+      "w": 0.297,
+      "h": 0.61,
+      "in_view": true,
+      "covered_top": 0.084,
+      "frame_seq": 4
+    },
+    "nokker_block": null
+  }
+]

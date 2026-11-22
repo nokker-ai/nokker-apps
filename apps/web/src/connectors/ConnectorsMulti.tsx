@@ -25,6 +25,7 @@ import {
 import { takeOAuthReturn } from "../account/links.js";
 import { capability } from "../capabilities.js";
 import { openPicker } from "./picker.js";
+import { ConnectedSites } from "../sites/ConnectedSites.js";
 import { errorCode, errorKey, keyForCode } from "../onboarding/errors.js";
 import { buildCalendarRequest, buildMailRequest, orderPresets, presetLabel } from "../onboarding/flow.js";
 import { t, type Key, type Lang } from "../onboarding/i18n.js";
@@ -163,6 +164,7 @@ export function ConnectorsMulti({ client, lang: L }: { client: NokkerClient; lan
     <section data-connectors-multi>
       <p className="ob-note">{t(L, "cmIntro")}</p>
       {loadError ? <p className="ob-error" role="alert">{t(L, loadError)}</p> : null}
+      <ConnectedSites client={client} lang={L} />
       {oauthBack ? <OAuthReturnBanner r={oauthBack} lang={L} onClose={() => setOAuthBack(null)} /> : null}
       {data.presets.oauth?.length && capability("connectors_oauth") !== false ? <OAuthPanel client={client} lang={L} data={data} fresh={oauthBack?.status === "done" ? oauthBack.account : null} onChanged={refresh} /> : null}
       {shownKinds(data).map((kind) => (

@@ -1,0 +1,27 @@
+{
+  "step": 4,
+  "tool": "browser_box",
+  "frame": "04-box-alfama.webp",
+  "nokker_action": {
+    "seq": 4,
+    "tool": "box",
+    "label": "montrer un élément",
+    "url": "http://sejours.test:8080/recherche",
+    "t": "2026-11-07T13:21:23.585Z",
+    "ok": true,
+    "sensitive": false,
+    "frame": true,
+    "title": "séjours — Lisbonne"
+  },
+  "nokker_box": {
+    "ref": "e42",
+    "x": 0.029,
+    "y": 0.103,
+    "w": 0.297,
+    "h": 0.61,
+    "in_view": true,
+    "covered_top": 0.084,
+    "frame_seq": 4
+  },
+  "nokker_block": null
+}

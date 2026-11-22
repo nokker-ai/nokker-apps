@@ -1,0 +1,35 @@
+/* Écran HDMI du Lokkal : lisible à 3 m, aucune barre de défilement, sombre la nuit. */
+.kk { --kk-bg: #f6f3fb; --kk-text: #1d1830; --kk-muted: #5d5670; position: fixed; inset: 0; background: var(--kk-bg); color: var(--kk-text); overflow: hidden; }
+.kk-inner { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 2vmin; padding: 3vmin 4vmin; }
+.kk.kk-night { --kk-bg: #07060b; --kk-text: #8a849c; --kk-muted: #5d5670; }
+@media (prefers-color-scheme: dark) {
+  .kk { --kk-bg: #120f1c; --kk-text: #ece8f5; --kk-muted: #a59fb8; }
+  .kk .fy { --fy-fg: #ece8f5; --fy-soft: #a59fb8; --fy-tile: rgba(255, 255, 255, 0.06); --fy-line: rgba(255, 255, 255, 0.12); }
+  .kk .fy-ha-chip { background: rgba(255, 255, 255, 0.1); color: #ece8f5; }
+}
+/* Le kiosque n'a pas d'agenda (contenu local seulement) : la tuile du jour n'a rien à dire. */
+.kk .fy-agenda { display: none; }
+.kk-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 2vmin; }
+.kk-time { display: block; font-size: clamp(56px, 13vmin, 180px); font-weight: 300; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.kk-date { margin: 0.6vmin 0 0; font-size: clamp(18px, 3.2vmin, 40px); color: var(--kk-muted); }
+.kk-date::first-letter { text-transform: uppercase; }
+.kk-personal { font: inherit; font-size: clamp(14px, 2vmin, 22px); padding: 1vmin 2.4vmin; border-radius: 999px; border: 1px solid var(--kk-muted); background: transparent; color: var(--kk-text); cursor: pointer; }
+.kk-personal:focus-visible { outline: 3px solid #7e5bef; outline-offset: 3px; }
+.kk-msg { margin: 0; font-size: clamp(16px, 2.6vmin, 30px); color: var(--kk-muted); }
+.kk-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr); gap: 3vmin; }
+.kk-home { min-width: 0; overflow: hidden; }
+.kk-offline { margin: 1vmin 0 0; color: var(--kk-muted); }
+.kk-nina { position: relative; min-height: 0; border-radius: 3vmin; overflow: hidden; background: #e8e1f3; }
+/* Tuile « écran publié » : seulement quand le noyau en annonce un (sinon rien ne change). L'écran (1920×1080) est mis à
+ * l'échelle dans sa cellule par KioskPage ; à gauche l'écran, à droite le foyer au-dessus de Nina (lisible, pas en colonne étroite). */
+.kk-body.kk-has-screen { grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "screen home" "screen nina"; }
+.kk-has-screen .kk-home { grid-area: home; }
+.kk-has-screen .kk-nina { grid-area: nina; }
+.kk-screen { grid-area: screen; position: relative; min-height: 0; border-radius: 3vmin; overflow: hidden; background: #0a0d14; }
+.kk-screen-frame { position: absolute; left: 50%; top: 50%; border: 0; transform-origin: center center; }
+@media (max-aspect-ratio: 1/1) { .kk-body.kk-has-screen { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "home" "screen" "nina"; } }
+@media (max-aspect-ratio: 1/1) { .kk-body { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); } }
+
+/* Foyer démo : marqueur discret mais lisible à 2 m ; le kiosque n'a aucune action (la section est inerte : coches mortes). */
+.kk-demo { margin-left: auto; margin-right: 28px; align-self: center; font-size: 1.5rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted, #888); border: 2px solid currentColor; border-radius: 999px; padding: 4px 20px; }
+.kk-home .fy-check { cursor: default; }

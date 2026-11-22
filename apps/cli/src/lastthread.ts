@@ -15,6 +15,8 @@ import { configDir } from "./config.js";
 export interface LastThreadStore {
   get(cwd: string): string | null;
   set(cwd: string, threadId: string): void;
+  /** Oublie l'entrée du dossier (fil que le noyau ne connaît plus : pile purgée, port réutilisé par une installation neuve). */
+  forget?(cwd: string): void;
 }
 
 /** Entrées gardées au plus (les plus récentes). */
@@ -48,6 +50,19 @@ export function fileLastThreadStore(server: string, path: string = lastThreadsPa
     get(cwd) {
       const e = read(path).entries[key(server, cwd)];
       return e && typeof e.thread_id === "string" && /^th_[A-Za-z0-9_-]+$/.test(e.thread_id) ? e.thread_id : null;
+    },
+    forget(cwd) {
+      try {
+        const data = read(path);
+        if (!(key(server, cwd) in data.entries)) return;
+        delete data.entries[key(server, cwd)];
+        const tmp = `${path}.${process.pid}.tmp`;
+        writeFileSync(tmp, JSON.stringify(data, null, 1) + "\n", { mode: 0o600 });
+        chmodSync(tmp, 0o600);
+        renameSync(tmp, path);
+      } catch {
+        // lecture seule : l'entrée sera relue, et oubliée de nouveau à la prochaine ouverture
+      }
     },
     set(cwd, threadId) {
       try {

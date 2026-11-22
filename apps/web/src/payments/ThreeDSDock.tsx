@@ -4,6 +4,7 @@
  * every `payment.agent` event (and once at start, so a reload does not lose a waiting confirmation). Nothing shows
  * when the core has no payments or no payment agent (404), or when nothing waits.
  */
+import { off } from "../capabilities.js";
 import React, { useCallback, useEffect, useState } from "react";
 import { NokkerApiError, type NokkerClient } from "@nokker-apps/sdk";
 import { tr } from "../i18n/index.js";
@@ -15,6 +16,7 @@ export function ThreeDSDock({ client, rev, signDecision }: { client: NokkerClien
   const [waiting, setWaiting] = useState<string[]>([]);
   const [closed, setClosed] = useState<string[]>([]);
   useEffect(() => {
+    if (off("pay")) return; // le noyau dit : pas de paiements ici (aucun appel, aucun 404 en console)
     let live = true;
     client.listPayCards().then(
       // Merged, never dropped here: a card answered stays readable until it settles (or is hidden), even though

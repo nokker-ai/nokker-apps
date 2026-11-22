@@ -71,7 +71,7 @@ describe("mes machines", () => {
     const { machine_id } = await c.decideLink(code, "approve");
     const { machines } = await c.listMachines();
     expect(machines).toEqual([
-      { machine_id, name: "Atelier", host: expect.stringMatching(/^atelier\./), created_at: expect.any(Number), last_seen_at: null },
+      { machine_id, name: "Atelier", kind: "lokkal", host: expect.stringMatching(/^atelier\./), created_at: expect.any(Number), last_seen_at: null },
     ]);
     expect(await c.revokeMachine(machine_id!)).toEqual({ revoked: true });
     expect((await c.listMachines()).machines).toEqual([]);

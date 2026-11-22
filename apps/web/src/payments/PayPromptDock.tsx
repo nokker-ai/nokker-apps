@@ -9,6 +9,7 @@
  */
 import React, { useCallback, useEffect, useState } from "react";
 import { formatMoneyMinor, NokkerApiError, type NokkerClient, type PayCard } from "@nokker-apps/sdk";
+import { off } from "../capabilities.js";
 import { shellLang, tr } from "../i18n/index.js";
 import { merchantLabel } from "./model.js";
 import { timeLeft } from "./ThreeDSConfirm.js";
@@ -120,6 +121,7 @@ export function PayPromptDock({ client, rev }: { client: NokkerClient; rev: numb
   const [hidden, setHidden] = useState<string[]>([]);
   const [tick, setTick] = useState(0);
   useEffect(() => {
+    if (off("pay")) return; // le noyau dit : pas de paiements ici (aucun appel, aucun 404 en console)
     let live = true;
     client.listPayCards().then(
       (r) => live && setCards(r.mandates.filter((m) => m.agent?.kind === "own_card" && m.agent.prompt)),

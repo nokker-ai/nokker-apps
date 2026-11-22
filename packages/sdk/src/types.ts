@@ -1,3 +1,4 @@
+import type { RedactionMeta } from "./redact.js";
 /**
  * Types du contrat client Nokker — `docs/CLIENT-API.md` et
  * `docs/APPROVALS.md` (18.10.2026) font foi. Le serveur qui implémente CES routes
@@ -133,7 +134,7 @@ export interface ThreadDetail extends ThreadSummary {
 /** `strong` : clé d'appareil libérée par biométrie (ou WebAuthn/passkey avec UV) — jamais de TOTP.
  * `standard` : `strong` OU TOTP OU simple signature logicielle (APPROVALS.md §1). */
 export type ApprovalStrength = "strong" | "standard";
-export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired" | "executed" | "failed";
+export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired" | "executing" | "executed" | "failed" | "interrupted";
 /** `"signature"` (clé logicielle), `"signature+telegram"` (Mini App, `init_data` vérifié),
  * `"webauthn"` (passkey), `"totp"` — APPROVALS.md §3. */
 export type DecidedVia = "signature" | "signature+telegram" | "webauthn" | "totp" | "local" | "auto-review";
@@ -185,6 +186,10 @@ export interface Approval {
   channel: Channel;
   tool_name: string;
   arguments: Record<string, unknown>;
+  /** La cible lisible de l'action (« la commande qui va s'exécuter », le chemin, l'adresse…), calculée PAR LE NOYAU selon l'outil et
+   * passée par le même caviardage que l'historique (≤ 200 caractères). C'est la seule chose que les clients montrent sur la face de la
+   * carte : jamais `arguments` (la personne a pu y taper une valeur réelle) ; absente : rien à montrer. */
+  target?: string;
   /** JSON canonique (clés triées, sans espaces, UTF-8) de `arguments`, hashé SHA-256, hex. */
   args_sha256: string;
   /** Dérivé de `rule` (`"effect:xxx[:...]"` → `"xxx"`) pour l'affichage ; `null` sinon — ce n'est
@@ -214,6 +219,14 @@ export interface Approval {
   /** Ce que couvre chaque règle de `suggested_rules`, même ordre (noyau du 01.11, `GET /v1/local/approvals`) : pour un
    * libellé juste (« this file », « this folder »…). Absent d'un noyau plus ancien. */
   suggested_rule_kinds?: SuggestedRuleKind[];
+  /** Libellé de `rule` dans la langue de la personne (BROWSER-LIVE §1) ; absent → on affiche `rule`. */
+  rule_label?: string | null;
+  /** Les mêmes libellés en fr/en/de/it (pour un client qui choisit sa langue). */
+  rule_labels?: Partial<Record<"fr" | "en" | "de" | "it", string>>;
+  /** Origine de la règle : `household` porte le nom donné par le foyer (« Bloqué par : <name> »). */
+  rule_source?: ApprovalRuleSource | null;
+  /** Carte née d'une session navigateur : s'ancre sur la vignette de ce `seq` dans la frise de la bulle `browser`. */
+  context?: { browser?: { session_id: string; seq: number } } & Record<string, unknown>;
   /** Présent dans `GET /v1/local/approvals` (noyau du 25.10, LOKKAL.md §7.3) : carte forte déposée chez nokker.ai, le
    * lien de décision est parti au téléphone. Faux ou absent : machine non liée, ou dépôt pas encore fait (il sera
    * annoncé par `approval.forwarded`) — elle se décide au terminal. */
@@ -317,6 +330,11 @@ export interface TurnStartedEvent {
   type: "turn.started";
   thread_id: string;
   turn_id: string;
+  /** Le message de la personne tel que le fil le garde (caviardé, 16 Kio au plus), pour qu'un AUTRE client l'affiche dès le
+   * début du tour. Absent : suite de carte, page jointe, tâche, sous-agent, message vide, ou noyau plus ancien. */
+  user_message?: string;
+  /** Vrai : `user_message` est coupé à 16 Kio ; l'historique a le texte entier (réconcilié au `turn.done`). */
+  truncated?: boolean;
 }
 
 /** UNIQUE par tour tant que le noyau ne streame pas token par token : la réponse complète, juste avant
@@ -367,6 +385,9 @@ export interface ToolResultEvent {
   content?: string;
   /** Caviardé, tronqué à 1200 caractères par le noyau ; la CLI n'en montre que 3 lignes. */
   preview?: string;
+  /** `"refused"` : l'appel n'a pas tourné, refusé d'emblée par les permissions (`reason` dit pourquoi) ; absent sur un
+   * noyau plus ancien (on retombe sur `is_error` + `reason`). */
+  status?: "ok" | "error" | "refused" | (string & {});
   /** Refused outright (`is_error: true`): `plan_mode`, `deny_rule`, `hardline`, `no_code_session` (see session-mode.ts). */
   reason?: string;
 }
@@ -516,6 +537,11 @@ export interface TurnDoneEvent {
   /** Le tour a échoué (noyau du 01.11, CLIENT-API.md §Fin de tour) : code stable + message caviardé (≤ 500 car.).
    * Absent pour un tour réussi, annulé, refusé par un plafond ou escaladé ; absent aussi d'un noyau plus ancien. */
   error?: TurnDoneError;
+  /** Une ligne d'état POUR LA PERSONNE, déjà dans sa langue (noyau 3992fc13) : le tour devait être profond et s'est replié sur le palier
+   * rapide. À afficher À PART, telle quelle, jamais comme réponse ni comme erreur ; absente sinon. Jamais dans l'historique relu. */
+  notice?: string;
+  /** Le tour a été servi par un autre palier que celui demandé (`{from: "deep", to: "ship"}`) ; absent sans repli. */
+  fallback?: { from: string; to: string };
   /** `true` : au moins un effet a été refusé d'office pendant le tour (règle `deny`, mode plan, « hardline »,
    * invariant) ou une carte du tour était déjà rejetée à sa fin. Absent sinon. */
   refused?: boolean;
@@ -524,10 +550,18 @@ export interface TurnDoneEvent {
 /** Codes d'échec d'un tour (`turn.done.error.code`). Un code inconnu d'un noyau plus récent reste une chaîne. */
 export type TurnErrorCode = "tier_unavailable" | "provider_error" | "max_calls" | "stopped" | "internal_error";
 
+/** Code du quota d'utilisation atteint (403/429 `quota_exceeded` de l'amont) : la phrase de la personne dit quand il se
+ * renouvelle ; ce n'est pas une panne. */
+export const QUOTA_EXCEEDED = "quota_exceeded";
+
 export interface TurnDoneError {
   code: TurnErrorCode | (string & {});
   message: string;
+  /** Renouvellement du quota (ISO 8601 UTC), seulement pour `quota_exceeded` et si la fin de période est connue. */
+  retry_at?: string;
 }
+
+export const isQuotaError = (e: TurnDoneError | null | undefined): boolean => e?.code === QUOTA_EXCEEDED;
 
 // ---------------------------------------------------------------------------
 // Coût par tour (LOKKAL.md §7.8, lot X2)
@@ -596,6 +630,8 @@ export interface LocalMemoryStatus {
   embed?: { ok: boolean; dim?: number; ms?: number };
   last_error?: string;
   last_recall_ms?: number;
+  /** Heure (ISO) où le noyau a lu cet état ; absent d'un noyau qui ne le donne pas encore (le client affiche alors l'heure locale de sa lecture). */
+  checked_at?: string;
 }
 
 /** `turn_id` du noyau → `{thread_id, index}` (l'index est après le DERNIER « : »). */
@@ -613,6 +649,8 @@ import type { SessionModeEvent, TodoUpdatedEvent } from "./session-mode.js";
 import type { HouseAgentEvent, HouseMessageEvent } from "./house.js";
 import type { PaymentEvent } from "./payments.js";
 import type { PresenceChangedEvent } from "./presence.js";
+import type { DeviceRequestEvent } from "./device.js";
+import type { ApprovalRuleSource, BrowserEvent } from "./browser-live.js";
 
 export type NokkerEvent =
   | IncidentUpdatedEvent
@@ -648,9 +686,12 @@ export type NokkerEvent =
   | PaymentEvent
   | HouseAgentEvent
   | PresenceChangedEvent
+  | DeviceRequestEvent
+  | BrowserEvent
   | BubbleEvent;
 
 export const NOKKER_EVENT_TYPES = [
+  "device.request",
   "hook.untrusted",
   "hook.ran",
   "skill.untrusted",
@@ -700,6 +741,12 @@ export const NOKKER_EVENT_TYPES = [
   "payment.refused",
   "payment.budget_changed",
   "payment.agent",
+  "browser.frame",
+  "browser.action",
+  "browser.point",
+  "browser.handoff",
+  "browser.resumed",
+  "browser.ended",
 ] as const satisfies readonly NokkerEvent["type"][];
 
 // ---------------------------------------------------------------------------
@@ -724,7 +771,30 @@ export function messageText(content: ChatMessage["content"]): string {
 export type ChatAttachment =
   | { data: string; media_type?: string; name?: string }
   | { url: string }
-  | { path: string };
+  | { path: string }
+  | TextAttachment;
+
+/** Texte reconnu SUR L'APPAREIL (LOKKAL-PHONE §4.3.1, lot P9), jamais un résultat d'outil :
+ * - `device_ocr` : texte d'une photo ou d'un PDF — pièce de la personne, clôturée comme un contenu de tiers ;
+ * - `device_stt` : transcription d'un fichier audio JOINT (réunion, message reçu) — clôturée, rendue en [Transcription] ;
+ * - `device_dictation` : note DICTÉE au micro du composeur — c'est le message de la personne (texte du message, sans
+ *   clôture).
+ * 20 000 caractères et 4 pièces texte par message au plus ; `name` coupé à 80 caractères par l'app. */
+export type TextSource = "device_ocr" | "device_stt" | "device_dictation";
+export interface TextAttachment {
+  kind: "text";
+  source: TextSource;
+  name: string;
+  text: string;
+  lang?: string;
+  pages?: number;
+  duration_s?: number;
+  /** P9b : masquée sur l'appareil (compteurs par code, jamais de valeur). */
+  redaction?: RedactionMeta;
+}
+export const TEXT_ATTACHMENT_MAX_CHARS = 20_000;
+export const TEXT_ATTACHMENTS_MAX = 4;
+export const TEXT_ATTACHMENT_NAME_MAX = 80;
 
 export interface ChatCompletionRequest {
   model: string;
@@ -787,6 +857,9 @@ export interface CreateLocalSessionRequest {
 export interface LocalSession {
   thread_id: string;
   cwd: string;
+  /** Où le noyau monte `cwd` dans son bac à sable (`/workspace`), chaîne ; `null` : pas de montage (chemins déjà réels,
+   * rien à traduire). Absent : noyau d'avant ce champ (le client suppose `/workspace`). */
+  workspace?: string | null;
   /** Drapeau `local.project_skills` allumé seulement (sinon absent). */
   skills?: ProjectSkillsStatus;
 }
@@ -818,6 +891,8 @@ export interface SkillsTrustResult {
 export interface LocalSessionSummary {
   thread_id: string;
   cwd: string;
+  /** Même champ que `LocalSession.workspace`. */
+  workspace?: string | null;
   /** `null` avant le premier tour. */
   title?: string | null;
   /** ISO 8601 UTC, fin du dernier tour rangé ; `null` sans tour. */

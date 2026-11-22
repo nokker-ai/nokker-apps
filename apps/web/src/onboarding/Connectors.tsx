@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import type { ConnectorCard, ConnectorKind, NokkerClient, TelegramPairing } from "@nokker-apps/sdk";
+import { NokkerApiError, type ConnectorCard, type ConnectorKind, type NokkerClient, type TelegramPairing } from "@nokker-apps/sdk";
 import { errorKey, keyForCode } from "./errors.js";
 import {
   buildCalendarRequest,
@@ -31,8 +31,15 @@ type ConnectorsStepProps = {
   anyLinked?: boolean;
   /** Onboarding : aller tout de suite à Nokker (Telegram et le reste se règlent plus tard dans Mon compte). */
   onStartNow?: () => void;
+  /** Libellé du bouton d'étape suivante, à côté de « démarrer tout de suite » (défaut : Telegram). */
+  nextKey?: "nextTelegram" | "nextPersona";
   onLinked?: (kind: ConnectorKind, linked: boolean) => void;
   onNext?: () => void;
+  /** Lokkal /setup : sans compte nokker.ai relié, `GET /v1/connectors` répond 403 — ce n'est pas une panne, on le dit
+   * (et on propose de relier le compte) au lieu d'un bandeau d'erreur. */
+  accountOnForbidden?: boolean;
+  /** Bouton « Relier mon compte » de cet état (absent : le texte seul). */
+  onLinkAccount?: () => void;
 };
 
 /** `embedded` : dans l'App (onglet Connecteurs, Mon compte), sans parcours — titre h2, pas de bouton « Passer/Continuer ».
@@ -50,6 +57,7 @@ function ConnectorsByKind(props: ConnectorsStepProps): React.ReactElement {
   const [cards, setCards] = useState<ConnectorCard[] | null>(null);
   const [presets, setPresets] = useState<string[]>(orderPresets(["gmail", "icloud", "infomaniak", "fastmail"]));
   const [loadError, setLoadError] = useState<string | undefined>();
+  const [needsAccount, setNeedsAccount] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -58,11 +66,15 @@ function ConnectorsByKind(props: ConnectorsStepProps): React.ReactElement {
       if (l.presets?.mail?.length) setPresets(orderPresets(l.presets.mail));
       for (const c of l.connectors) onLinked.current?.(c.kind, c.state !== "absent");
       setLoadError(undefined);
+      setNeedsAccount(false);
     } catch (err) {
       setCards([]);
-      setLoadError(errorKey(err));
+      if (props.accountOnForbidden && err instanceof NokkerApiError && err.status === 403) {
+        setNeedsAccount(true);
+        setLoadError(undefined);
+      } else setLoadError(errorKey(err));
     }
-  }, [client]);
+  }, [client, props.accountOnForbidden]);
 
   useEffect(() => {
     void refresh();
@@ -79,7 +91,18 @@ function ConnectorsByKind(props: ConnectorsStepProps): React.ReactElement {
         </>
       )}
       <ErrorLine lang={L} k={loadError} />
-      {cards !== null && (
+      {needsAccount && (
+        <article className="ob-conn" role="status" data-connectors-need-account>
+          <h3>{t(L, "connectorsNeedAccount")}</h3>
+          <p className="ob-note">{t(L, "connectorsNeedAccountBody")}</p>
+          {props.onLinkAccount ? (
+            <div className="ob-actions inline">
+              <button type="button" className="ob-btn" onClick={props.onLinkAccount}>{t(L, "connectorsLinkAccount")}</button>
+            </div>
+          ) : null}
+        </article>
+      )}
+      {cards !== null && !needsAccount && (
         <>
           <ConnectorPanel kind="mail" client={client} lang={L} card={card("mail")} presets={presets} onChanged={refresh} />
           <ConnectorPanel kind="calendar" client={client} lang={L} card={card("calendar")} presets={presets} onChanged={refresh} />
@@ -94,7 +117,7 @@ function ConnectorsByKind(props: ConnectorsStepProps): React.ReactElement {
               </button>
             ) : null}
             <button type="button" className={"ob-btn" + (props.onStartNow ? "" : " primary")} onClick={props.onNext}>
-              {props.onStartNow ? t(L, "nextTelegram") : props.anyLinked ? t(L, "next") : t(L, "skip")}
+              {props.onStartNow ? t(L, props.nextKey ?? "nextTelegram") : props.anyLinked ? t(L, "next") : t(L, "skip")}
             </button>
           </div>
           {props.onStartNow ? <p className="ob-note">{t(L, "startNowNote")}</p> : null}

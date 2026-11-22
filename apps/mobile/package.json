@@ -1,0 +1,24 @@
+{
+  "name": "@nokker-apps/mobile",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Coque native de Nokker (Capacitor 8) : la webapp apps/web dans le paquet, iOS d'abord (LOKKAL-PHONE §2, lot P2).",
+  "scripts": {
+    "web": "VITE_NOKKER_SERVER_URL=https://app.nokker.ai VITE_NOKKER_STORE_BUILD=ios pnpm --filter @nokker-apps/web build",
+    "sync": "cap sync ios",
+    "build:ios": "pnpm run web && cap sync ios"
+  },
+  "dependencies": {
+    "@capacitor/app": "8.1.2",
+    "@capacitor/browser": "8.0.5",
+    "@capacitor/core": "8.6.0",
+    "@capacitor/haptics": "8.0.2",
+    "@capacitor/ios": "8.6.0",
+    "@capacitor/keyboard": "8.0.6",
+    "@capacitor/splash-screen": "8.0.2",
+    "@capacitor/status-bar": "8.0.4"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.6.0"
+  }
+}

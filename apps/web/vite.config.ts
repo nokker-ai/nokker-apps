@@ -13,7 +13,7 @@ const target = process.env.NOKKER_SERVER_URL ?? "http://127.0.0.1:4310";
  * build (favicon, icônes d'app du manifest, emblèmes) — pas de copie du kit dans `apps/web`. */
 function brandAssets(): Plugin {
   const dir = resolve(dirname(fileURLToPath(import.meta.url)), "../../packages/brand/assets");
-  const types: Record<string, string> = { ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
+  const types: Record<string, string> = { ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".css": "text/css; charset=utf-8", ".woff2": "font/woff2", ".txt": "text/plain; charset=utf-8" };
   const walk = (d: string, base = ""): string[] =>
     readdirSync(d).flatMap((f) => (statSync(join(d, f)).isDirectory() ? walk(join(d, f), `${base}${f}/`) : [`${base}${f}`]));
   return {

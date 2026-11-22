@@ -1,0 +1,39 @@
+/* Nina en calques : chaque image couvre le bloc ; la tête pivote à la base du cou (mesuré sur les calques). */
+.nk-nina img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  pointer-events: none;
+}
+.nk-nina .nk-nina-head img + img { transition: opacity 90ms linear; }
+/* Retour au sourire après la parole : fondu plus lent que les changements de bouche en parlant. */
+.nk-nina.nk-nina-settle .nk-nina-head img + img { transition: opacity 300ms ease-out; }
+.nk-nina-breathe,
+.nk-nina-head { position: absolute; inset: 0; }
+.nk-nina-breathe { animation: nkNinaBreathe 4.2s ease-in-out infinite; }
+.nk-nina-head { transform-origin: 50.8% 45.9%; will-change: transform; }
+.nk-nina-head.st-idle { animation: nkNinaSway 6.5s ease-in-out infinite; }
+.nk-nina-head.st-speaking { animation: nkNinaTalk 1.4s ease-in-out infinite; }
+/* Cadrage « head » : le visage remplit un cadre carré ; « upper » : le buste entier. */
+.nk-nina.fr-head .nk-nina-breathe { inset: -6% -38% -70% -38%; }
+@media (prefers-reduced-motion: reduce) {
+  .nk-nina-breathe,
+  .nk-nina-head { animation: none !important; }
+}
+@keyframes nkNinaBreathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.007) translateY(-1.5px); }
+}
+@keyframes nkNinaSway {
+  0%, 100% { transform: rotate(-1.1deg); }
+  50% { transform: rotate(1.1deg); }
+}
+@keyframes nkNinaTalk {
+  0%, 100% { transform: rotate(-0.9deg) translateY(0.5px); }
+  25% { transform: rotate(0.7deg) translateY(-1.5px); }
+  60% { transform: rotate(-0.4deg) translateY(0); }
+  80% { transform: rotate(1deg) translateY(-1px); }
+}

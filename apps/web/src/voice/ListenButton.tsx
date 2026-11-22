@@ -8,6 +8,7 @@ import type { NokkerClient } from "@nokker-apps/sdk";
 import { Icon } from "../icons.js";
 import { shellLang, tr } from "../i18n/index.js";
 import { releaseTurn, SpeechReading, takeTurn, type SpeechState } from "./speech.js";
+import { Orb } from "./Orb.js";
 import "./listen.css";
 
 export function ListenButton({ client, threadId, index }: { client: Pick<NokkerClient, "speechStream">; threadId: string; index: number }) {
@@ -59,6 +60,7 @@ export function ListenButton({ client, threadId, index }: { client: Pick<NokkerC
         <Icon name={state === "playing" ? "pause" : "soundOn"} size={14} />
         <span>{label}</span>
       </button>
+      {state === "playing" || state === "loading" ? <Orb state={state === "playing" ? "speaking" : "thinking"} size="sm" /> : null}
       {error ? (
         <span className="listen-error fine" role="alert">
           {error}

@@ -5,7 +5,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { legacyLokkalFilePaths, lokkalFilePath } from "./config.js";
-import { t } from "./i18n/index.js";
+import { lang, t } from "./i18n/index.js";
 
 export interface LokkalConfig {
   compose: string;
@@ -92,6 +92,30 @@ export function lokkalProblem(r: LokkalResult): string | null {
 /** Commande à lancer sur l'hôte de Lokkal : sous WSL (Windows) elle passe par `wsl.exe -d <distro> -- …`. */
 export function hostCommand(c: LokkalConfig | null, cmd: string, args: string[]): { cmd: string; args: string[] } {
   return c?.wsl_distro ? { cmd: "wsl.exe", args: ["-d", c.wsl_distro, "--", cmd, ...args] } : { cmd, args };
+}
+
+/**
+ * Environnement ajouté aux scripts de Lokkal (install.sh --update, backup.sh) : `vars`, plus `NOKKER_LANG` = la langue
+ * de cette commande (--lang, NOKKER_LANG, LC_ALL, LC_MESSAGES, LANG), que les scripts suivent avec la même règle ; sans
+ * lui, `nokker --lang fr backup` afficherait les messages de backup.sh dans la langue de l'environnement.
+ * Sous WSL, wsl.exe ne transmet que les variables listées dans `WSLENV` : `forward` (variables à faire traverser,
+ * déjà dans l'environnement ou dans `vars`) et NOKKER_LANG y sont ajoutées, sans doublon ni perte des entrées existantes.
+ */
+export function scriptEnv(
+  c: LokkalConfig | null,
+  vars: Record<string, string> = {},
+  env: Record<string, string | undefined> = process.env,
+  forward: string[] = [],
+): Record<string, string> {
+  const out: Record<string, string> = { ...vars, NOKKER_LANG: lang() };
+  if (c?.wsl_distro) {
+    const entries = (env.WSLENV ?? "").split(":").filter(Boolean);   // « NOM » ou « NOM/drapeaux »
+    for (const k of [...Object.keys(vars), ...forward, "NOKKER_LANG"]) {
+      if (k !== "WSLENV" && !entries.some((e) => e.split("/")[0] === k)) entries.push(k);
+    }
+    out.WSLENV = entries.join(":");
+  }
+  return out;
 }
 
 /** Arguments `docker compose -p <project> -f <compose>`. */

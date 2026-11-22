@@ -1,5 +1,6 @@
 /** `desktop-prompt` : ordinateur dont le navigateur propose l'installation (beforeinstallprompt) — une ligne discrète,
  * jamais l'étape « écran d'accueil » d'un téléphone. */
+import { isNativeShell } from "../platform/native.js";
 export type InstallMode = "installed" | "prompt" | "ios" | "ios-inapp" | "android-menu" | "desktop-prompt" | "none";
 
 export interface InstallEnv {
@@ -47,14 +48,18 @@ export function subscribeInstall(l: () => void): () => void {
 
 export const hasInstallPrompt = (): boolean => deferred !== null;
 
+/** Installée : écran d'accueil (PWA), ou coque native (l'app EST installée : jamais l'étape « écran d'accueil »). */
 export function isStandalone(): boolean {
   return (
+    isNativeShell() ||
     window.matchMedia("(display-mode: standalone)").matches ||
     (navigator as Navigator & { standalone?: boolean }).standalone === true
   );
 }
 
 export function currentInstallMode(): InstallMode {
+  // Dans l'app native : aucun bloc « Installer Nokker » (ni Safari, ni écran d'accueil) — l'app EST installée.
+  if (isNativeShell()) return "none";
   return installMode({
     ua: navigator.userAgent,
     platform: navigator.platform,

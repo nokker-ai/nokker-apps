@@ -65,6 +65,9 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/cost")).toEqual({ kind: "cost" });
     expect(parseSlashCommand("/mode")).toEqual({ kind: "mode", name: null });
     expect(parseSlashCommand("/mode  plan ")).toEqual({ kind: "mode", name: "plan" });
+    expect(parseSlashCommand("/model")).toEqual({ kind: "model", name: null });
+    expect(parseSlashCommand("/model byok:own")).toEqual({ kind: "model", name: "byok:own" });
+    expect(parseSlashCommand("/models")).toEqual({ kind: "model", name: null });
     expect(parseSlashCommand("/cancel")).toEqual({ kind: "cancel" });
     expect(parseSlashCommand("/pause")).toEqual({ kind: "cancel" });
     expect(parseSlashCommand("/STOP")).toEqual({ kind: "cancel" });

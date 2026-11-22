@@ -365,6 +365,8 @@ function kindLabel(kind: string): string {
       return t("feedback");
     case "fact":
       return t("fact");
+    case "preference":
+      return t("preference");
     default:
       return kind;
   }
@@ -383,13 +385,23 @@ function originLabel(from: string | undefined): string {
   }
 }
 
-/** Ligne d'état de la mémoire longue (`GET /v1/local/memory`), `null` si inconnue. */
-export function formatMemoryStatus(st: LocalMemoryStatus | null): string | null {
+/** Heure locale (24 h) de la lecture : `checked_at` du noyau s'il le donne, sinon l'heure de CETTE lecture. */
+function readTime(st: LocalMemoryStatus, now: Date): string {
+  const at = st.checked_at ? new Date(st.checked_at) : null;
+  const d = at && !Number.isNaN(at.getTime()) ? at : now;
+  return d.toLocaleTimeString("fr-CH", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+}
+
+/** Ligne d'état de la mémoire longue (`GET /v1/local/memory`), `null` si inconnue ; l'heure de la lecture la termine
+ * (un compte relu juste après un oubli se juge à son heure). */
+export function formatMemoryStatus(st: LocalMemoryStatus | null, now: Date = new Date()): string | null {
   if (!st) return null;
-  if (st.mode === "off") return t("Long-term memory: off on this core.");
-  if (st.ok === false) return t("Long-term memory: DOWN ({0}) — `nokker doctor` for details.", st.error ?? st.last_error ?? st.mode);
+  const at = t("Read at {0}.", readTime(st, now));
+  if (st.mode === "off") return `${t("Long-term memory: off on this core.")} ${at}`;
+  if (st.ok === false) return `${t("Long-term memory: DOWN ({0}) — `nokker doctor` for details.", st.error ?? st.last_error ?? st.mode)} ${at}`;
   const notes = st.store?.notes;
-  return notes !== null && notes !== undefined ? t("Long-term memory: {0}, healthy, {1} indexed note(s).", st.mode, notes) : t("Long-term memory: {0}, healthy.", st.mode);
+  const line = notes !== null && notes !== undefined ? t("Long-term memory: {0}, healthy, {1} indexed note(s).", st.mode, notes) : t("Long-term memory: {0}, healthy.", st.mode);
+  return `${line} ${at}`;
 }
 
 export function formatMemory(list: ProjectMemoryList, status: LocalMemoryStatus | null = null): string {

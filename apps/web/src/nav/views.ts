@@ -7,7 +7,7 @@
  */
 import type { IconName } from "../icons.js";
 
-export type ViewId = "chat" | "crew" | "incidents" | "plan" | "team" | "household" | "packs" | "code" | "connectors" | "account" | "machine" | "learning" | "house" | "folder";
+export type ViewId = "chat" | "crew" | "incidents" | "plan" | "team" | "household" | "packs" | "code" | "connectors" | "account" | "machine" | "learning" | "house" | "folder" | "devices";
 
 export interface NavView {
   id: Exclude<ViewId, "chat">;
@@ -38,6 +38,8 @@ export interface NavFlags {
   house: boolean;
   /** Folder mode (FOLDER-MODE §6): on the Lokkal machine, `GET /v1/local/folder/runs` 200. Optional: off when absent. */
   folder?: boolean;
+  /** ACCORD (appareil Autoriser / Refuser) : `GET /v1/local/accord` répond (drapeau `local.accord.enabled`). Optionnel : éteint si absent. */
+  accord?: boolean;
 }
 
 export interface NavLabels {
@@ -51,6 +53,7 @@ export interface NavLabels {
   waiting: (n: number) => string;
   house: string;
   folder?: string;
+  devices?: string;
 }
 
 /** Les vues disponibles, dans l'ordre d'affichage (travail d'abord, puis réglages ; « Mon compte » en dernier). */
@@ -92,6 +95,7 @@ export function navViews(f: NavFlags, l: NavLabels): NavView[] {
     },
     { id: "connectors", group: "settings", label: l.connectors, icon: "plug" },
     f.local && { id: "machine", group: "settings", label: "Machine", icon: "cpu" },
+    !!f.accord && { id: "devices", group: "settings", label: l.devices ?? "Devices", icon: "shield" },
     { id: "account", group: "settings", label: l.account, icon: "user" },
   ];
   return v.filter((x): x is NavView => !!x);

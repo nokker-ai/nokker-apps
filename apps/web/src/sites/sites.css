@@ -1,0 +1,390 @@
+/* Sites connectés : téléphone d'abord (390 px), cibles de 44 px, une feuille plein écran pour ajouter un site. */
+.st-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-radius: 12px;
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.st-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+.st-row {
+  position: relative;
+  padding: 12px 0;
+  border-top: 1px solid var(--line-strong);
+}
+.st-row:first-child {
+  border-top: 0;
+}
+.st-row-main {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  min-width: 0;
+}
+.st-row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.st-row-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.st-row-title strong,
+.st-account {
+  overflow-wrap: anywhere;
+}
+.st-account,
+.st-quota {
+  margin: 2px 0 0;
+}
+.st-state {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 4px 0 0;
+  font-weight: 600;
+}
+.st-ok {
+  color: var(--ok);
+}
+.st-warn {
+  color: var(--warn, #b7791f);
+}
+.st-bad {
+  color: var(--accent);
+}
+.st-busy {
+  color: var(--muted);
+}
+.st-row-actions {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 0 52px;
+}
+.st-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 13em;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+.st-menu button {
+  min-height: 44px;
+  padding: 8px 12px;
+  text-align: left;
+  border: 0;
+  background: none;
+  color: inherit;
+  border-radius: 8px;
+  font: inherit;
+  cursor: pointer;
+}
+.st-menu button:hover,
+.st-menu button:focus-visible {
+  background: rgba(var(--ov), 0.06);
+}
+.st-menu button.danger {
+  color: var(--accent);
+}
+.st-confirm {
+  margin: 8px 0 0 52px;
+}
+.st-add {
+  margin-top: 12px;
+}
+.st-backdrop {
+  position: fixed;
+  inset: 0;
+  /* Au-dessus du bouton des sessions (drawer-fab, 60) : la feuille ne se fait pas couvrir au téléphone. */
+  z-index: 70;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+.st-sheet {
+  width: 100%;
+  max-width: 480px;
+  max-height: 100dvh;
+  overflow-y: auto;
+  padding: 12px 16px 24px;
+  background: var(--surface);
+  color: var(--text, inherit);
+  border-radius: 18px 18px 0 0;
+}
+@media (min-width: 720px) {
+  .st-backdrop {
+    align-items: center;
+  }
+  .st-sheet {
+    border-radius: 18px;
+    max-height: calc(100dvh - 64px);
+    padding: 16px 24px 28px;
+  }
+}
+.st-sheet h2 {
+  margin: 4px 0 16px;
+  font-size: 1.3rem;
+  line-height: 1.25;
+}
+.st-sheet-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.st-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.st-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-height: 108px;
+  padding: 14px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.st-tile:hover,
+.st-tile:focus-visible {
+  border-color: var(--accent);
+}
+.st-consent {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.st-consent li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  line-height: 1.45;
+}
+.st-consent li svg {
+  flex: none;
+  margin-top: 2px;
+}
+.st-agree {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 0 0 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.st-agree input {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  margin: 0;
+  accent-color: var(--accent, currentColor);
+}
+/* Avertissement : chaque point est une carte qu'on touche en entier (44 px au moins). */
+.st-consent .st-agree {
+  margin: 0;
+  font-weight: 400;
+  min-height: 44px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  align-items: flex-start;
+}
+.st-consent .st-agree:has(input:checked) {
+  border-color: var(--accent, currentColor);
+}
+.st-consent .st-agree:focus-within {
+  outline: 2px solid var(--accent, currentColor);
+  outline-offset: 2px;
+}
+.st-wide {
+  width: 100%;
+  justify-content: center;
+}
+.st-creds-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.st-creds-head h2 {
+  margin: 0;
+}
+.st-pass {
+  display: flex;
+  gap: 8px;
+}
+.st-code {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.st-pass input,
+.st-code input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.st-code input[inputmode="numeric"] {
+  font-size: 1.4rem;
+  letter-spacing: 0.2em;
+  text-align: center;
+}
+.st-lock {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.st-steps {
+  list-style: none;
+  margin: 4px 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.st-steps li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.st-steps li[data-step="todo"] {
+  color: var(--muted);
+}
+.st-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+}
+.st-steps li[data-step="done"] .st-dot {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #fff;
+}
+.st-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 14px;
+  background: rgba(var(--accent-rgb), 0.07);
+  border: 1px solid rgba(var(--accent-rgb), 0.35);
+}
+.st-ask.ok {
+  background: rgba(var(--ok-rgb), 0.1);
+  border-color: rgba(var(--ok-rgb), 0.45);
+}
+.st-ask p {
+  margin: 0;
+}
+.st-ask-title {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-weight: 700;
+  font-size: 1.05rem;
+  line-height: 1.35;
+}
+.st-spin {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: st-spin 0.9s linear infinite;
+}
+@keyframes st-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .st-spin {
+    animation: none;
+    border-right-color: currentColor;
+    opacity: 0.6;
+  }
+}
+.st-state > svg,
+.st-state > .st-spin {
+  flex: none;
+  margin-top: 3px;
+}
+.st-state > span:last-child {
+  min-width: 0;
+}
+/* Pages des liens (/sites/r/<rid>, /sites/h/<jeton>) : une carte au centre, téléphone d'abord. */
+.st-page {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: max(24px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+}
+.st-page-brand {
+  font-family: var(--brand);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  margin: 0 0 16px;
+}
+.st-page h1.st-ask-title {
+  font-size: 1.15rem;
+  margin: 0 0 12px;
+}
+.st-cancel {
+  margin-top: 12px;
+  min-height: 44px;
+}
+/* Avertissement : les quatre points lus (icône + texte), puis une seule case, en carte tactile. */
+.st-points li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.st-points li svg {
+  flex: none;
+  margin-top: 2px;
+}
+.st-agree-one {
+  min-height: 44px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+}
+.st-agree-one:has(input:checked) {
+  border-color: var(--accent, currentColor);
+}
+.st-agree-one:focus-within {
+  outline: 2px solid var(--accent, currentColor);
+  outline-offset: 2px;
+}

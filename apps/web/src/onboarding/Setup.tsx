@@ -131,6 +131,27 @@ export function Setup(): React.ReactElement {
     }
   }, [client, s]);
 
+  /** « Ajouter » : la clé et le point d'accès partent au noyau (PUT de setup) sans attendre « Continuer » ; un rechargement
+   * les retrouve. Même corps que `saveModels` (la liste `byok` remplace celle du noyau), sans quitter l'étape. */
+  const persistByok = useCallback(
+    async (next: LocalFlowState) => {
+      dispatch({ type: "byok_persist_start" });
+      try {
+        const byok = next.byok.map((b) => {
+          const key = keys.current.get(b.name);
+          return { name: b.name, base_url: b.base_url, model: b.model, ok: true, ...(key ? { api_key: key } : {}) };
+        });
+        // Plus aucun modèle choisi (dernière clé retirée) : on n'envoie que la liste.
+        const setup = await client.putLocalModels({ ...(next.chosen ? { default: next.chosen } : {}), byok });
+        keys.current.clear();
+        dispatch({ type: "byok_persisted", setup });
+      } catch (err) {
+        dispatch({ type: "byok_persist_failed", error: localErrorKey(err) });
+      }
+    },
+    [client],
+  );
+
   const finish = useCallback(async () => {
     dispatch({ type: "finish_submit" });
     try {
@@ -178,12 +199,17 @@ export function Setup(): React.ReactElement {
             <LocalKeyHelp lang={L} origin={location.origin} onOpened={() => location.assign("/setup")} />
           </section>
         )}
-        {s.step === "models" && <ModelsStep s={s} client={client} keys={keys.current} dispatch={dispatch} onStartLink={startLink} onSave={() => void saveModels()} />}
+        {s.step === "models" && <ModelsStep s={s} client={client} keys={keys.current} dispatch={dispatch} onStartLink={startLink} onSave={() => void saveModels()} onPersist={(next) => void persistByok(next)} />}
         {s.step === "connectors" && (
           <ConnectorsStep
             client={client}
             lang={L}
             anyLinked={s.connectorsLinked}
+            accountOnForbidden
+            onLinkAccount={() => {
+              dispatch({ type: "back_to_models" });
+              if (!s.routerLinked) startLink();
+            }}
             onLinked={(kind, linked) => {
               connectorKinds.current[kind] = linked;
               dispatch({ type: "connectors_linked", any: connectorKinds.current.mail || connectorKinds.current.calendar });
@@ -218,6 +244,8 @@ function ModelsStep(props: {
   dispatch: Dispatch;
   onStartLink: () => void;
   onSave: () => void;
+  /** Enregistre tout de suite l'état (après « Ajouter ») : rien n'est « rangé » avant l'écriture. */
+  onPersist: (next: LocalFlowState) => void;
 }): React.ReactElement {
   const { s, dispatch } = props;
   const L = s.lang;
@@ -234,11 +262,16 @@ function ModelsStep(props: {
         onAdd={(name, baseUrl, model, key) => {
           if (key) props.keys.set(name, key);
           else props.keys.delete(name);
-          dispatch({ type: "byok_added", name, base_url: baseUrl, model, hasKey: !!key || (s.byok.find((b) => b.name === name)?.hasKey ?? false) });
+          const added: LocalAction = { type: "byok_added", name, base_url: baseUrl, model, hasKey: !!key || (s.byok.find((b) => b.name === name)?.hasKey ?? false) };
+          dispatch(added);
+          props.onPersist(reduceLocal(s, added));
         }}
         onRemove={(name) => {
+          if (s.submitting) return; // une écriture est en cours : pas de seconde liste calculée sur un état dépassé
           props.keys.delete(name);
-          dispatch({ type: "byok_removed", name });
+          const removed: LocalAction = { type: "byok_removed", name };
+          dispatch(removed);
+          props.onPersist(reduceLocal(s, removed)); // comme « Ajouter » : écrit tout de suite, un rechargement ne la ramène pas
         }}
       />
       {s.local.length > 0 && <LocalCard s={s} />}

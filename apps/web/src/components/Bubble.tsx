@@ -81,7 +81,7 @@ export function Bubble(p: BubbleProps): React.ReactElement {
   const fromTitle = readOnly ? p.threads.find((t) => t.id === b.thread_id)?.title : null;
 
   return (
-    <article ref={ref} className={cls} style={style} aria-label={tr("Bubble {0}: {1}, {2}", bubbleLabel(b.kind), title, statusLabel(b, now))} data-bubble-id={b.id} onPointerDownCapture={p.onActivate}>
+    <article ref={ref} className={cls} style={style} aria-label={tr("Bubble {0}: {1}, {2}", bubbleLabel(b.kind), title, statusLabel(b, now))} data-bubble-id={b.id} {...(p.collapsed ? { title } : {})} onPointerDownCapture={p.onActivate}>
       <div className={`bubble-head ${p.draggable ? "grab" : ""}`} onPointerDown={p.draggable ? p.onGripDown : undefined}>
       <div className="bubble-bar">
         {p.draggable ? (

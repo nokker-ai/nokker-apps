@@ -1,0 +1,56 @@
+/* Étape « Ton Nokker » de l'onboarding. */
+.ob-persona-stage {
+  width: min(220px, 60vw);
+  margin: 8px auto 4px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+}
+.ob-persona-voice {
+  display: flex;
+  gap: 8px;
+}
+.ob-persona-voice select {
+  flex: 1;
+  min-width: 0;
+}
+.ob-persona-avatars {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0;
+  padding: 0;
+  border: 0;
+}
+.ob-persona-avatars legend {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--soft);
+  margin-bottom: 4px;
+  padding: 0;
+}
+.ob-persona-thumb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  min-width: 88px;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+.ob-persona-thumb img {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--panel);
+}
+.ob-persona-thumb.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}

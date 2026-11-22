@@ -108,6 +108,15 @@ const text = (sid: string): string =>
 describe("nokker acp (ACP v1) contre le mock", () => {
   let sid = "";
 
+  it("surface : les tours ACP portent X-Nokker-Surface: acp", async () => {
+    mock.state.chatSurfaces.length = 0;
+    const k = (await ctx.request("session/new", { cwd: proj, mcpServers: [] })).sessionId;
+    answer = (req) => ({ outcome: { outcome: "selected", optionId: req.options.find((o) => o.kind === "allow_once")!.optionId } });
+    await ctx.request("session/prompt", { sessionId: k, prompt: [{ type: "text", text: "bonjour" }] });
+    expect(mock.state.chatSurfaces.length).toBeGreaterThan(0);
+    expect(new Set(mock.state.chatSurfaces)).toEqual(new Set(["acp"]));
+  });
+
   it("initialize : protocole v1, sessions rechargeables, images et contexte embarqué", async () => {
     const r = await ctx.request("initialize", { protocolVersion: PROTOCOL_VERSION, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false } });
     expect(r.protocolVersion).toBe(1);
@@ -135,11 +144,13 @@ describe("nokker acp (ACP v1) contre le mock", () => {
   it("un tour : texte, outils avec effet, diff du patch, carte → permission, carte forte → terminal (machine non liée), coût", async () => {
     let terminalSeen = false;
     answer = (req) => {
-      // Commande de test : « Pour cette session » est la première option (mêmes règles que la CLI), libellée d'après
-      // `suggested_rule_kinds` (noyau du 01.11) : la règle proposée en premier est la commande exacte.
-      expect(req.options[0]!.name).toBe("This exact command for this session");
+      // Même ordre que la CLI, même pour une commande de test : « Une fois » d'abord. « Pour cette session » est libellée
+      // d'après `suggested_rule_kinds` (noyau du 01.11) : la règle proposée en premier est la commande exacte.
+      expect(req.options[0]!.kind).toBe("allow_once");
+      const session = req.options.find((o) => o.name === "This exact command for this session");
+      expect(session).toBeTruthy();
       expect(req.options.map((o) => o.kind)).toContain("reject_once");
-      return { outcome: { outcome: "selected", optionId: req.options[0]!.optionId } };
+      return { outcome: { outcome: "selected", optionId: session!.optionId } };
     };
     const turn = ctx.request("session/prompt", { sessionId: sid, prompt: [{ type: "text", text: "corrige le test add" }] });
     // La carte forte (rm -rf build) n'est PAS proposée à l'éditeur. Machine non liée (défaut du mock) : elle ne part pas
@@ -248,13 +259,15 @@ describe("nokker acp (ACP v1) contre le mock", () => {
       expect(pytestEnds.map((e) => e.status)).toEqual(["completed"]);
       expect(pytestEnds[0]!.rawOutput?.preview).toContain("1 passed");
       const rm = calls.find((c) => c.title.includes("rm -rf build"))!;
-      // Carte forte refusée : l'appel (« it waits for your phone ») se ferme en échec, sans `tool.result`.
+      // Carte forte refusée (noyau n27) : le `tool.result` « refused / declined » ferme l'appel en échec.
       expect(ends.filter((e) => e.toolCallId === rm.toolCallId).at(-1)?.status).toBe("failed");
+      expect(JSON.stringify(u)).not.toContain("local-owner"); // jamais l'identifiant interne du noyau
       const all = text(k);
       expect(all).toContain("is waiting for your approval on the card");
-      // Un refus ne lance pas de tour de suite (`continuation: "none"`) : la demande et la suite de l'approbation.
-      expect(all).not.toMatch(/refusée|refused|rejected/i);
-      expect(all.match(/_[\d.]+k? tokens · [^_]+_/g)).toHaveLength(2);
+      // Noyau n27 : un refus répond 202 et le modèle CONTINUE (tour de suite après le refus) : la demande attend aussi
+      // cette suite — le tour qui a posé la carte, la suite de l'approbation et la suite du refus (3 lignes de coût).
+      expect(all).toContain("One action was refused.");
+      expect(all.match(/_[\d.]+k? tokens · [^_]+_/g)).toHaveLength(3);
     } finally {
       mock.state.approvalStyle = "inline";
       mock.state.strongRelay = false;

@@ -1,0 +1,10 @@
+.nl-page { min-height: 100vh; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 24px 16px; background: var(--bg); }
+.nl-frame { width: min(960px, 100%); aspect-ratio: 1088 / 704; border-radius: 20px; overflow: hidden; background: #e8e1f3; }
+.nl-caption { max-width: 960px; margin: 0; font-size: 1.25rem; line-height: 1.4; text-align: center; color: var(--text); }
+.nl-note { margin: 0; color: var(--muted); font-size: 0.95rem; }
+.nl-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.nl-floor { margin: 0; padding: 6px 16px; border-radius: 999px; font-size: 1.05rem; font-weight: 600; background: var(--surface, #f1edf8); color: var(--text); }
+.nl-floor-nina { background: #e8e1f3; color: #4b2a7a; }
+.nl-floor-you { background: #dff3e6; color: #1d5b33; }
+.nl-hold { touch-action: none; user-select: none; }
+.nl-hold.held { outline: 3px solid #1d5b33; }

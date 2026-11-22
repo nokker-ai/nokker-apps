@@ -1,0 +1,73 @@
+/* Vues du mur : points de navigation (bas, centre) et avatar (haut, droite). Cibles ≥ 44 px. */
+.wall-dots {
+  position: fixed;
+  left: 50%;
+  bottom: 1.4vmin;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  z-index: 5;
+}
+.wall-dots button {
+  width: 44px;
+  height: 44px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.wall-dots button span {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid rgba(29, 29, 31, 0.45);
+}
+.wall-dots button[aria-pressed="true"] span {
+  background: rgba(29, 29, 31, 0.7);
+}
+.wall-dots button:focus-visible {
+  outline: 3px solid #c8313a;
+  border-radius: 50%;
+}
+.wall-avatar {
+  position: fixed;
+  top: 2vmin;
+  right: 2vmin;
+  width: clamp(120px, 20vmin, 240px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  z-index: 4;
+}
+.wall-avatar-3d {
+  width: 100%;
+  aspect-ratio: 1;
+}
+.wall-avatar-play {
+  min-height: 44px;
+  padding: 0 1em;
+  border-radius: 999px;
+  border: 1px solid rgba(29, 29, 31, 0.2);
+  background: rgba(255, 255, 255, 0.8);
+  font: inherit;
+  font-size: clamp(14px, 2vmin, 20px);
+  cursor: pointer;
+}
+.wall-avatar.inline {
+  position: static;
+  order: 3;
+  margin-left: auto;
+  width: clamp(96px, 14vmin, 160px);
+  flex-direction: row;
+}
+.wall-screen-frame {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+.wall-screen-frame > * {
+  flex: 1;
+}

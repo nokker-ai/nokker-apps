@@ -107,6 +107,9 @@ export class LocalEventHub {
   }
 }
 
+/** Attente (ms) du `tool.result` « refused » après un refus décidé ailleurs (noyau n27). */
+const REFUSAL_FOLLOW_MS = 1000;
+
 function eventThread(e: NokkerEvent): string | null {
   if (e.type === "approval.requested") return e.approval.thread_id;
   // `subagent.progress|finished` du noyau ne portent que `parent_thread_id`.
@@ -262,11 +265,15 @@ export class EditorSession {
   private inflight = new Set<Promise<unknown>>();
   /** Coût publié par tour (`turn.cost`), rendu à son `turn.done`. */
   private costs = new Map<string, TurnCostEvent>();
+  /** Texte déjà rendu par `turn.delta`, par turn_id (le delta est cumulatif). */
+  private deltaSeen = new Map<string, string>();
   private ownCost: TurnCostEvent | null = null;
   /** Carte → appel d'outil qui l'attend (marqueur du noyau, ou `call_id` de la carte). */
   private waitingCalls = new Map<string, string>();
   /** Cartes approuvées dont l'appel attend le `tool.result` de l'exécuteur (carte → appel). */
   private executing = new Map<string, string>();
+  /** Cartes dont le `tool.result` de l'exécuteur (ou du refus, noyau n27) est déjà arrivé. */
+  private resultSeen = new Set<string>();
   private emitText: ((s: string) => void) | null = null;
   /** `turn.done` du tour lancé par `prompt` reçu. */
   private ownDone = false;
@@ -472,6 +479,7 @@ export class EditorSession {
     for (const id of [...this.cards.keys()]) this.closeCard(id, "cancelled");
     // Les suites en file sont abandonnées par le noyau (leur `tool.result` en erreur fermera l'appel s'il arrive).
     this.executing.clear();
+    this.resultSeen.clear();
   }
 
   /** Décide une carte avec l'un des choix proposés. Une seule décision par carte ; jamais une carte forte ; au plus
@@ -489,7 +497,15 @@ export class EditorSession {
     try {
       const res = await this.track(this.client.decideLocalApproval(approvalId, { decision, scope, ...(choice.rule ?? choice.scopeRule ? { rule: choice.rule ?? choice.scopeRule } : {}) }));
       if (res.call_id && !this.waitingCalls.has(approvalId)) this.waitingCalls.set(approvalId, res.call_id);
-      this.closeCard(approvalId, res.status ?? (decision === "approve" ? "approved" : "rejected"), res.result_summary ?? res.error);
+      const status = res.status ?? (decision === "approve" ? "approved" : "rejected");
+      // Refus : jamais le résumé du noyau (« refusé par <identifiant interne> ») ; le texte du client.
+      this.closeCard(approvalId, status, status === "rejected" ? undefined : res.result_summary ?? res.error);
+      // Noyau n27 : un refus répond 202 et le modèle CONTINUE. Le noyau publie d'abord le `tool.result` « refused » de
+      // l'appel, puis le tour de suite : on n'a pas fini tant que ce résultat n'est pas arrivé (sinon la demande se
+      // termine avant la suite du refus, qui s'affiche alors après coup).
+      if (decision === "reject" && res.continuation && res.continuation !== "none" && res.call_id && !this.resultSeen.has(approvalId)) {
+        this.executing.set(approvalId, res.call_id);
+      }
       return true;
     } catch (err) {
       // 409 : décidée ailleurs entre-temps (terminal, téléphone) ou expirée.
@@ -606,6 +622,7 @@ export class EditorSession {
         if (e.approval_id) {
           // Sortie de l'exécuteur après la carte (même `call_id` que l'appel resté en attente).
           this.executing.delete(e.approval_id);
+          this.resultSeen.add(e.approval_id);
           this.waitingCalls.delete(e.approval_id);
           this.wake?.();
         }
@@ -624,7 +641,7 @@ export class EditorSession {
         const p: Promise<void> = this.diffsOf(ok ? edits : [])
           .catch(() => [] as EditorDiff[])
           .then((diffs) => {
-            const end: EditorToolCall = { ...t, status: ok ? "completed" : "failed", preview: e.preview ?? null, ms: e.ms ?? null, effect: t.effect ?? e.effect ?? null, diffs };
+            const end: EditorToolCall = { ...t, status: ok ? "completed" : "failed", preview: e.status === "refused" && e.reason === "declined" ? this.texts.rejected : e.preview ?? null, ms: e.ms ?? null, effect: t.effect ?? e.effect ?? null, diffs };
             this.tools.set(t.callId, end);
             this.sink.onToolEnd?.(end);
           })
@@ -645,9 +662,21 @@ export class EditorSession {
         }
         return;
       }
-      case "approval.decided":
+      case "approval.decided": {
+        const waitingCall = this.waitingCalls.get(e.approval_id);
         this.closeCard(e.approval_id, e.decision);
+        // Refus décidé AILLEURS (terminal, téléphone), noyau n27 : le `tool.result` « refused » puis le tour de suite
+        // suivent de peu. On les attend un instant (un noyau plus ancien n'en publie pas : l'attente est bornée).
+        if (e.decision === "rejected" && waitingCall && !this.resultSeen.has(e.approval_id) && !this.executing.has(e.approval_id)) {
+          this.executing.set(e.approval_id, waitingCall);
+          const id = e.approval_id;
+          const t = setTimeout(() => {
+            if (this.executing.delete(id)) this.wake?.();
+          }, REFUSAL_FOLLOW_MS);
+          (t as { unref?: () => void }).unref?.();
+        }
         return;
+      }
       case "subagent.started":
         this.sink.onNotice?.(this.texts.subagentStarted(e.goal));
         return;
@@ -665,9 +694,16 @@ export class EditorSession {
         return;
       case "turn.delta":
         // Le texte du tour lancé ici arrive par le flux de chat ; celui d'un tour de suite n'arrive que par cet événement.
+        // `text` est CUMULÉ (la réponse entière du tour) : on n'émet que ce qui s'ajoute à ce qui l'a déjà été pour ce turn_id,
+        // deux deltas du même tour ne doublent donc pas le texte.
         if (e.thread_id === this.threadId && e.turn_id !== this.ownTurn && e.text) {
-          if (this.emitText) this.emitText(e.text);
-          else this.sink.onText?.(e.text);
+          const seen = this.deltaSeen.get(e.turn_id) ?? "";
+          const add = e.text.startsWith(seen) ? e.text.slice(seen.length) : e.text;
+          this.deltaSeen.set(e.turn_id, e.text);
+          if (add) {
+            if (this.emitText) this.emitText(add);
+            else this.sink.onText?.(add);
+          }
         }
         return;
       case "turn.cost":
@@ -677,6 +713,7 @@ export class EditorSession {
         return;
       case "turn.done":
         if (e.thread_id !== this.threadId) return;
+        this.deltaSeen.delete(e.turn_id); // le delta cumulatif de ce tour est rendu : on n'en garde pas la trace
         if (e.turn_id === this.ownTurn || (this.expectOwn && this.ownTurn === null)) {
           if (e.cancelled) this.cancelled = true;
           this.ownDone = true;

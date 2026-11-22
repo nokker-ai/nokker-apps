@@ -27,8 +27,24 @@ export function parseLang(v: string | undefined): Lang | null {
 
 let current: Lang = detectLang();
 
-export function setLang(l: Lang): void {
+/** `explicit` : la langue vient de `--lang` (envoyée telle quelle au noyau, voir `requestLanguage`). */
+let explicitLang = false;
+
+export function setLang(l: Lang, explicit = false): void {
   current = l;
+  explicitLang = explicit;
+}
+
+/**
+ * Langue à envoyer au noyau en `Accept-Language` (langue de BASE : `en_US.UTF-8` → `en`). `--lang` ou `NOKKER_LANG` :
+ * toujours envoyée. Sinon d'après `LC_ALL` > `LC_MESSAGES` > `LANG` ; sous `C`/`POSIX` ou sans locale : `undefined`, AUCUN
+ * en-tête — le noyau détecte alors la langue du message (plus juste en ssh avec `LANG=C` que de forcer l'anglais).
+ */
+export function requestLanguage(env: Record<string, string | undefined> = process.env): string | undefined {
+  if (explicitLang) return current;
+  const v = (env.NOKKER_LANG || env.LC_ALL || env.LC_MESSAGES || env.LANG || "").trim();
+  const m = /^([A-Za-z]{2,3})(?:[-_.@]|$)/.exec(v);
+  return m && !/^(c|posix)$/i.test(m[1]!) ? m[1]!.toLowerCase() : undefined;
 }
 
 export function lang(): Lang {

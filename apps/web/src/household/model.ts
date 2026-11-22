@@ -60,6 +60,9 @@ const FR = {
   revoked: "Invitation annulée.",
   invite: "Inviter",
   inviteEmail: "Adresse e-mail",
+  inviteFirstName: "Prénom (facultatif)",
+  inviteFirstNameHint: "C'est ce nom que Nina et le foyer verront (« partagé par Alice »). Sinon, le début de l'adresse.",
+  e_bad_first_name: "Prénom refusé : lettres, espaces, trait d'union, apostrophe et point seulement, 40 caractères au plus.",
   inviteProfile: "Profil",
   invited: "Invitation envoyée à {email}.",
   full: "Le foyer est complet (6 personnes, payeur et invitations en attente compris).",
@@ -99,6 +102,7 @@ const FR = {
   kind_rule: "Règle",
   kind_fact: "Fait",
   kind_feedback: "Retour",
+  kind_preference: "Préférence",
   noteTitle: "Titre",
   noteText: "Texte",
   noteAdd: "Ajouter une note",
@@ -134,6 +138,7 @@ const FR = {
   e_already_member: "Cette personne fait déjà partie du foyer.",
   e_already_invited: "Une invitation attend déjà cette adresse.",
   e_minors_disabled: "Les profils mineurs ne sont pas encore ouverts.",
+  e_minors_not_enabled: "Les profils mineurs ne sont pas encore ouverts à ton foyer pendant la bêta. Écris-nous pour y participer.",
   e_attestation_required: "L'attestation du représentant légal est requise.",
   e_attestation_stale: "Le texte d'attestation a changé : relis-le et coche à nouveau.",
   e_payer_fixed: "Le payeur ne quitte pas le foyer : il le supprime.",
@@ -204,6 +209,9 @@ const EN: Record<Key, string> = {
   revoked: "Invitation cancelled.",
   invite: "Invite",
   inviteEmail: "Email address",
+  inviteFirstName: "First name (optional)",
+  inviteFirstNameHint: "This is the name Nina and the household will see (“shared by Alice”). Otherwise, the start of the address.",
+  e_bad_first_name: "First name refused: letters, spaces, hyphen, apostrophe and full stop only, 40 characters at most.",
   inviteProfile: "Profile",
   invited: "Invitation sent to {email}.",
   full: "The household is full (6 people, payer and pending invitations included).",
@@ -243,6 +251,7 @@ const EN: Record<Key, string> = {
   kind_rule: "Rule",
   kind_fact: "Fact",
   kind_feedback: "Feedback",
+  kind_preference: "Preference",
   noteTitle: "Title",
   noteText: "Text",
   noteAdd: "Add a note",
@@ -277,6 +286,7 @@ const EN: Record<Key, string> = {
   e_already_member: "This person is already in the household.",
   e_already_invited: "An invitation is already waiting for this address.",
   e_minors_disabled: "Minor profiles are not open yet.",
+  e_minors_not_enabled: "Minor profiles are not open to your household yet during the beta. Write to us to take part.",
   e_attestation_required: "The legal guardian attestation is required.",
   e_attestation_stale: "The attestation text changed: read it again and tick the box.",
   e_payer_fixed: "The payer does not leave the household: they delete it.",
@@ -375,8 +385,10 @@ export function parseCap(v: string): number | null | "invalid" {
 }
 
 /** Profils proposés à l'invitation : adulte seul tant que les mineurs sont fermés. */
-export function invitableProfiles(hh: Pick<Household, "minors">): HouseholdProfile[] {
-  return hh.minors?.enabled ? ["adult", "teen", "child"] : ["adult"];
+/** Profils proposés à l'invitation : adulte seul tant que les mineurs sont fermés, ou après un 403 `minors_not_enabled`
+ * (bêta : seuls les foyers autorisés un par un par l'opérateur déclarent un profil mineur). */
+export function invitableProfiles(hh: Pick<Household, "minors">, blocked = false): HouseholdProfile[] {
+  return hh.minors?.enabled && !blocked ? ["adult", "teen", "child"] : ["adult"];
 }
 
 /** Places restantes : 6 au plus, payeur et invitations en attente compris (`counted` du noyau). */

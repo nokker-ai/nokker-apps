@@ -1,0 +1,18 @@
+{
+  "step": 3,
+  "tool": "browser_scroll",
+  "frame": "03-defilement.webp",
+  "nokker_action": {
+    "seq": 3,
+    "tool": "scroll",
+    "label": "faire défiler",
+    "url": "http://sejours.test:8080/recherche",
+    "t": "2026-11-07T13:21:22.805Z",
+    "ok": true,
+    "sensitive": false,
+    "frame": true,
+    "title": "séjours — Lisbonne"
+  },
+  "nokker_box": null,
+  "nokker_block": null
+}

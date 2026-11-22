@@ -69,7 +69,13 @@ export function isTestCommand(a: Pick<Approval, "tool_name" | "arguments">): boo
 
 /** `1. Une fois · 2. Pour cette session · 3. Toujours cette commande · 3b. Toujours les commandes qui commencent
  * par X* · 4. Refuser`. Pas de 3/3b sur une carte `strong` ni quand le noyau ne propose aucune règle (destructif). */
-export function localChoices(a: Pick<Approval, "tool_name" | "arguments" | "strength" | "suggested_rules" | "suggested_rule_kinds">): LocalChoice[] {
+export function localChoices(
+  a: Pick<Approval, "tool_name" | "arguments" | "strength" | "suggested_rules" | "suggested_rule_kinds">,
+  /** `sessionFirstForTests: false` : ordre fixe même pour une commande de test (client terminal, dont la légende
+   * associe une lettre à chaque numéro : a = 1 une fois, s = 2 cette session, r = 4 refuser). Défaut : `false` : tous les
+   * clients (terminal, VS Code, pont ACP) montrent « Une fois » en premier, même pour une commande de test. */
+  opts: { sessionFirstForTests?: boolean } = {},
+): LocalChoice[] {
   // Carte forte : `once` seulement (le noyau répond 400 pour session/always) — Une fois ou Refuser.
   if (a.strength === "strong") {
     return [
@@ -77,7 +83,7 @@ export function localChoices(a: Pick<Approval, "tool_name" | "arguments" | "stre
       { id: "reject", key: "4", label: "Refuser" },
     ];
   }
-  // Commande de test : 1. Pour cette session · 2. Une fois ; sinon 1. Une fois · 2. Pour cette session.
+  // Par défaut 1. Une fois · 2. Pour cette session ; l'ordre inverse (commande de test) n'existe plus que sur demande.
   const once: LocalChoice = { id: "once", key: "1", label: "Une fois" };
   // Le noyau veut une règle de `suggested_rules` pour toute portée autre que « une fois » (400 sinon) : « session » porte
   // la règle exacte (la première), comme « toujours » ; sans règle proposée (destructif), il reste sans règle.
@@ -96,7 +102,8 @@ export function localChoices(a: Pick<Approval, "tool_name" | "arguments" | "stre
     ...(sessionRule ? { scopeRule: sessionRule } : {}),
     ...(sessionKind ? { ruleKind: sessionKind } : {}),
   };
-  const choices: LocalChoice[] = isTestCommand(a) ? [{ ...session, key: "1" }, { ...once, key: "2" }] : [once, session];
+  const testFirst = (opts.sessionFirstForTests ?? false) && isTestCommand(a);
+  const choices: LocalChoice[] = testFirst ? [{ ...session, key: "1" }, { ...once, key: "2" }] : [once, session];
   const file = a.tool_name !== "terminal";
   if (rules[0]) {
     const k = kindAt(0);

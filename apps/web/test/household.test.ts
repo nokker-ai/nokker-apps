@@ -16,6 +16,8 @@ describe("foyer : modèle de l'écran", () => {
     expect(householdError("fr", err(409, "household_full"))).toMatch(/complet/);
     expect(householdError("en", err(409, "attestation_stale"))).toMatch(/changed/);
     expect(householdError("fr", err(403))).toBe(h("fr", "e_403"));
+    expect(householdError("fr", err(403, "minors_not_enabled"))).toMatch(/pendant la bêta/);
+    expect(householdError("en", err(403, "minors_not_enabled"))).toMatch(/during the beta/);
     expect(householdError("fr", err(500, "inconnu"))).toBe("Refus du serveur (500).");
     expect(householdError("fr", new Error("x"))).toBe(h("fr", "e_net"));
   });
@@ -43,6 +45,7 @@ describe("foyer : modèle de l'écran", () => {
     expect(invitableProfiles({ minors: { enabled: false } })).toEqual(["adult"]);
     expect(invitableProfiles({})).toEqual(["adult"]);
     expect(invitableProfiles({ minors: { enabled: true } })).toEqual(["adult", "teen", "child"]);
+    expect(invitableProfiles({ minors: { enabled: true } }, true)).toEqual(["adult"]);
     expect(seatsLeft({ max_members: 6, counted: 7 })).toBe(0);
   });
 

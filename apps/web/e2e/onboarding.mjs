@@ -26,7 +26,7 @@ const STEP_MS = Number(process.env.E2E_STEP_MS ?? 20000);
 const SHOTS = process.env.E2E_SHOTS ? resolve(process.env.E2E_SHOTS) : null;
 // /v1/guide : le build de prod (E2E_PREVIEW=1) allume le guide, que le mock de cette recette ne sert pas (404).
 const ALLOWED_4XX = [
-  [404, /\/v1\/(guide|speech|account\/models|capabilities|packs|code\/sessions|household\/invitations\/received|sso\/connections|local\/import\/report|glance\/devices|house|presence|memory\/consolidation\/runs|payments\/budgets|payments\/mandates|payments\/method|local\/folder\/runs)(\?|$)/],
+  [404, /\/v1\/(guide|speech|account\/models|capabilities|local\/sites|packs|code\/sessions|household\/invitations\/received|sso\/connections|local\/import\/report|glance\/devices|house|presence|memory\/consolidation\/runs|payments\/budgets|payments\/mandates|payments\/method|local\/folder\/runs)(\?|$)/],
   [401, /\/v1\/local\//],
 ];
 const PHONE = { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true };

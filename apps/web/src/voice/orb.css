@@ -1,0 +1,149 @@
+/* Voice orb. Tokens of theme.css only; coral to ember. The state is also carried by a glyph and a label (never colour alone). */
+.orb {
+  --orb-c1: var(--accent-rgb);
+  --orb-c2: 236, 126, 40; /* ember */
+  --orb-size: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font: 12px var(--display);
+}
+:root[data-theme="dark"] .orb {
+  --orb-c2: 255, 166, 70;
+}
+.orb[data-orb-size="sm"] {
+  --orb-size: 24px;
+}
+.orb[data-orb-size="md"] {
+  --orb-size: 40px;
+}
+.orb[data-orb-size="lg"] {
+  --orb-size: clamp(120px, 28vmin, 340px);
+  flex-direction: column;
+  gap: 1.4vmin;
+  font-size: clamp(14px, 2.6vmin, 26px);
+}
+.orb-body {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--orb-size);
+  height: var(--orb-size);
+  border-radius: 50%;
+}
+.orb-css,
+.orb-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+.orb-css {
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.45), transparent 42%),
+    conic-gradient(from 0deg, rgb(var(--orb-c1)), rgb(var(--orb-c2)), rgb(var(--orb-c1)));
+  box-shadow: 0 0 0 1px rgba(var(--orb-c1), 0.35), 0 0 calc(var(--orb-size) * 0.35) rgba(var(--orb-c1), 0.35);
+}
+.orb-canvas {
+  opacity: 0;
+}
+.orb[data-orb-gl="1"] .orb-canvas {
+  opacity: 1;
+}
+.orb[data-orb-gl="1"] .orb-css {
+  background: none;
+}
+.orb-glyph {
+  position: relative;
+  color: #fff;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
+}
+.orb[data-orb="idle"] .orb-glyph {
+  opacity: 0.8;
+}
+.orb-label {
+  color: var(--text);
+  white-space: nowrap;
+}
+/* CSS version (no WebGL): a slow turn and a breath, per state. Off with reduced motion. */
+.orb[data-orb-gl="0"] .orb-css {
+  animation: orb-turn 9s linear infinite, orb-breath 3.2s ease-in-out infinite;
+}
+.orb[data-orb="listening"][data-orb-gl="0"] .orb-css {
+  animation-duration: 4s, 0.9s;
+}
+.orb[data-orb="thinking"][data-orb-gl="0"] .orb-css {
+  animation-duration: 1.6s, 2s;
+}
+.orb[data-orb="speaking"][data-orb-gl="0"] .orb-css {
+  animation-duration: 3s, 0.55s;
+}
+.orb[data-orb="muted"] .orb-css {
+  filter: grayscale(1);
+  animation: none !important;
+}
+@keyframes orb-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes orb-breath {
+  50% {
+    box-shadow: 0 0 0 1px rgba(var(--orb-c1), 0.5), 0 0 calc(var(--orb-size) * 0.6) rgba(var(--orb-c1), 0.5);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .orb .orb-css {
+    animation: none !important;
+  }
+}
+
+/* Composer: small dock above the field while the phone dictates. Does not cover the field. */
+.composer:has(> .orb-dock) {
+  position: relative;
+}
+.orb-dock {
+  position: absolute;
+  left: 8px;
+  bottom: calc(100% + 8px);
+  padding: 4px 12px 4px 4px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow);
+  pointer-events: none;
+  z-index: 3;
+}
+/* Three knocks: briefly above the composer, centred. */
+.orb-knock {
+  position: fixed;
+  left: 50%;
+  bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  padding: 4px 14px 4px 4px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow);
+  pointer-events: none;
+  z-index: 60;
+}
+.listen .orb {
+  margin-left: 2px;
+}
+/* Wall: hidden by default (state off renders nothing); fixed, bottom right, clear of the clock column. */
+.wall-orb {
+  position: absolute;
+  right: 4vmin;
+  bottom: 4vmin;
+}
+.wall-orb .orb,
+.wall-orb .orb-label {
+  color: inherit;
+}
+.wall[data-night="1"] .orb {
+  --orb-c2: 255, 166, 70;
+}

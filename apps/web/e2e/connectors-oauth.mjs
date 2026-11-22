@@ -25,7 +25,7 @@ const SHOTS = process.env.E2E_SHOTS ? resolve(process.env.E2E_SHOTS) : null;
 const EMAIL = "alice@example.com";
 const CODE = "123456";
 const ALLOWED_4XX = [
-  [404, /\/v1\/(packs|code\/sessions|household\/invitations\/received|sso\/connections|glance\/devices|house|presence|memory\/consolidation\/runs|local\/folder\/runs|payments\/budgets|payments\/mandates|payments\/method|speech|account\/models|capabilities)(\?|$)/],
+  [404, /\/v1\/(packs|code\/sessions|household\/invitations\/received|sso\/connections|glance\/devices|house|presence|memory\/consolidation\/runs|local\/folder\/runs|payments\/budgets|payments\/mandates|payments\/method|speech|account\/models|capabilities|local\/sites)(\?|$)/],
   [401, /\/v1\/local\//],
 ];
 const PHONE = { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true };

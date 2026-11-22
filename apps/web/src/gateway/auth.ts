@@ -21,6 +21,11 @@ export function gatewayHost(hostname: string): string | null {
 }
 
 export const AUTHORIZE_BASE = "https://app.nokker.ai/gateway/authorize";
+
+/** Le compte nokker.ai : la page « Mon compte » du web cloud que cette installation vise (même base que la connexion et que les
+ * approbations déportées : `VITE_NOKKER_AUTHORIZE_URL` à la build, sinon le cloud de production). Un Lokkal n'est pas un compte :
+ * ses liens « Mon compte » (carte, bouton du quota) mènent ici, jamais à une page locale en 403. */
+export const nokkerAccountUrl = (base: string = (import.meta.env?.VITE_NOKKER_AUTHORIZE_URL as string | undefined) ?? AUTHORIZE_BASE): string => new URL("/account", base).href;
 const PENDING_KEY = "nokker.gw.pending";
 
 function b64url(bytes: Uint8Array): string {

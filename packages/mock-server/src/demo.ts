@@ -17,6 +17,8 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { argsSha256, type AgentStatus, type AgentTrigger, type Approval, type Bubble, type BubbleKind, type Preview, type SearchResult } from "@nokker-apps/sdk";
 import { startCast } from "./cast.js";
+import { startBrowserSession, startLisbonSession, startStaySession } from "./browser.js";
+import { startScreen } from "./screens.js";
 import { startGuide } from "./pointer.js";
 import { backgroundTurn, closeBubble, createBubble, registerAction, registerNotifyAction, shareBubble, transferBubble, updateBubble } from "./bubbles.js";
 import { MockHttpError } from "./errors.js";
@@ -390,6 +392,29 @@ export function interpretDemo(
   turn: { turnId: string; context: string[] } = { turnId: `${threadId}:0`, context: [] },
 ): DemoTurn {
   const n = normalize(text);
+  // V3 « l'agent qui montre » (BROWSER-LIVE, flag off by default): « réserve une table », « book a table ».
+  if (state.browserLive && /\b(lisbonne|lisbon)\b/.test(n)) {
+    const fr = /\blisbonne\b/.test(n);
+    return {
+      reply: fr ? "Je cherche à Lisbonne : je te montre l'annonce qui correspond (démo)." : "Looking in Lisbon: I'll show you the listing that fits (demo).",
+      after: () => void startLisbonSession(state, threadId, fr),
+    };
+  }
+  if (state.browserLive && /\b(logement|appartement|apartment|sejour|stay)\b/.test(n)) {
+    const fr = /\b(logement|appartement|sejour)\b/.test(n);
+    return {
+      reply: fr ? "Je cherche dans les annonces : je te montre celle qui correspond (démo)." : "Looking through the listings: I'll show you the one that fits (demo).",
+      after: () => void startStaySession(state, threadId, fr),
+    };
+  }
+  if (state.browserLive && /\b(reserve|book)\b/.test(n)) {
+    const fr = /\breserve\b/.test(n);
+    return {
+      reply: fr ? "Je réserve dans le navigateur : tu vois ce que je fais dans la bulle (démo)." : "Booking in the browser: you can watch what I do in the bubble (demo).",
+      after: () => void startBrowserSession(state, threadId, fr),
+    };
+  }
+
 
   // 0) Paiements (drapeau `payments`) : « achète … » → carte « à payer », ou refus avant toute carte.
   const paid = payDemo(state, threadId, n);
@@ -612,6 +637,14 @@ export function interpretDemo(
       after: () => {
         if (!startGuide(state, threadId, onImage, fr)) state.appendTurn(threadId, "", "Attach a screenshot first, then ask again.", { sender: null, channel: "web" });
       },
+    };
+  }
+
+  // Screens for the wall (core docs/SCREENS.md, V7, flag off by default): « make me a screen for the wall ».
+  if (state.screens && /\b(wall|mur)\b/.test(n)) {
+    return {
+      reply: "Here is a screen for the wall (demo): look at the preview, then publish it if it suits you.",
+      after: () => void startScreen(state, threadId),
     };
   }
 

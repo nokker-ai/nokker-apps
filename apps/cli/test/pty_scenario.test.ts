@@ -36,10 +36,10 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-async function scenario(extra: string[]): Promise<{ cards: Array<{ t: number; tool: string; command: string }>; turns_user: number; duration_s: number; final_text: string; bounded: boolean; error: string | null }> {
+async function scenario(extra: string[], server: MockServerHandle = mock): Promise<{ cards: Array<{ t: number; tool: string; command: string }>; turns_user: number; duration_s: number; final_text: string; bounded: boolean; error: string | null }> {
   const { stdout } = await run(
     "python3",
-    [join(import.meta.dirname, "pty_drive.py"), "--server", mock.url, "--cwd", work, "--config-dir", dir, "--idle", "3", ...extra],
+    [join(import.meta.dirname, "pty_drive.py"), "--server", server.url, "--cwd", work, "--config-dir", dir, "--idle", "3", ...extra],
     { timeout: 120_000 },
   );
   return JSON.parse(stdout.trim().split("\n").pop()!);
@@ -57,6 +57,26 @@ describe.skipIf(!hasPython)("pty_drive.py scénario", () => {
     // état du mock : un seul tour utilisateur, aucun texte parasite
     const turns = [...mock.state.threads.values()].flatMap((t) => t.turns).filter((t) => t.user.trim());
     expect(turns.map((t) => t.user)).toEqual(["corrige le test add"]);
+  }, 130_000);
+
+  it("SÉCURITÉ : un message envoyé avec Entrée à l'instant où la carte apparaît n'approuve rien", async () => {
+    // Mock à part, plus lent : à speed 0.01 une carte locale expire en 3 s, avant la rafale et les deux silences.
+    await mock.close();
+    const slow = await startMockServer({ port: 0, seed: false, speed: 0.1, configDir: dir });
+    try {
+      const r = await scenario(["--task", "corrige le test mul", "--decide", "1", "--max-decisions", "3", "--race"], slow);
+      expect(r.error).toBeNull();
+      expect(r.race_kept_pending).toBe(true); // la carte attendait encore après la rafale et son Entrée
+      expect(r.cards.length).toBeGreaterThanOrEqual(1);
+      const appr = [...slow.state.approvals.values()];
+      expect(appr.filter((x) => x.status === "expired")).toEqual([]);
+      // le texte de la rafale n'est parti ni dans la carte ni comme tour (le composeur était fermé pendant la carte)
+      const turns = [...slow.state.threads.values()].flatMap((t) => t.turns).map((t) => t.user);
+      expect(turns.some((u) => u.includes("salut") || u.includes("alut"))).toBe(false);
+    } finally {
+      await slow.close();
+      mock = await startMockServer({ port: 0, seed: false, speed: 0.01, configDir: dir });
+    }
   }, 130_000);
 
   it("borne : max-decisions 0 s'arrête sur la première carte sans la décider", async () => {

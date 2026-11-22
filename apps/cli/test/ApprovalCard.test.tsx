@@ -12,6 +12,7 @@ const base: Approval = {
   decided_at: null, result_summary: null, error: null, suggested_rules: ["terminal(rm -rf build)", "terminal(rm -rf*)"],
 };
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 30));
+const arm = (): Promise<void> => new Promise((r) => setTimeout(r, 700)); // > CARD_ARM_MS (600 ms de silence)
 const DOWN = "\u001B[B";
 
 describe("ApprovalCard locale", () => {
@@ -25,7 +26,11 @@ describe("ApprovalCard locale", () => {
     expect(f).toContain("3. Always this command");
     expect(f).toContain("3b. Always commands starting with");
     expect(f).toContain("4. Reject");
-    expect(f).toMatch(/↑\/↓ or 1-4 · Enter validates · expires in \d/);
+    expect(f).toContain("1. Once (a)");
+    expect(f).toContain("2. For this session (s)");
+    expect(f).toContain("4. Reject (r)");
+    expect(f).toContain("choose: 1/a once · 2/s this session · 3/3b always · 4/r reject");
+    expect(f).toMatch(/or ↑\/↓; then Enter · expires in \d/);
   });
 
   it("libellés d'après suggested_rule_kinds (noyau du 01.11) : terminal, fichier, delegate (outil seulement)", () => {
@@ -75,22 +80,112 @@ describe("ApprovalCard locale", () => {
     }
   });
 
-  it("un chiffre décide (1 = une fois, 4 = refuser)", async () => {
+  it("SÉCURITÉ : une Entrée et un texte tapés pour le composeur n'approuvent rien, à l'apparition comme plus tard", async () => {
+    // Répétition du 07.11 : la carte « python -m pytest » (1. Pour cette session) a été approuvée par l'Entrée d'un
+    // message envoyé au même instant ; au banc, « salut » l'approuvait aussi par sa première lettre.
+    const a = { ...base, effect: "write" as const, arguments: { command: "python -m pytest" }, suggested_rules: ["terminal(python -m pytest)"] };
     const onLocalDecision = vi.fn();
-    const { stdin } = render(<ApprovalCard approval={base} local busy={false} message={null} onLocalDecision={onLocalDecision} />);
+    const r = render(<ApprovalCard approval={a} local busy={false} message={null} onLocalDecision={onLocalDecision} />);
+    const typeFast = async (text: string): Promise<void> => {
+      for (const ch of text) {
+        r.stdin.write(ch);
+        await tick();
+      }
+    };
+    r.stdin.write("\r"); // la même frappe que le composeur, à l'instant de la carte
     await tick();
-    stdin.write("1");
-    await tick();
-    expect(onLocalDecision).toHaveBeenLastCalledWith("approve", "once", undefined);
-    stdin.write("4");
-    await tick();
-    expect(onLocalDecision).toHaveBeenLastCalledWith("reject", "once", undefined);
+    await typeFast("salut a tous\r");
+    expect(onLocalDecision).not.toHaveBeenCalled();
+    await arm(); // la carte est affichée depuis longtemps : un texte tapé ensuite n'approuve rien non plus
+    await typeFast("salut\r");
+    await typeFast("as\r");
+    expect(onLocalDecision).not.toHaveBeenCalled();
+    expect(r.lastFrame()).toContain("Choose with a, s, r or 1-4");
   });
 
-  it("3 montre la règle exacte AVANT de valider ; Entrée écrit celle-là", async () => {
+  it("choisir ne décide pas ; Entrée confirme seulement après le silence", async () => {
+    for (const [key, expected] of [["a", ["approve", "once", undefined]], ["s", ["approve", "session", "terminal(rm -rf build)"]], ["r", ["reject", "once", undefined]], ["4", ["reject", "once", undefined]]] as const) {
+      const onLocalDecision = vi.fn();
+      const r = render(<ApprovalCard approval={base} local busy={false} message={null} onLocalDecision={onLocalDecision} />);
+      await arm();
+      r.stdin.write(key);
+      await tick();
+      expect(onLocalDecision).not.toHaveBeenCalled();
+      r.stdin.write("\r"); // trop tôt après le choix
+      await tick();
+      expect(onLocalDecision).not.toHaveBeenCalled();
+      await arm();
+      r.stdin.write("\r");
+      await tick();
+      expect(onLocalDecision).toHaveBeenLastCalledWith(...expected);
+    }
+  });
+
+  it("utilisateur rapide : « a » puis Entrée ~300 ms plus tard approuve (la carte est affichée depuis plus de 600 ms)", async () => {
     const onLocalDecision = vi.fn();
     const r = render(<ApprovalCard approval={base} local busy={false} message={null} onLocalDecision={onLocalDecision} />);
+    await arm();
+    r.stdin.write("a");
+    await new Promise((res) => setTimeout(res, 300)); // > CARD_KEY_GAP_MS (250 ms), < 600 ms
+    r.stdin.write("\r");
     await tick();
+    expect(onLocalDecision).toHaveBeenCalledTimes(1);
+    expect(onLocalDecision).toHaveBeenLastCalledWith("approve", "once", undefined);
+  });
+
+  it("SÉCURITÉ : « a » puis Entrée en rafale (< 250 ms), ou avant 600 ms d'affichage, ne décide rien", async () => {
+    const early = vi.fn();
+    const r1 = render(<ApprovalCard approval={base} local busy={false} message={null} onLocalDecision={early} />);
+    await arm();
+    r1.stdin.write("a");
+    await new Promise((res) => setTimeout(res, 100));
+    r1.stdin.write("\r");
+    await tick();
+    expect(early).not.toHaveBeenCalled();
+    // Carte toute neuve : un choix puis une Entrée à 300 ms de son apparition ne décident pas non plus.
+    const fresh = vi.fn();
+    const r2 = render(<ApprovalCard approval={{ ...base, id: "appr_2" }} local busy={false} message={null} onLocalDecision={fresh} />);
+    r2.stdin.write("a");
+    await new Promise((res) => setTimeout(res, 300));
+    r2.stdin.write("\r");
+    await tick();
+    expect(fresh).not.toHaveBeenCalled();
+  });
+
+  it("un collage multi-caractères (« a⏎ », « salut ») n'est pas un choix et efface le choix déjà fait", async () => {
+    const onLocalDecision = vi.fn();
+    const r = render(<ApprovalCard approval={base} local busy={false} message={null} onLocalDecision={onLocalDecision} />);
+    await arm();
+    r.stdin.write("s");
+    await tick();
+    expect(r.lastFrame()).toMatch(/› 2\. For this session/);
+    r.stdin.write("a\r"); // un seul bloc, comme un collage
+    await arm();
+    r.stdin.write("\r");
+    await tick();
+    expect(onLocalDecision).not.toHaveBeenCalled();
+    expect(r.lastFrame()).not.toMatch(/›/);
+  });
+
+  it("une frappe étrangère efface le choix", async () => {
+    const onLocalDecision = vi.fn();
+    const r = render(<ApprovalCard approval={base} local busy={false} message={null} onLocalDecision={onLocalDecision} />);
+    await arm();
+    r.stdin.write("a");
+    await tick();
+    expect(r.lastFrame()).toMatch(/› 1\. Once/);
+    r.stdin.write("z");
+    await arm();
+    r.stdin.write("\r");
+    await tick();
+    expect(onLocalDecision).not.toHaveBeenCalled();
+    expect(r.lastFrame()).not.toMatch(/›/);
+  });
+
+  it("3 montre la règle exacte AVANT de valider ; Entrée (après le silence) écrit celle-là", async () => {
+    const onLocalDecision = vi.fn();
+    const r = render(<ApprovalCard approval={base} local busy={false} message={null} onLocalDecision={onLocalDecision} />);
+    await arm();
     r.stdin.write("3");
     await tick();
     expect(onLocalDecision).not.toHaveBeenCalled();
@@ -98,30 +193,52 @@ describe("ApprovalCard locale", () => {
     r.stdin.write("b");
     await tick();
     expect(r.lastFrame()).toContain("terminal(rm -rf*)");
+    await arm();
     r.stdin.write("\r");
     await tick();
     expect(onLocalDecision).toHaveBeenCalledWith("approve", "always", "terminal(rm -rf*)");
   });
 
-  it("↑/↓ + Entrée ; Échap ne décide pas", async () => {
+  it("↑/↓ puis Entrée ; Échap ne décide pas", async () => {
     const onLocalDecision = vi.fn();
     const { stdin } = render(<ApprovalCard approval={base} local busy={false} message={null} onLocalDecision={onLocalDecision} />);
-    await tick();
+    await arm();
     stdin.write("\u001B");
     await tick();
     expect(onLocalDecision).not.toHaveBeenCalled();
     stdin.write(DOWN);
     await tick();
+    stdin.write(DOWN);
+    await arm();
     stdin.write("\r");
     await tick();
     expect(onLocalDecision).toHaveBeenCalledWith("approve", "session", "terminal(rm -rf build)");
   });
 
+  it("carte standard distante : p choisit, Entrée confirme après le silence ; un texte n'approuve rien", async () => {
+    const onApproveByPhone = vi.fn();
+    const { stdin } = render(<ApprovalCard approval={base} busy={false} message={null} onApproveByPhone={onApproveByPhone} />);
+    for (const ch of "pour info\r") {
+      stdin.write(ch);
+      await tick();
+    }
+    await arm();
+    stdin.write("\r");
+    await tick();
+    expect(onApproveByPhone).not.toHaveBeenCalled();
+    stdin.write("p");
+    await arm();
+    stdin.write("\r");
+    await tick();
+    expect(onApproveByPhone).toHaveBeenCalledTimes(1);
+  });
+
   it("carte forte d'une session locale : seulement Une fois / Refuser (le noyau répond 400 sinon)", () => {
     const { lastFrame } = render(<ApprovalCard approval={{ ...base, strength: "strong", suggested_rules: [] }} local busy={false} message={null} />);
     const f = lastFrame()!;
-    expect(f).toContain("1. Once");
-    expect(f).toContain("4. Reject");
+    expect(f).toContain("1. Once (a)");
+    expect(f).toContain("4. Reject (r)");
+    expect(f).toContain("choose: 1/a once · 4/r reject");
     expect(f).not.toContain("2. For this session");
     expect(f).not.toContain("Always");
   });
@@ -141,19 +258,35 @@ describe("ApprovalCard locale", () => {
     expect(onExpired).toHaveBeenCalledTimes(1);
   });
 
-  it("commande de test : « Pour cette session » en premier, touche 1 = session", async () => {
-    const a = { ...base, effect: "write" as const, strength: "standard" as const, arguments: { command: "pytest -q tests/" }, suggested_rules: ["terminal(pytest -q tests/)", "terminal(pytest -q*)"] };
-    const onLocalDecision = vi.fn();
-    const r = render(<ApprovalCard approval={a} local busy={false} message={null} onLocalDecision={onLocalDecision} />);
-    await tick();
-    const f = r.lastFrame()!;
-    expect(f).toMatch(/1\. For this session[\s\S]*2\. Once[\s\S]*3\. Always[\s\S]*4\. Reject/);
-    r.stdin.write("1");
-    await tick();
-    expect(onLocalDecision).toHaveBeenLastCalledWith("approve", "session", "terminal(pytest -q tests/)");
-    r.stdin.write("2");
-    await tick();
-    expect(onLocalDecision).toHaveBeenLastCalledWith("approve", "once", undefined);
+  it("commande de test (ticket T5a) : même ordre que la légende, « Une fois » en premier ; a = 1, s = 2", async () => {
+    const a = { ...base, effect: "write" as const, strength: "standard" as const, arguments: { command: "pytest -q tests/" }, suggested_rules: ["terminal(pytest -q tests/)", "terminal(pytest -q*)"], suggested_rule_kinds: ["exact", "prefix"] as Approval["suggested_rule_kinds"] };
+    for (const [key, expected] of [["1", ["approve", "once", undefined]], ["a", ["approve", "once", undefined]], ["2", ["approve", "session", "terminal(pytest -q tests/)"]], ["s", ["approve", "session", "terminal(pytest -q tests/)"]]] as const) {
+      const onLocalDecision = vi.fn();
+      const r = render(<ApprovalCard approval={a} local busy={false} message={null} onLocalDecision={onLocalDecision} />);
+      await tick();
+      expect(r.lastFrame()!).toMatch(/1\. Once \(a\)[\s\S]*2\. This exact command for this session \(s\)[\s\S]*3\. Always[\s\S]*4\. Reject \(r\)/);
+      await arm();
+      r.stdin.write(key);
+      await tick();
+      expect(onLocalDecision).not.toHaveBeenCalled(); // un chiffre ou une lettre ne décide jamais
+      await arm();
+      r.stdin.write("\r");
+      await tick();
+      expect(onLocalDecision).toHaveBeenLastCalledWith(...expected);
+    }
+  });
+
+  it("motif du noyau en clair (ticket T5c) : plus de « mode accept_edits : écriture demandée »", () => {
+    setLang("fr");
+    try {
+      const a = { ...base, effect: "write" as const, arguments: { command: "python -m pytest" }, rule: "permissions:accept_edits", reason: "mode accept_edits : \u00e9criture demand\u00e9e", suggested_rules: ["terminal(python -m pytest)"] };
+      const f = render(<ApprovalCard approval={a} local busy={false} message={null} />).lastFrame()!;
+      expect(f).not.toContain("accept_edits");
+      expect(f).toContain("attend ton accord");
+      expect(f).toContain("choisis : 1/a une fois · 2/s cette session · 3 toujours · 4/r refuser");
+    } finally {
+      setLang("en");
+    }
   });
 
   it("commande hors test : ordre inchangé (1 = une fois, 2 = session)", async () => {
@@ -162,7 +295,10 @@ describe("ApprovalCard locale", () => {
     const r = render(<ApprovalCard approval={a} local busy={false} message={null} onLocalDecision={onLocalDecision} />);
     await tick();
     expect(r.lastFrame()).toMatch(/1\. Once[\s\S]*2\. For this session/);
-    r.stdin.write("2");
+    await arm();
+    r.stdin.write("s");
+    await arm();
+    r.stdin.write("\r");
     await tick();
     expect(onLocalDecision).toHaveBeenLastCalledWith("approve", "session", "terminal(make build)");
   });

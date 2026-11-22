@@ -21,6 +21,7 @@ export type SlashCommand =
   | { kind: "memory"; action: "list" | "view" | "forget"; name: string | null }
   | { kind: "cost" }
   | { kind: "mode"; name: string | null }
+  | { kind: "model"; name: string | null }
   | { kind: "diagnostics"; path: string | null }
   | { kind: "cancel" }
   | { kind: "queue"; clear: boolean }
@@ -75,6 +76,7 @@ function helpRows(): Array<[string, string]> {
     ["/memory forget <note>", t("forget a learned note (after confirmation)")],
     ["/diagnostics [path]", t("language diagnostics: last state per file; with a path, ask the core's language server")],
     ["/cost", t("session and day cost: tokens, and the amount when the model has a price")],
+    ["/model [name]", t("list the models of this machine (router, your keys, local models) and the default; with a name, change the default of the whole machine (after confirmation)")],
     ["/mode [name]", t("permission mode of this session (chosen, in effect, available); with a name, change it for this session only")],
     ["", t("(diff, checkpoints, rollback, skills, plan, agents, memory, diagnostics, mode: code session only)")],
     ["/cancel", t("cancel the turn in progress and empty the queue (Esc too); /pause and /stop do the same")],
@@ -152,6 +154,9 @@ export function parseSlashCommand(line: string): SlashCommand {
       return { kind: "cost" };
     case "mode":
       return { kind: "mode", name: rest.split(/\s+/)[0] || null };
+    case "model":
+    case "models":
+      return { kind: "model", name: rest.split(/\s+/)[0] || null };
     case "diagnostics":
     case "diag":
       return { kind: "diagnostics", path: tokenize(rest)[0] || null };

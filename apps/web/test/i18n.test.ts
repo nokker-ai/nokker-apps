@@ -13,7 +13,7 @@ const root = join(__dirname, "..");
 const FRENCH = /[àâçéèêëîïôûùüœ«»]/i;
 
 /** Écrans qui portent déjà leurs propres tables FR/EN (le français y est à sa place). */
-const DICTIONARIES = new Set(["src/onboarding/i18n.ts", "src/household/model.ts", "src/crew/i18n.ts", "src/crew/mail.ts", "src/crew/model.ts", "src/code/model.ts", "src/sso/text.ts", "src/approvals/remote.ts", "src/guide/texts.ts"]);
+const DICTIONARIES = new Set(["src/onboarding/i18n.ts", "src/household/model.ts", "src/crew/i18n.ts", "src/crew/mail.ts", "src/crew/model.ts", "src/code/model.ts", "src/sso/text.ts", "src/approvals/remote.ts", "src/guide/texts.ts", "src/ninaLive/text.ts", "src/kiosk/text.ts", "src/i18n/accord-de-it.ts"]);
 /** Textes du noyau que le web compare tels quels (jamais affichés par lui) : la ligne qui les porte est permise. */
 const KERNEL_TEXT = ["|Message de la session|Réponse de la session|Relevé)/", "aucune relève du courrier", "aucune boîte mail reliée", "restauration déjà appliquée", "écriture non terminée"];
 /** Exceptions temporaires, à retirer quand le fichier est traduit (aucune aujourd'hui). */

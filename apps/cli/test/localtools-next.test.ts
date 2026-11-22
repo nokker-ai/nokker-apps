@@ -115,6 +115,21 @@ describe("/memory", () => {
     expect(formatMemory({ project: null, notes: [], sources: [] })).toContain("Notes apprises : aucune pour l'instant.");
     expect(formatMemoryStatus({ mode: "direct", ok: false, error: "embed injoignable" })).toContain("EN PANNE (embed injoignable)");
     expect(formatMemoryStatus(null)).toBeNull();
+    // L'heure de la lecture termine la ligne : celle du noyau (`checked_at`) sinon l'heure locale de la lecture.
+    const hms = (d: Date): string => d.toLocaleTimeString("fr-CH", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+    const noyau = new Date("2026-11-17T08:05:09Z");
+    expect(formatMemoryStatus({ mode: "direct", ok: true, store: { ok: true, notes: 3 }, checked_at: noyau.toISOString() })).toMatch(new RegExp(`3 note\\(s\\) indexée\\(s\\)\\. Lu à ${hms(noyau)}\\.$`));
+    const ici = new Date(2026, 10, 17, 14, 32, 7);
+    expect(formatMemoryStatus({ mode: "direct", ok: true, store: { ok: true, notes: 3 } }, ici)).toMatch(/Lu à 14:32:07\.$/);
+  });
+
+  it("catégorie « preference » du noyau : libellé traduit, jamais brut en français", () => {
+    const pref: ProjectMemoryList = { project: null, notes: [{ name: "preference-tabs-5e6f", kind: "preference", scope: "user", title: "Tabs, not spaces", derived_from: "user", in_core: true }], sources: [] };
+    setLang("en");
+    expect(formatMemory(pref)).toContain("  • [preference] Tabs, not spaces");
+    setLang("fr");
+    expect(formatMemory(pref)).toContain("  • [préférence] Tabs, not spaces");
+    setLang("en");
   });
 
   it("note ou section par nom exact ou préfixe unique ; vue d'une section", () => {

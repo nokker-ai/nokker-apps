@@ -13,6 +13,7 @@ import { NokkerApiError, NokkerClient, generateDeviceKeyPair, signChallenge, typ
 import { tr } from "./i18n/index.js";
 import { registerPasskey, signDecisionWithPasskey } from "./webauthn.js";
 import { takeLocalToken } from "./onboarding/localToken.js";
+import { clearOffline } from "./offline/cache.js";
 import { AUTHORIZE_BASE, GatewayAuthError, RETRY_MS, beginLogin, completeCallback, gatewayHost, refreshDelayMs, refreshToken, type GatewayToken } from "./gateway/auth.js";
 
 export type AuthMode = "device-key" | "passkey" | "demo" | "gateway" | "local";
@@ -119,6 +120,8 @@ export function deviceRefusal(err: unknown): "forget" | DeviceNotApprovedError |
 
 export async function forgetDevice(): Promise<void> {
   await idb((s) => s.delete(DEVICE_RECORD_KEY), "readwrite");
+  // La copie hors ligne des fils part avec l'appareil (déconnexion, appareil oublié, compte supprimé : W6).
+  await clearOffline();
   try {
     localStorage.removeItem(PASSKEY_STORAGE);
   } catch {

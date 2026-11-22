@@ -395,7 +395,9 @@ function MemberRow({
   return (
     <li className={`hh-member ${m.status === "suspended" ? "suspended" : ""}`}>
       <div className="hh-member-head">
-        <strong className="team-member-mail">{m.email}</strong>
+        {/* Nom montré (prénom, sinon la partie locale de l'adresse — règle du noyau) ; l'adresse en dessous. */}
+        <strong className="team-member-mail">{m.name || m.email}</strong>
+        {m.name && m.name !== m.email ? <span className="fine hh-member-email">{m.email}</span> : null}
         <span className="fine">
           {PROFILE_LABEL[lang][m.profile]}
           {m.payer ? ` · ${h(lang, "payer")}` : ""}
@@ -543,7 +545,9 @@ function Invitations({
   fail: (e: unknown) => void;
   reload: () => Promise<void>;
 }): React.ReactElement {
+  const [blocked, setBlocked] = useState(false);
   const [email, setEmail] = useState("");
+  const [firstName, setFirstName] = useState("");
   const [profile, setProfile] = useState<HouseholdProfile>("adult");
   const [attest, setAttest] = useState<HouseholdConsentText | null>(null);
   const [busy, setBusy] = useState(false);
@@ -556,14 +560,21 @@ function Invitations({
     if (minor && !attest) return setMsg(h(lang, "attestNeeded"));
     setBusy(true);
     try {
-      await client.inviteToHousehold(email.trim(), profile, minor && attest ? attestationOf(attest) : undefined);
+      await client.inviteToHousehold(email.trim(), profile, minor && attest ? attestationOf(attest) : undefined, firstName);
       toast(h(lang, "invited", { email: email.trim() }), "ok");
       setEmail("");
+      setFirstName("");
       setProfile("adult");
       setAttest(null);
       await reload();
     } catch (e) {
       if (apiCode(e) === "attestation_stale") setAttest(null);
+      if (apiCode(e) === "minors_not_enabled") {
+        // Bêta : ce foyer n'est pas sur la liste de l'opérateur. On ne propose plus que le profil adulte.
+        setBlocked(true);
+        setProfile("adult");
+        setAttest(null);
+      }
       setMsg(householdError(lang, e));
     } finally {
       setBusy(false);
@@ -587,6 +598,7 @@ function Invitations({
             {pending.map((iv) => (
               <li key={iv.id} className="hh-row">
                 <span>
+                  {iv.first_name ? <strong>{iv.first_name} </strong> : null}
                   {iv.email}{" "}
                   <span className="fine">
                     · {PROFILE_LABEL[lang][iv.profile]} · {h(lang, "expires", { date: fmtDate(lang, iv.expires_at) })}
@@ -615,6 +627,13 @@ function Invitations({
             {h(lang, "inviteEmail")}
           </label>
           <input id="hh-inv-email" type="email" autoComplete="off" value={email} onChange={(e) => setEmail(e.target.value)} required maxLength={200} />
+          <label className="fine" htmlFor="hh-inv-first">
+            {h(lang, "inviteFirstName")}
+          </label>
+          <input id="hh-inv-first" type="text" autoComplete="off" autoCapitalize="words" value={firstName} onChange={(e) => setFirstName(e.target.value)} maxLength={40} aria-describedby="hh-inv-first-hint" />
+          <p id="hh-inv-first-hint" className="fine">
+            {h(lang, "inviteFirstNameHint")}
+          </p>
           <label className="fine" htmlFor="hh-inv-profile">
             {h(lang, "inviteProfile")}
           </label>
@@ -626,7 +645,7 @@ function Invitations({
               setAttest(null);
             }}
           >
-            {invitableProfiles(hh).map((p) => (
+            {invitableProfiles(hh, blocked).map((p) => (
               <option key={p} value={p}>
                 {PROFILE_LABEL[lang][p]}
               </option>

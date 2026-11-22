@@ -70,7 +70,7 @@ export function KnockCard(): React.ReactElement {
   const k = useKnock();
   const why = knockUnsupported();
   const [left, setLeft] = useState(0);
-  const on = k.enabled && !why;
+  const on = k.enabled && !why && !k.blocked;
   const live = k.state !== "off" && k.state !== "error";
 
   useEffect(() => {
@@ -88,10 +88,18 @@ export function KnockCard(): React.ReactElement {
       <h3 id="acc-knock">{tr("Knock to call")}</h3>
       <p className="ob-note">{tr("Knock three times on the table: Nokker answers “yes?” and opens the message box. The sound stays in this page: nothing is sent or recorded.")}</p>
       <label className={`ob-check ${why ? "disabled" : ""}`}>
-        <input type="checkbox" data-knock-toggle checked={on} disabled={!!why} aria-describedby={why ? "knock-why" : undefined} onChange={(e) => void setKnockEnabled(e.target.checked)} />
+        <input type="checkbox" data-knock-toggle checked={on} disabled={!!why || !!k.blocked} aria-describedby={why ? "knock-why" : undefined} onChange={(e) => void setKnockEnabled(e.target.checked)} />
         <span>{tr("Knock to call")}</span>
       </label>
-      {why ? (
+      {k.blocked ? (
+        <p className="ob-note knock-why" data-knock-blocked={k.blocked}>
+          {k.nativeOn
+            ? tr("Listening for three knocks. Nothing is recorded.")
+            : k.nativeAvailable
+              ? tr("Off on this device, which serves as a home node in a shared room. Its owner can turn it on in the home node settings.")
+              : tr("Off on this device, which serves as a home node in a shared room: no permanent listening.")}
+        </p>
+      ) : why ? (
         <p className="ob-note knock-why" id="knock-why" data-knock-unsupported={why}>
           {unsupportedText(why)}
         </p>

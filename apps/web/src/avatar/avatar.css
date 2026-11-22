@@ -1,0 +1,19 @@
+/* <TalkingAvatar> : la toile de TalkingHead remplit le bloc ; le parent en fixe la taille (className). */
+.nk-avatar {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+}
+.nk-avatar canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+/* Mode clip pré-rendu : la vidéo remplit le bloc comme la toile. */
+.nk-clip video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}

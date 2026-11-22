@@ -100,7 +100,7 @@ export function MachinesPage(): React.ReactElement {
                     <span className="mc-seen">{t(L, seen.key, seen.vars)}</span>
                   </div>
                   <p className="mc-meta">
-                    <span className="mc-host">{m.host}</span> · {t(L, "mcLinkedOn", { date: linkedOn(m.created_at, L) })}
+                    <span className="mc-host" data-kind={m.kind ?? "lokkal"}>{m.kind === "phone" ? t(L, "mcPhone") : m.host}</span> · {t(L, "mcLinkedOn", { date: linkedOn(m.created_at, L) })}
                   </p>
                   {asking === m.machine_id ? (
                     <div className="mc-confirm">

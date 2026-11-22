@@ -6,7 +6,7 @@ import { readFile, stat } from "node:fs/promises";
 import { NokkerClient, type EditorFs } from "@nokker-apps/sdk";
 import { BRAND } from "@nokker-apps/brand";
 import { isLocalServer, loadSession, readLocalToken } from "../auth.js";
-import { t } from "../i18n/index.js";
+import { requestLanguage, t } from "../i18n/index.js";
 import { cliLog } from "../log.js";
 import { readLokkal } from "../lokkal.js";
 import { CLI_VERSION } from "../version.js";
@@ -31,7 +31,7 @@ export const nodeFs: EditorFs = {
 
 /** Jeton local sur un noyau local (comme la CLI), sinon la session d'appareil enregistrée par `nokker`. */
 export async function acpConnect(serverUrl: string): Promise<NokkerClient> {
-  const client = new NokkerClient({ baseUrl: serverUrl, userAgent: `${BRAND.userAgent} acp` });
+  const client = new NokkerClient({ baseUrl: serverUrl, userAgent: `${BRAND.userAgent} acp`, surface: "acp", language: () => requestLanguage() });
   if (isLocalServer(serverUrl)) {
     const token = await readLocalToken();
     if (token) {

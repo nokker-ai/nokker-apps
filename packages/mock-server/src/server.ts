@@ -25,6 +25,8 @@
  * §3.6, plus une extension du mock) : la forme canonique du défi (`approval_id: "login:<id>"`,
  * `aud: "nokker-login"`) et la signature sur `challenge + ".login"` sont reproduites ici tel quel.
  */
+import { withTarget } from "./approval-target.js";
+import { handleKiosk } from "./kiosk.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, webcrypto } from "node:crypto";
 import { LOCAL_TOOL_CALL_PATH, argsSha256, canonicalJson, type Approval, type ApprovalStrength, type ChatMessage, messageText } from "@nokker-apps/sdk";
@@ -55,6 +57,8 @@ import { handleTeam } from "./team.js";
 import { handleHousehold } from "./household.js";
 import { handleLocalMirror } from "./mirror.js";
 import { handleLocalMail } from "./local-mail.js";
+import { handleAccord } from "./accord.js";
+import { accessSessionOf, handleAccess, handleExchange, scopeOf, scopeRefusal } from "./local-access.js";
 import { handlePacks } from "./packs.js";
 import { handleConsolidation } from "./consolidation.js";
 import { handleFolder } from "./folder.js";
@@ -64,6 +68,8 @@ import { handleHouse } from "./house.js";
 import { handlePresence } from "./presence.js";
 import { handleGuide } from "./guide.js";
 import { handleGlance } from "./glance.js";
+import { handlePersona } from "./persona.js";
+import { handleNinaLive } from "./ninaLive.js";
 import { handleSessionMode } from "./session-mode.js";
 import { cliControlOf, handleKernelGoal } from "./goals.js";
 import { handleCode } from "./code.js";
@@ -77,14 +83,31 @@ import { handleSpeech } from "./speech.js";
 import { handleCloudByok } from "./cloud-byok.js";
 import { capabilitiesOn, mockCapabilities } from "./capabilities.js";
 import { handleLocalPasskey } from "./local-passkey.js";
+import { handleScreensDev, handleScreensFrame, handleScreensFrameUrl } from "./screens.js";
 import { handleLink, handleLinkDev } from "./link.js";
 import { handleGatewayAuthorize, handleGatewayRelay } from "./gateway.js";
 import { handleLocal, LOCAL_TOKEN } from "./local-setup.js";
 import { handleAuthedOnboarding, handlePublicOnboarding } from "./onboarding.js";
 import { handleConnectorsMulti, handleConnectorsOAuthPublic } from "./connectors-multi.js";
 import { handleCastFrame, handleCastFrameUrl } from "./cast.js";
+import { handleZones } from "./zones.js";
+import { handleDevice } from "./device.js";
+import { demoOcrImage } from "./phone-tools.js";
+import { demoWebFetch, handleEgress } from "./egress.js";
+import { cleanRedaction, guardFor, handleRedactRules, markersIn, maskedPersistResult, maskedValueResult, mergeRedaction } from "./redact.js";
+import { handlePhoneNode, handlePhoneSession, phoneDecisionRefusal } from "./phone.js";
+import { handleBrowserPublic, handleBrowserSession } from "./browser.js";
+import { handleSites, handleSitesScreen } from "./sites.js";
 
 export const MOCK_TOTP_CODE = "000000";
+/** `turn.started.user_message` (noyau 1ce737f1) : le texte de la personne, 16 Kio au plus (octets UTF-8), `truncated` au-delà ; rien si vide. */
+export function startedMessage(text: string): { user_message?: string; truncated?: true } {
+  if (!text.trim()) return {};
+  const raw = Buffer.from(text, "utf8");
+  if (raw.length <= 16 * 1024) return { user_message: text };
+  return { user_message: raw.subarray(0, 16 * 1024).toString("utf8").replace(/\uFFFD+$/, ""), truncated: true };
+}
+
 /** Réponse finale d'un tour annulé, mot pour mot celle du noyau (`turn.error = "cancelled"`, LOKKAL.md §7.4.4). */
 export const CANCELLED_REPLY = "Annulé à ta demande.";
 /** `aud` du défi de connexion — APPROVALS.md §3.6, identique au noyau (`BaseApprovals.login_challenge`). */
@@ -117,7 +140,7 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 function corsHeaders(): Record<string, string> {
   return {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Session-Id",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Session-Id, X-Nokker-Stream-Tokens, X-Nokker-Surface, X-Nokker-Node-Proof, Last-Event-ID",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
   };
 }
@@ -136,8 +159,13 @@ function authUser(state: MockState, req: IncomingMessage): string | null {
   if (!header || !header.startsWith("Bearer ")) return null;
   const token = header.slice("Bearer ".length).trim();
   if (state.localToken && token === state.localToken) return isLoopbackRequest(req) ? LOCAL_OWNER : null;
+  // Jeton de SESSION d'accès (échangé contre un code à usage unique) : mêmes droits propriétaire, en boucle locale seulement.
+  if (accessSessionOf(state, token, String(req.headers["user-agent"] ?? ""))) return isLoopbackRequest(req) ? LOCAL_OWNER : null;
   // Jeton local fixe de l'écran /setup (`LOCAL_TOKEN`) : même règle, en boucle locale seulement.
   if (token === LOCAL_TOKEN) return isLoopbackRequest(req) ? LOCAL_OWNER : null;
+  // Mock d'une MACHINE derrière sa passerelle (liste unique, LOKKAL-PHONE §1.2) : le jeton d'accès que le mock cloud
+  // délivre par `POST /v1/gateway/token {host}` (MOCK_GATEWAY_TOKEN, même valeur des deux côtés) = le propriétaire relayé.
+  if (process.env.MOCK_GATEWAY_TOKEN && token === process.env.MOCK_GATEWAY_TOKEN) return LOCAL_OWNER;
   return state.userForToken(token);
 }
 
@@ -216,6 +244,17 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     return;
   }
 
+  // V3 (BROWSER-LIVE) : captures signées et vue de reprise à usage unique — sans en-tête Authorization (chargées en <img>
+  // ou ouvertes dans un onglet), la signature ou le code font foi.
+  if (
+    state.browserLive &&
+    handleBrowserPublic(state, method, url, req.headers["cookie"], (st, obj) => sendJson(res, st, obj), (st, type, body, h) => {
+      res.writeHead(st, { "Content-Type": type, ...h, ...corsHeaders() });
+      res.end(body);
+    })
+  )
+    return;
+
   // Publication (§7.26) : publish / unpublish / locality, et la page publiée servie par son id public seulement.
   if (
     await handlePagePublication(state, authUser(state, req), method, path, () => readJsonBody(req), (st, obj) => sendJson(res, st, obj), (body, index) => {
@@ -249,8 +288,21 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   let bodyCache: Promise<Record<string, unknown>> | undefined;
   const readBody = (): Promise<Record<string, unknown>> => (bodyCache ??= readJsonBody(req));
   // Glance tokens (AMBIENT.md §6) are gated before anything else: they open GET /v1/glance only.
-  if (await handleGlance(state, req.headers["authorization"], method, path, readBody, (st, obj, h) => sendJson(res, st, obj, h), () => authUser(state, req))) return;
+  if (await handleGlance(state, req.headers["authorization"], method, path, readBody, (st, obj, h) => sendJson(res, st, obj, h), () => authUser(state, req), req.headers["if-none-match"] as string | undefined)) return;
   if (await handlePublicOnboarding(state, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  // « Ton Nokker » et parole horodatée (V6) : session du compte.
+  if (await handlePersona(state, authUser(state, req), method, path, readBody, (st, obj, h) => sendJson(res, st, obj, h))) return;
+  // Nina en direct (V6 live) : 404 sans MOCK_NINA_LIVE_CREDS (drapeau éteint).
+  if (handleNinaLive(authUser(state, req), method, path, (st, obj, h) => sendJson(res, st, obj, h))) return;
+  if (handleKiosk(authUser(state, req), method, path, (st, obj, h) => sendJson(res, st, obj, h))) return;
+  // Nœud téléphone (P7) : corps BRUT (la preuve signe son sha256), avant toute lecture JSON du corps.
+  if (
+    await handlePhoneNode(state, req, method, url, (st, obj) => sendJson(res, st, obj), (st, type, body) => {
+      res.writeHead(st, { "Content-Type": type, "Cache-Control": "no-store", ...corsHeaders() });
+      res.end(body);
+    }, isLoopbackRequest(req))
+  )
+    return;
   if (await handleGatewayRelay(state, req, res, method, path, readBody)) return;
   if (
     await handleSsoPublic(state, method, url, readBody, (st, obj) => sendJson(res, st, obj), (st, body) => {
@@ -345,6 +397,26 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
 
   // Extension mock (simplification #7) : session de démo SANS appareil, pour un navigateur hors contexte
   // sécurisé (http sur IP Tailscale : ni WebCrypto ni WebAuthn). N'existe pas dans le contrat ni dans le noyau.
+  // Tests : allume/éteint `GET /v1/capabilities` (MOCK_CAPABILITIES) sans relancer le mock. Corps : {on: boolean}.
+  if (method === "POST" && path === "/v1/dev/capabilities") {
+    const b = await readBody();
+    process.env.MOCK_CAPABILITIES = b.on === true ? "1" : "0";
+    return void sendJson(res, 200, { on: b.on === true });
+  }
+  // Tests : un tour lancé par un AUTRE client (CLI…) sur un fil de la démo : `turn.started` avec `user_message`, tenu ouvert
+  // `hold_ms`, puis l'historique et la réponse. Corps : {text, hold_ms?, thread_id? | title?}.
+  if (method === "POST" && path === "/v1/dev/remote-turn") {
+    const b = await readBody();
+    const byTitle = b.title ? [...state.threads.values()].find((r) => r.thread.title === String(b.title))?.thread.id : undefined;
+    const tid = String(b.thread_id ?? byTitle ?? [...state.threads.keys()][0] ?? "");
+    if (!tid) return void sendJson(res, 404, { error: { message: "aucun fil" } });
+    const text = String(b.text ?? "hello from the other client");
+    const rec = state.ensureThread(tid, MOCK_USER);
+    const turnId = `${tid}:${rec.turns.length}`;
+    state.publish({ type: "turn.started", thread_id: tid, turn_id: turnId, ...startedMessage(text) });
+    setTimeout(() => state.appendTurn(tid, text, `Reply to the other client: ${text.slice(0, 40)}`, { channel: "cli", sender: MOCK_USER }), Math.max(0, Number(b.hold_ms ?? 1500)));
+    return void sendJson(res, 202, { thread_id: tid, turn_id: turnId });
+  }
   if (method === "POST" && path === "/v1/dev/demo-session") {
     const token = randomId("sess");
     const deviceId = "demo-no-device";
@@ -433,6 +505,12 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   if (handleConnectorsOAuthPublic(state, method, path, url.searchParams, res)) return;
   // Cadre de l'aperçu cast : sans jeton, l'URL signée fait foi (p2/cast-frame).
   if (handleCastFrame(state, method, path, url.searchParams, res)) return;
+  if (handleScreensFrame(method, path, url.searchParams, res)) return;
+  // Écran simulé du navigateur d'un site connecté (vérification humaine) : ce que la passerelle ouvrirait, sans session.
+  if (handleSitesScreen(state, method, path, res)) return;
+
+  // Échange d'un code d'accès à usage unique contre un jeton de session : le code est le secret, pas d'Authorization.
+  if (await handleExchange(state, method, path, isLoopbackRequest(req), String(req.headers["user-agent"] ?? ""), readBody, (st, obj) => sendJson(res, st, obj))) return;
 
   // Tout ce qui suit exige une session valide.
   const user = authUser(state, req);
@@ -440,12 +518,36 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     return void sendJson(res, 401, { error: { message: "unauthorized" } });
   }
 
+  // Mint d'un code, liste et révocation des sessions d'accès : jeton LOCAL seulement (une session d'accès est refusée).
+  {
+    const bearer = String(req.headers["authorization"] ?? "").replace(/^Bearer /, "").trim();
+    const viaSession = bearer !== "" && bearer !== state.localToken && bearer !== LOCAL_TOKEN && !!accessSessionOf(state, bearer);
+    // Portée du jeton : `kiosk` (liste blanche en lecture) et `present` (propriétaire sans gestion) refusent le reste, AVANT tout.
+    if (viaSession) {
+      const refused = scopeRefusal(scopeOf(state, bearer), method, path);
+      if (refused) return void sendJson(res, 403, { error: { code: refused, message: refused } });
+    }
+    if (await handleAccess(state, user, viaSession, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  }
+
   if (path === "/v1/capabilities" && method === "GET") {
     if (!capabilitiesOn()) return void sendJson(res, 404, { error: { code: "not_found", message: "noyau d'avant /v1/capabilities" } });
     return void sendJson(res, 200, mockCapabilities(state, user === LOCAL_OWNER));
   }
   if (await handleCloudByok(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (state.browserLive && handleBrowserSession(state, method, path, (st, obj, h) => sendJson(res, st, obj, h))) return;
+  // Lokkal : le propriétaire local n'est pas un compte `us_…` : /v1/account*, /v1/connectors répondent 403 `account_required`
+  // (noyau 1ce737f1 ; vu sur lokkal-test1 le 18.11). Seulement quand les capacités sont servies (le mock « Lokkal » complet).
+  if (capabilitiesOn() && user === LOCAL_OWNER && (path === "/v1/account" || path.startsWith("/v1/account/") || path.startsWith("/v1/connectors"))) {
+    return void sendJson(res, 403, { error: { code: "account_required", message: "compte nokker.ai requis" } });
+  }
   if (await handleAccount(state, method, path, readBody, (st, obj, h) => sendJson(res, st, obj, h), url.searchParams, String(req.headers["accept-language"] ?? ""))) return;
+  // Masquage sur l'appareil (LOKKAL-PHONE §4.3.2, P9b) : motifs publiés par le noyau.
+  if (user && handleRedactRules(method, path, req.headers["if-none-match"] as string | undefined, (st, obj, h) => (st === 304 ? (res.writeHead(304, { ...h, ...corsHeaders() }), res.end()) : sendJson(res, st, obj, h)))) return;
+  // Pages par le téléphone (LOKKAL-PHONE §4.5, P11) : liste d'hôtes et geste « Ouvrir par mon téléphone ».
+  if (user && (await handleEgress(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj)))) return;
+  // Nœud téléphone, côté session du membre (LOKKAL-PHONE §3, P7).
+  if (user && (await handlePhoneSession(state, user, state.sessions.get(String(req.headers["authorization"] ?? "").replace(/^Bearer /, "").trim())?.deviceId ?? "", method, path, readBody, (st, obj, h) => sendJson(res, st, obj, h), url.searchParams))) return;
   if (user && (await handleLink(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj)))) return;
   if (await handleGatewayAuthorize(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleLocalMachine(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
@@ -455,7 +557,9 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   if (await handleAutoReview(state, user, method, path, (st, obj) => sendJson(res, st, obj))) return;
   if (handleSpeech(state, user, method, path, res)) return;
   if (await handleLocalPasskey(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (handleScreensDev(state, user, method, path, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleLocalMail(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
+  if (await handleAccord(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (user && (await handleSso(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj)))) return;
   if (await handlePacks(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleCode(state, user, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
@@ -471,12 +575,22 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   if (await handleTeam(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj), sessionDevice(state, req))) return;
   if (await handleOps(state, user ?? MOCK_USER, method, url, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (handleCastFrameUrl(state, method, path, (st, obj) => sendJson(res, st, obj))) return;
+  if (handleScreensFrameUrl(state, method, path, (st, obj) => sendJson(res, st, obj))) return;
+  // Zones du membre (LOKKAL-PHONE §4.2, P6) et scénarios de la maison.
+  if (user && (await handleZones(state, user, method, path, readBody, (st, obj) => sendJson(res, st, obj)))) return;
+  // Données du téléphone à la demande (LOKKAL-PHONE §4.3, P8).
+  if (user && (await handleDevice(state, user, method, path, readBody, (st, obj) => (st === 204 ? (res.writeHead(204, { "Access-Control-Allow-Origin": "*" }), res.end()) : sendJson(res, st, obj))))) return;
+  if (await handleSites(state, method, path, readBody, (st, obj) => (st === 204 ? (res.writeHead(204, { "Access-Control-Allow-Origin": "*" }), res.end()) : sendJson(res, st, obj)))) return;
   if (await handleConnectorsMulti(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
   if (await handleAuthedOnboarding(state, method, path, readBody, (st, obj) => sendJson(res, st, obj))) return;
 
   // ---- Session de code locale (LOKKAL.md §7.4.1) ------------------------------------------------
   if (method === "POST" && path === "/v1/local/sessions") {
     const body = await readBody();
+    if (state.sandboxUnavailable) {
+      const m = state.sandboxUnavailable.message;
+      return void sendJson(res, 503, m === null ? {} : { error: { code: "sandbox_unavailable", message: m } });
+    }
     const cwd = typeof body.cwd === "string" ? body.cwd.trim() : "";
     if (!cwd || !cwd.startsWith("/")) return void sendJson(res, 400, { error: { message: "cwd (chemin absolu) requis" } });
     const root = rootFor(cwd, state.localRoots);
@@ -506,6 +620,15 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     // Drapeau `local.project_skills` (§7.21.3) : état des skills du dépôt ; éteint, pas de clé `skills`.
     const skills = state.projectSkills ? openProjectSkills(state, threadId, cwd, root) : null;
     return void sendJson(res, 201, { ...(skills ? { skills } : {}), thread_id: threadId, cwd });
+  }
+  const closeMatch = /^\/v1\/local\/sessions\/([^/]+)$/.exec(path);
+  if (method === "DELETE" && closeMatch) {
+    if (user !== LOCAL_OWNER) return void sendJson(res, 403, { error: { message: "jeton local requis" } });
+    const id = decodeURIComponent(closeMatch[1]!);
+    state.closeCalls.push(id);
+    if (state.closeHang) return void setTimeout(() => { if (!res.writableEnded) sendJson(res, 200, { closed: true }); }, 4000).unref(); // noyau muet (test de sortie)
+    if (!state.localSessions.delete(id)) return void sendJson(res, 404, { error: { code: "session_not_found", message: "session inconnue" } });
+    return void sendJson(res, 200, { closed: true, thread_id: id });
   }
   if (method === "GET" && path === "/v1/local/sessions") {
     // Lignes du noyau (§7.4.1) : `title` null avant le premier tour, `working` (tour en cours ou en file),
@@ -544,7 +667,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     if (user !== LOCAL_OWNER) return void sendJson(res, 403, { error: { message: "jeton local requis" } });
     state.expireStaleApprovals();
     return void sendJson(res, 200, {
-      approvals: [...state.approvals.values()].filter((a) => a.status === "pending" && state.localSessions.has(a.thread_id.split("/sa-")[0]!)),
+      approvals: [...state.approvals.values()].filter((a) => a.status === "pending" && (state.localAllThreads || state.localSessions.has(a.thread_id.split("/sa-")[0]!))).map(withTarget),
     });
   }
   const localDecideMatch = path.match(/^\/v1\/local\/approvals\/([^/]+)\/decide$/);
@@ -560,7 +683,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
       finalizeDecision(state, approval, "reject", "local", LOCAL_OWNER);
       return void sendJson(res, 200, { status: approval.status });
     }
-    if (!approval || !state.localSessions.has(approval.thread_id.split("/sa-")[0]!)) {
+    if (!approval || !(state.localAllThreads || state.localSessions.has(approval.thread_id.split("/sa-")[0]!))) {
       return void sendJson(res, 404, { error: { message: "approbation locale inconnue" } });
     }
     if (approval.status !== "pending") return void sendJson(res, 409, { error: { message: `statut ${approval.status}` } });
@@ -583,6 +706,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
       if (rule) state.addSessionRule(approval.thread_id, rule);
     }
     approval.status = decision === "approve" ? "approved" : "rejected";
+    if (decision !== "approve") approval.result_summary = "refusé par local-owner."; // texte du noyau, identifiant interne compris
     approval.decided_by = LOCAL_OWNER;
     approval.decided_via = "local";
     approval.decided_at = new Date().toISOString();
@@ -620,6 +744,38 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   }
 
   // ---- Fils (BUBBLES.md §1) ----------------------------------------------------------------
+  // Recherche dans les fils (docs/APP-CORE-CONTRACTS.md C3) : titres et tours du compte, extraits de 160 caractères.
+  if (method === "GET" && path === "/v1/threads/search") {
+    const q = (url.searchParams.get("q") ?? "").trim();
+    if (q.length < 2 || q.length > 200) return void sendJson(res, 400, { error: { code: "bad_query", message: "q : 2 à 200 caractères" } });
+    const limit = Math.min(50, Math.max(1, Number(url.searchParams.get("limit") ?? 20) || 20));
+    const norm = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+    const needle = norm(q);
+    const mine = (t: { owner?: string; members?: string[] }): boolean => user === LOCAL_OWNER || !user || t.owner === user || (t.members ?? []).includes(user);
+    const results: Array<{ thread_id: string; title: string | null; snippet: string; turn_index: number | null; at: string; channel: string }> = [];
+    for (const t of state.sortedThreads().filter(mine)) {
+      if (norm(t.title).includes(needle)) results.push({ thread_id: t.id, title: t.title, snippet: t.title, turn_index: null, at: t.updated_at, channel: "api" });
+      else {
+        const hit = state.messagesOf(t.id, undefined, 500).find((m) => norm(m.content).includes(needle));
+        if (hit) {
+          const i = norm(hit.content).indexOf(needle);
+          const from = Math.max(0, i - 60);
+          results.push({ thread_id: t.id, title: t.title, snippet: (from ? "…" : "") + hit.content.slice(from, from + 150), turn_index: hit.index, at: hit.created_at ?? t.updated_at, channel: "api" });
+        }
+      }
+    }
+    results.sort((a, b) => b.at.localeCompare(a.at));
+    return void sendJson(res, 200, { results: results.slice(0, limit), truncated: results.length > limit });
+  }
+  // P9 : texte d'une pièce jointe d'un message.
+  const attM = method === "GET" ? /^\/v1\/threads\/([^/]+)\/attachments\/([^/]+)$/.exec(path) : null;
+  if (attM) {
+    const a = state.attachments.get(decodeURIComponent(attM[2]!));
+    if (!a || a.thread !== decodeURIComponent(attM[1]!)) return void sendJson(res, 404, { error: { code: "not_found", message: "pièce inconnue" } });
+    state.requireMember(a.thread, user);
+    const { thread: _t, ...out } = a;
+    return void sendJson(res, 200, out);
+  }
   if (method === "GET" && path === "/v1/threads") {
     // Like the core (tenancy): only the threads this user owns or belongs to; the local owner sees them all. Without
     // this filter a local session (owner: local owner) showed up in an account's list and its GET answered 403.
@@ -629,6 +785,19 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
   }
   if (method === "POST" && path === "/v1/threads") {
     const body = await readJsonBody(req);
+    // « Continuer dans le cloud » (LOKKAL-PHONE §1.2 point 3) : nouveau fil amorcé par la copie du miroir d'un fil Lokkal.
+    const seed = body.seed_from as { machine_id?: string; thread_id?: string } | undefined;
+    if (seed && typeof seed === "object") {
+      const copy = state.threads.get(`lokkal-${seed.machine_id}-${seed.thread_id}`);
+      if (!copy) return void sendJson(res, 404, { error: { code: "not_mirrored", message: "pas de copie en miroir de ce fil" } });
+      const base = copy.thread.title.replace(/\s*\([^)]*\)\s*$/, "");
+      const machine = /\(([^)]*)\)\s*$/.exec(copy.thread.title)?.[1] ?? String(seed.machine_id);
+      const title = String(body.title ?? "").trim() || `suite de « ${base} » (${machine})`;
+      const rec = state.createThread(title.slice(0, 120));
+      for (const t of copy.turns.slice(-20)) state.appendTurn(rec.thread.id, t.user, t.reply, { silent: true });
+      state.publishThread(rec.thread.id);
+      return void sendJson(res, 201, { thread_id: rec.thread.id, title: rec.thread.title });
+    }
     const title = String(body.title ?? "").trim();
     if (!title) return void sendJson(res, 400, { error: { message: "title requis" } });
     const rec = state.createThread(title.slice(0, 120));
@@ -687,7 +856,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     const kind = String(body.kind ?? "") as BubbleKind;
     // `pack_agents` (BUBBLES §9.6) : posée par le noyau seulement (400 pour un client).
     // `approval`: posed by the kernel only, flag on or off (core p2/approval-bubble-r33).
-    if (!(BUBBLE_KINDS as readonly string[]).includes(kind) || kind === "notify" || kind === "pack_agents" || kind === "cast" || kind === "pointer" || kind === "approval") {
+    if (!(BUBBLE_KINDS as readonly string[]).includes(kind) || kind === "notify" || kind === "pack_agents" || kind === "cast" || kind === "pointer" || kind === "approval" || kind === "screen") {
       return void sendJson(res, 400, { error: { message: `kind non créable par un client : ${kind}` } });
     }
     if (body.state !== undefined && (typeof body.state !== "object" || body.state === null || Array.isArray(body.state))) {
@@ -825,7 +994,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     state.expireStaleApprovals();
     const status = url.searchParams.get("status");
     const all = [...state.approvals.values()];
-    sendJson(res, 200, status ? all.filter((a) => a.status === status) : all);
+    sendJson(res, 200, (status ? all.filter((a) => a.status === status) : all).map(withTarget));
     return;
   }
 
@@ -834,7 +1003,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     state.expireStaleApprovals();
     const approval = state.approvals.get(approvalMatch[1]!);
     if (!approval) return void sendJson(res, 404, { error: { message: "approbation inconnue" } });
-    sendJson(res, 200, withRollback(state, approval));
+    sendJson(res, 200, withTarget(withRollback(state, approval)));
     return;
   }
 
@@ -924,6 +1093,8 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     }
 
     const deviceId = String(body.device_id ?? "");
+    const otherDevice = phoneDecisionRefusal(state, approval, deviceId);
+    if (otherDevice) return void sendJson(res, 403, { error: { message: otherDevice, code: otherDevice } });
     const device = state.devices.get(deviceId);
     if (!device || device.status !== "approved") {
       return void sendJson(res, 403, { error: { message: "appareil inconnu ou non approuvé" } });
@@ -971,8 +1142,14 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
     const body = await readJsonBody(req);
     const messages = (body.messages as ChatMessage[] | undefined) ?? [];
     const threadId = String(req.headers["x-session-id"] ?? randomId("thread"));
+    // En-tête de surface du client (`web|pwa|cli|vscode|acp`) : le noyau en fait la ligne « Canal » du bloc [Environnement].
+    state.chatLanguages.push(typeof req.headers["accept-language"] === "string" ? (req.headers["accept-language"] as string) : null);
+    state.chatSurfaces.push(typeof req.headers["x-nokker-surface"] === "string" ? (req.headers["x-nokker-surface"] as string) : null);
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
-    const userText = lastUser ? messageText(lastUser.content) : "";
+    // P9 : une note dictée (`device_dictation`) EST le message de la personne quand le champ est vide (comme le noyau).
+    const dictated = (Array.isArray(body.attachments) ? body.attachments : []).filter((x): x is { kind: string; source: string; text: string } => !!x && typeof x === "object" && (x as { source?: unknown }).source === "device_dictation" && typeof (x as { text?: unknown }).text === "string");
+    const typed = lastUser ? messageText(lastUser.content) : "";
+    const userText = typed.trim() ? typed : dictated.map((d) => d.text).join("\n").slice(0, 20_000);
     // X7 : images jointes (format OpenAI). Le mock ne les lit pas, il les compte pour la réponse de démo.
     const imageParts = Array.isArray(lastUser?.content) ? lastUser.content.flatMap((p) => (p.type === "image_url" ? [p.image_url.url] : [])) : [];
     const imageCount = imageParts.length;
@@ -985,6 +1162,19 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
       state.images.set(sha256, { bytes, media_type: m[1]! });
       return [{ sha256, media_type: m[1]!, size: bytes.length }];
     });
+    // P9 : pièces texte reconnues sur l'appareil (OCR, transcription) — pièces du message de la personne.
+    const rawText = (Array.isArray(body.attachments) ? body.attachments : []).filter((a): a is Record<string, unknown> => !!a && typeof a === "object" && (a as { kind?: unknown }).kind === "text");
+    if (rawText.length > 4) return void sendJson(res, 400, { error: { code: "too_many_attachments", message: "4 pièces texte au plus" } });
+    if (rawText.some((a) => typeof a.text !== "string" || a.text.length > 20_000 || !["device_ocr", "device_stt", "device_dictation"].includes(String(a.source))))
+      return void sendJson(res, 400, { error: { code: "too_large", message: "pièce texte invalide ou de plus de 20 000 caractères" } });
+    const turnAttachments = rawText.map((a) => {
+      const id = randomId("att");
+      const name = String(a.name ?? "texte").replace(/[\u0000-\u001f]/g, " ").slice(0, 80);
+      state.attachments.set(id, { thread: threadId, id, kind: "text", source: String(a.source), name, text: String(a.text), ...(typeof a.lang === "string" ? { lang: a.lang } : {}), ...(typeof a.pages === "number" ? { pages: a.pages } : {}), ...(typeof a.duration_s === "number" ? { duration_s: a.duration_s } : {}) });
+      return { id, kind: "text" as const, source: a.source as "device_ocr" | "device_stt" | "device_dictation", name, chars: String(a.text).length };
+    });
+    // P9b : compteurs du masquage fait sur l'appareil (message et pièces), jamais de valeur.
+    const turnRedaction = mergeRedaction([cleanRedaction(body.redaction), ...rawText.map((a) => cleanRedaction(a.redaction))]);
     const stream = Boolean(body.stream);
     const model = String(body.model ?? "nokker-mock");
     // Jetons en direct (opt-in, CLIENT-API.md §Streaming du noyau) : deltas puis chunk final `nokker.final`.
@@ -1019,12 +1209,12 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
       // Boîte de contexte vidée au début du tour (§8) : bulles reçues, messages d'autres sessions.
       const context = state.drainContext(threadId);
       state.setWorking(threadId, true);
-      state.publish({ type: "turn.started", thread_id: threadId, turn_id: turnId });
+      state.publish({ type: "turn.started", thread_id: threadId, turn_id: turnId, ...startedMessage(userText) });
       const isLocal = state.localSessions.has(threadId);
       let cancelled = false;
       let localReply = "";
       let turnRefused = false;
-      let turnError: { code: string; message: string } | undefined;
+      let turnError: { code: string; message: string; retry_at?: string } | undefined;
       // Texte streamé PENDANT le tour (jetons en direct) : à vider par un `reset` si le tour finit autrement (annulation).
       let partialSent = false;
       let roleSent = false;
@@ -1069,11 +1259,32 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
           state.activeTurns.delete(threadId);
         }
       }
+      // P11 : « ouvre <url> » dans un tour de la personne (web_fetch de démo, liste d'hôtes, offre sur refus).
+      const webFetch = isLocal ? null : await demoWebFetch(state, user ?? MOCK_USER, threadId, turnId, userText);
+      // P7b : « lis le texte de l'image » → ocr.image sur le téléphone placé par capacité ; phone_tasks au-delà de 20 s.
+      const ocr = isLocal || webFetch ? null : await demoOcrImage(state, user ?? MOCK_USER, threadId, String(req.headers["host"] ?? ""), userText, turnImages);
+      // Quota atteint (aussi hors session locale) : la phrase du noyau est la réponse, `turn.done.error {quota_exceeded}`.
+      // Repli Deep → Ship (noyau 3992fc13) : `turn.done.notice` (ligne pour la personne, jamais dans la réponse ni l'historique) + `fallback`.
+      const deepFallback = /simulate (?:a )?(?:deep )?fallback|simule un repli/i.test(userText);
+      const quotaTurn = !isLocal && /simulate (?:a )?quota|simule un quota/i.test(userText);
+      if (quotaTurn) turnError = { code: "quota_exceeded", message: "usage quota reached", retry_at: "2026-12-01T00:00:00Z" };
       const demo = isLocal
         ? { reply: cancelled ? CANCELLED_REPLY : localReply, triggersApproval: false, after: undefined }
-        : interpretDemo(state, threadId, userText, { turnId, context });
+        : quotaTurn
+          ? { reply: "Usage quota reached. It renews on 1 December at 01:00 (Swiss time). You can also upgrade to a higher plan from your account.", triggersApproval: false, after: undefined }
+        : webFetch ?? ocr
+          ? { reply: (webFetch ?? ocr)!.reply, triggersApproval: false, after: undefined }
+          : interpretDemo(state, threadId, userText, { turnId, context });
+      // P9b : garde masked_value (un envoi externe dont les arguments portent un marqueur ne part pas) ; la démo
+      // recopie les marqueurs reçus et cite un marqueur de TIERS (⟦IBAN-9⟧) qui doit rester masqué à l'affichage.
+      const seen = isLocal ? [] : markersIn([userText, ...rawText.map((a) => String(a.text))].join("\n"));
+      const guard = seen.length ? guardFor(userText, !!demo.triggersApproval) : null;
+      if (guard) Object.assign(demo, { triggersApproval: false, after: undefined, reply: `(demo) ${guard.kind === "persist" ? maskedPersistResult(guard.tool, seen) : maskedValueResult(guard.tool, seen)}` });
+      else if (seen.length) Object.assign(demo, { reply: `(demo) Noted ${seen.join(", ")}. A page also mentioned ⟦IBAN-9⟧. ${demo.reply}` });
       const { triggersApproval, after } = demo;
-      const reply = imageCount > 0 && !isLocal ? `(demo) ${imageCount === 1 ? "Image received" : `${imageCount} images received`}, not analysed by the mock. ${demo.reply}` : demo.reply;
+      const shown = turnAttachments.filter((a) => a.source !== "device_dictation");
+      const attNote = shown.length ? `(demo) Attachment received: ${shown.map((a) => `${a.name} (${a.chars} characters)`).join(", ")}. ` : "";
+      const reply = attNote + (imageCount > 0 && !isLocal ? `(demo) ${imageCount === 1 ? "Image received" : `${imageCount} images received`}, not analysed by the mock. ${demo.reply}` : demo.reply);
 
       let approval: Approval | undefined;
       if (triggersApproval && !state.pendingApprovalForThread(threadId)) {
@@ -1113,13 +1324,13 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
         approvalBubble(state, approval);
       }
 
-      state.appendTurn(threadId, userText, cancelled ? "(turn cancelled)" : reply, { sender: user, channel: isLocal ? "cli" : "web", silent: true, images: turnImages });
+      state.appendTurn(threadId, userText, cancelled ? "(turn cancelled)" : reply, { sender: user, channel: isLocal ? "cli" : "web", silent: true, images: turnImages, attachments: turnAttachments, ...(turnRedaction ? { redaction: turnRedaction } : {}), ...(webFetch?.offers ? { phone_fetch_offers: webFetch.offers } : {}), ...(webFetch?.fetched ? { phone_fetched: webFetch.fetched } : {}), ...(ocr?.tasks ? { phone_tasks: ocr.tasks } : {}) });
       // Les bulles naissent pendant le tour (comme un producteur du noyau à partir d'un résultat d'outil).
       after?.();
       const endTurn = (): void => {
         // `turn.delta` UNIQUE par tour (réponse complète) juste avant `turn.done` — comme le noyau P1.
         state.publish({ type: "turn.delta", thread_id: threadId, turn_id: turnId, text: reply });
-        publishTurnCost(state, threadId, turnId, userText, reply); // X2 : le coût part avant `turn.done`
+        if (!(stream && state.costBeforeText)) publishTurnCost(state, threadId, turnId, userText, reply); // X2 : le coût part avant `turn.done`
         state.publish({
           type: "turn.done",
           thread_id: threadId,
@@ -1128,6 +1339,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
           tier: "mock",
           // Champs du noyau du 01.11 (CLIENT-API.md §Fin de tour), présents seulement quand ils s'appliquent.
           ...(turnError ? { error: turnError } : {}),
+          ...(deepFallback ? { notice: "Reply in lighter mode: deep mode is unavailable right now.", fallback: { from: "deep", to: "ship" } } : {}),
           ...(cancelled ? { cancelled: true } : {}),
           ...(turnRefused ? { refused: true } : {}),
         });
@@ -1157,6 +1369,7 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
       ): void => {
         writeChunk(choiceDelta, finish, { ...(withUsage ? { usage } : {}), ...(nokker ? { nokker } : {}) });
       };
+      if (state.costBeforeText) publishTurnCost(state, threadId, turnId, userText, reply); // noyau des fils : le coût part avant le texte
       if (!roleSent) sseChunk({ role: "assistant" }, null);
       // Tour annulé (noyau du 01.11, LOKKAL.md §7.4.4) : le texte partiel n'est pas gardé — `reset`, puis la réponse
       // finale « Annulé à ta demande. ». Sans jetons en direct : la réponse complète, d'un bloc.
@@ -1167,8 +1380,9 @@ async function handle(state: MockState, req: IncomingMessage, res: ServerRespons
       for (const w of cancelled || partialSent ? [] : words) {
         if (res.destroyed) break;
         sseChunk({ content: `${w} ` }, null);
-        await new Promise((r) => setTimeout(r, Math.round(18 * state.speed)));
+        await new Promise((r) => setTimeout(r, Math.round(Number(process.env.MOCK_WORD_MS ?? 18) * state.speed))); // MOCK_WORD_MS : flux lent pour les captures
       }
+      if (state.chatTailMs > 0) await new Promise((r) => setTimeout(r, state.chatTailMs));
       if (liveTokens) {
         sseChunk({ content: reply }, null, true, { reset: true, final: true });
         sseChunk({}, "stop");

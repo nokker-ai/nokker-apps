@@ -11,6 +11,7 @@ import {
   missingWithoutRouter,
   reduceLocal,
   validApiUrl,
+  validByokName,
   type LocalAction,
   type LocalFlowState,
 } from "../src/onboarding/localFlow.js";
@@ -148,6 +149,54 @@ describe("Lokkal /setup — machine à états", () => {
     expect(byokName("https://API.Exemple.test:8443/v1")).toBe("api-exemple-test");
     expect(byokName("pas une url")).toBe("pas-une-url");
     expect(byokName("")).toBe("cle");
+    // Le nom proposé reste modifiable : seul un nom que le coffre accepte passe.
+    expect(validByokName("api-exemple-test")).toBe(true);
+    expect(validByokName("Mon Cle")).toBe(false);
+    expect(validByokName("-x")).toBe(false);
+    expect(validByokName("a".repeat(41))).toBe(false);
+    expect(validByokName("")).toBe(false);
+  });
+
+  it("« Ajouter » enregistre tout de suite : en cours (Continuer fermé), puis rangé ; refus = erreur et l'entrée reste à enregistrer", () => {
+    const added: LocalAction = { type: "byok_added", name: "api-exemple-test", base_url: "https://api.exemple.test/v1", model: "m", hasKey: true };
+    const a = run(loaded(), added, { type: "byok_persist_start" });
+    expect(a.submitting).toBe(true);
+    expect(canContinueModels(a)).toBe(false);
+    expect(a.byok[0]!.pending).toBe(true); // pas « rangée » avant l'écriture
+    const ok = run(a, { type: "byok_persisted", setup: setup({ byok: [{ name: "api-exemple-test", base_url: "https://api.exemple.test/v1", model: "m", has_key: true, ok: true }], default: "byok:api-exemple-test" }) });
+    expect(ok.step).toBe("models"); // on ne quitte pas l'étape
+    expect(ok.submitting).toBe(false);
+    expect(ok.byok[0]).toMatchObject({ pending: false, hasKey: true });
+    expect(ok.chosen).toBe("byok:api-exemple-test");
+    expect(canContinueModels(ok)).toBe(true);
+    const ko = run(a, { type: "byok_persist_failed", error: "errNetwork" });
+    expect(ko.error).toBe("errNetwork");
+    expect(ko.submitting).toBe(false);
+    expect(ko.byok[0]!.pending).toBe(true);
+  });
+
+  it("Connecteurs sans compte relié : « Relier mon compte » revient à Modèles (où le lien se démarre) ; ailleurs, sans effet", () => {
+    const onConnectors = run(loaded({ byok: [{ name: "k", base_url: "https://k.test", model: "m", has_key: true, ok: true }], default: "byok:k" }), { type: "models_submit" }, { type: "models_saved", setup: setup({ byok: [{ name: "k", base_url: "https://k.test", model: "m", has_key: true, ok: true }], default: "byok:k" }) });
+    expect(onConnectors.step).toBe("connectors");
+    const back = run(onConnectors, { type: "back_to_models" }, { type: "link_start" });
+    expect(back.step).toBe("models");
+    expect(back.link.phase).toBe("starting");
+    expect(run(loaded(), { type: "back_to_models" }).step).toBe("models");
+  });
+
+  it("« Retirer » s'écrit aussi tout de suite : la liste part sans l'entrée ; la dernière retirée, plus de défaut", () => {
+    const one = { name: "k", base_url: "https://k.test", model: "m", has_key: true, ok: true };
+    const s0 = loaded({ byok: [one], default: "byok:k" });
+    const gone = reduceLocal(s0, { type: "byok_removed", name: "k" });
+    expect(gone.byok).toEqual([]);
+    expect(gone.chosen).toBeNull(); // l'écriture n'enverra que `byok: []`, sans `default`
+    const saved = run(gone, { type: "byok_persist_start" }, { type: "byok_persisted", setup: setup({ byok: [], default: null }) });
+    expect(saved.step).toBe("models");
+    expect(saved.byok).toEqual([]);
+    expect(saved.submitting).toBe(false);
+    // Avec une autre clé, le défaut se replace sur elle.
+    const two = loaded({ byok: [one, { ...one, name: "j" }], default: "byok:k" });
+    expect(reduceLocal(two, { type: "byok_removed", name: "k" }).chosen).toBe("byok:j");
   });
 
   it("sans modèle, pas d'ajout ; la même clé ajoutée deux fois remplace l'entrée ; retirée, le défaut se repositionne", () => {

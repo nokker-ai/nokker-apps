@@ -1,0 +1,126 @@
+/* V4 « Verre liquide » : tout est sous `html.nk-glass` (posé par glass.ts, drapeau éteint par défaut) ; éteint, l'interface
+   est celle d'avant. La lumière du reflet fait un tour en 7 s, comme la flamme du glow V1 (--nk-flame). Mouvement réduit :
+   reflet fixe. Transparence réduite côté système : rien (glass.ts ne pose pas la classe). */
+@property --nk-glass-angle {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 200deg;
+}
+@property --nk-glass-sweep {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: -30%;
+}
+@property --nk-glass-drift {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 0%;
+}
+/* Même tour de 7 s que la flamme V1 : le reflet du bord tourne, un passage de lumière balaie le verre, les lueurs de fond dérivent. */
+html.nk-glass {
+  animation:
+    nk-glass-orbit 7s linear infinite,
+    nk-glass-sweep 7s ease-in-out infinite,
+    nk-glass-drift 11s ease-in-out infinite alternate;
+}
+@keyframes nk-glass-orbit {
+  to {
+    --nk-glass-angle: 560deg;
+  }
+}
+@keyframes nk-glass-sweep {
+  0% {
+    --nk-glass-sweep: -30%;
+  }
+  55%,
+  100% {
+    --nk-glass-sweep: 140%;
+  }
+}
+@keyframes nk-glass-drift {
+  to {
+    --nk-glass-drift: 24%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html.nk-glass {
+    animation: none;
+    --nk-glass-sweep: 38%;
+  }
+}
+
+/* Un fond qui donne quelque chose à réfracter : trois lueurs de la marque derrière le chat (fixes, sans coût). */
+html.nk-glass .app {
+  background:
+    radial-gradient(720px 460px at calc(70% + var(--nk-glass-drift)) calc(24% + var(--nk-glass-drift) / 3), rgba(var(--accent-rgb), 0.34), transparent 64%),
+    radial-gradient(680px 500px at calc(40% - var(--nk-glass-drift)) calc(86% - var(--nk-glass-drift) / 4), rgba(255, 170, 120, 0.3), transparent 62%),
+    radial-gradient(520px 360px at calc(48% + var(--nk-glass-drift) / 2) 56%, rgba(120, 150, 255, 0.18), transparent 62%),
+    radial-gradient(1200px 600px at 85% -10%, rgba(var(--accent-rgb), 0.06), transparent 60%),
+    var(--bg);
+}
+
+html.nk-glass :is(.msg.nina .msg-body, .composer, .bubble, .pl-thumb, .pl-btn, .pl-floor) {
+  position: relative;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background:
+    linear-gradient(105deg, transparent calc(var(--nk-glass-sweep) - 16%), rgba(255, 255, 255, 0.42) var(--nk-glass-sweep), transparent calc(var(--nk-glass-sweep) + 16%)),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.1) 55%, rgba(255, 255, 255, 0.04)),
+    rgba(var(--glass), var(--glass-a));
+  -webkit-backdrop-filter: blur(14px) saturate(170%) brightness(1.04);
+  backdrop-filter: blur(14px) saturate(170%) brightness(1.04);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -12px 28px rgba(255, 255, 255, 0.06),
+    var(--shadow);
+}
+/* Le reflet : un anneau de lumière sur le bord seulement (masque), qui tourne avec --nk-glass-angle. */
+html.nk-glass :is(.msg.nina .msg-body, .composer, .bubble, .pl-thumb, .pl-btn, .pl-floor)::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  padding: 2px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: conic-gradient(
+    from var(--nk-glass-angle),
+    rgba(255, 255, 255, 0) 0turn,
+    rgba(255, 255, 255, 1) 0.07turn,
+    rgba(255, 214, 190, 0.7) 0.13turn,
+    rgba(255, 255, 255, 0) 0.24turn,
+    rgba(255, 255, 255, 0) 0.5turn,
+    rgba(255, 255, 255, 0.5) 0.6turn,
+    rgba(255, 255, 255, 0) 0.68turn
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+:root[data-theme="dark"].nk-glass :is(.msg.nina .msg-body, .composer, .bubble, .pl-thumb, .pl-btn, .pl-floor) {
+  border-color: rgba(255, 255, 255, 0.12);
+  background:
+    linear-gradient(105deg, transparent calc(var(--nk-glass-sweep) - 16%), rgba(255, 255, 255, 0.2) var(--nk-glass-sweep), transparent calc(var(--nk-glass-sweep) + 16%)),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.04) 55%, rgba(255, 255, 255, 0.02)),
+    rgba(var(--glass), var(--glass-a));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 -12px 28px rgba(255, 255, 255, 0.03),
+    var(--shadow);
+}
+:root[data-theme="dark"].nk-glass :is(.msg.nina .msg-body, .composer, .bubble, .pl-thumb, .pl-btn, .pl-floor)::after {
+  background: conic-gradient(
+    from var(--nk-glass-angle),
+    rgba(255, 255, 255, 0) 0turn,
+    rgba(255, 255, 255, 0.75) 0.07turn,
+    rgba(255, 170, 130, 0.6) 0.13turn,
+    rgba(255, 255, 255, 0) 0.24turn,
+    rgba(255, 255, 255, 0) 0.5turn,
+    rgba(255, 255, 255, 0.35) 0.6turn,
+    rgba(255, 255, 255, 0) 0.68turn
+  );
+}
+/* Chromium : réfraction (le fond ondule légèrement sous le verre) par le filtre SVG #nk-glass-refract. */
+html.nk-glass[data-glass="refract"] :is(.msg.nina .msg-body, .composer, .bubble, .pl-thumb, .pl-btn, .pl-floor) {
+  -webkit-backdrop-filter: url(#nk-glass-refract) blur(8px) saturate(190%);
+  backdrop-filter: url(#nk-glass-refract) blur(8px) saturate(190%);
+}

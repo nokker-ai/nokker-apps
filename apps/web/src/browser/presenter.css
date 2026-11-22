@@ -1,0 +1,393 @@
+/* Présentatrice (V3 +). Couleurs de la marque ; aucune animation avec prefers-reduced-motion. */
+.np {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+.np-beam {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  filter: drop-shadow(0 0 6px rgba(255, 120, 80, 0.8)) drop-shadow(0 0 16px rgba(226, 87, 76, 0.55));
+}
+/* Impulsion : le trait se dessine de Nina vers la cible à son apparition. */
+.np-beam-line {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 0;
+  animation: np-draw 0.7s cubic-bezier(0.3, 0.7, 0.2, 1) both;
+}
+@keyframes np-draw {
+  from {
+    stroke-dashoffset: 100;
+  }
+}
+/* Puis une lueur court de Nina vers la cible, en boucle douce. */
+.np-beam-pulse {
+  stroke-dasharray: 8 92;
+  animation: np-pulse 1.8s linear 0.7s infinite;
+  opacity: 0;
+}
+@keyframes np-pulse {
+  0% {
+    stroke-dashoffset: 8;
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: -92;
+    opacity: 1;
+  }
+}
+.np-halo {
+  position: absolute;
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 3px rgba(226, 87, 76, 0.9),
+    0 0 22px 6px rgba(255, 138, 92, 0.55);
+  animation: np-halo 1.8s ease-in-out infinite;
+  transition:
+    left 0.5s ease,
+    top 0.5s ease,
+    width 0.5s ease,
+    height 0.5s ease;
+}
+@keyframes np-halo {
+  50% {
+    box-shadow:
+      0 0 0 3px rgba(226, 87, 76, 0.7),
+      0 0 30px 10px rgba(255, 138, 92, 0.35);
+  }
+}
+.np-lion {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.np-host {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.np-bubble .np-host {
+  left: 2%;
+  bottom: 3%;
+  width: 42%;
+}
+.np-bubble .np-bubbles li {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+/* Grand écran : zone sûre TV de 5 % ; Nina en plan taille est la vedette, ses bulles au-dessus d'elle. */
+.np-stage .np-host {
+  right: 5%;
+  top: 5%;
+  bottom: 5%;
+  width: 31%;
+  align-items: flex-end;
+  justify-content: flex-end;
+}
+.np-frame {
+  position: relative;
+  width: 44%;
+  aspect-ratio: 1;
+  border-radius: 14px;
+  overflow: hidden;
+  background: linear-gradient(160deg, #fbe9e3, #f3d2c4);
+  box-shadow:
+    0 8px 22px rgba(0, 0, 0, 0.25),
+    0 0 0 2px rgba(226, 87, 76, 0.65);
+  transition: transform 0.6s cubic-bezier(0.3, 0.7, 0.2, 1);
+  transform-origin: 50% 100%;
+}
+.np-stage .np-frame {
+  height: 74%;
+  aspect-ratio: 4 / 5;
+  width: auto;
+  max-width: 100%;
+  border-radius: 22px;
+  transition:
+    transform 0.6s cubic-bezier(0.3, 0.7, 0.2, 1),
+    box-shadow 0.6s ease;
+}
+.np-avatar,
+.np-placeholder {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.np-name {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.85);
+  color: #2b2220;
+  font-size: 11px;
+  font-weight: 700;
+}
+.np-stage .np-name {
+  font-size: clamp(14px, 1.6vw, 22px);
+}
+/* Bulles d'explication : derrière elle (au-dessus de l'encadré), la plus récente en clair, les autres estompées. */
+.np-bubbles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 100%;
+}
+.np-bubbles li {
+  padding: 5px 10px;
+  border-radius: 12px 12px 12px 4px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #2b2220;
+  font-size: 12px;
+  line-height: 1.3;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.15);
+  opacity: 0.55;
+  transform: scale(0.94);
+  transform-origin: left bottom;
+  transition:
+    opacity 0.4s ease,
+    transform 0.4s ease;
+}
+.np-bubbles li.last {
+  opacity: 1;
+  transform: none;
+}
+.np-bubbles li.why {
+  border-left: 3px solid #e2574c;
+  font-weight: 600;
+}
+.np-stage .np-bubbles {
+  align-items: flex-end;
+  max-height: 24%;
+  overflow: hidden;
+}
+.np-stage .np-bubbles li {
+  font-size: clamp(15px, 1.5vw, 24px);
+  border-radius: 16px 16px 4px 16px;
+  transform-origin: right bottom;
+}
+@media (prefers-reduced-motion: reduce) {
+  .np-beam-line,
+  .np-halo {
+    animation: none;
+  }
+  .np-beam-pulse {
+    display: none;
+  }
+  .np-frame,
+  .np-halo,
+  .np-bubbles li {
+    transition: none;
+  }
+}
+/* /present : grand écran 16:9, la page en fond, Nina à droite, sous-titres en bas. */
+.present {
+  position: fixed;
+  inset: 0;
+  background: #0b0d12;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.present-stage {
+  position: relative;
+  width: min(100vw, 177.78vh);
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: #11141b;
+}
+.present-frame {
+  position: absolute;
+  object-fit: fill;
+  border-radius: 14px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  background: #faf6f3;
+}
+.present-wait {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #5b4b45;
+  font-size: clamp(16px, 1.6vw, 26px);
+  text-align: center;
+  padding: 2em;
+}
+.present-host {
+  position: absolute;
+  left: 5%;
+  top: 5%;
+  margin: 0;
+  color: #c9ced8;
+  font-size: clamp(12px, 1.1vw, 18px);
+}
+.present-caption {
+  position: absolute;
+  left: 5%;
+  right: 39%;
+  bottom: 5%;
+  margin: 0;
+  padding: 0.4em 0.8em;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: clamp(16px, 1.9vw, 32px);
+  line-height: 1.3;
+  text-align: center;
+}
+.present-note {
+  position: absolute;
+  left: 5%;
+  top: 80%;
+  margin: 0;
+  color: #f3c7b8;
+  font-size: clamp(14px, 1.3vw, 22px);
+}
+
+/* Mode démo de /present : Nina live en vignette dans un coin libre (jamais sur la cible), bulles des cibles au-dessus. */
+.np-stage.np-bare .np-host {
+  bottom: 57%; /* au-dessus de la vignette (0,5 de haut + zone sûre) */
+  justify-content: flex-end;
+}
+.np-stage.np-bare .np-bubbles {
+  max-height: 100%;
+}
+.pl-vignette {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6vw;
+}
+.pl-thumb {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 22px;
+  overflow: hidden;
+  background: linear-gradient(160deg, #fbe9e3, #f3d2c4);
+  box-shadow:
+    0 8px 22px rgba(0, 0, 0, 0.35),
+    0 0 0 3px rgba(226, 87, 76, 0.75);
+}
+/* Jamais le rig 2D en mode démo : tant que la vidéo n'est pas là, le cadre reste uni (le repli retire la vignette). */
+.pl-thumb .nk-nina-live-rig {
+  display: none;
+}
+.pl-name {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.85);
+  color: #2b2220;
+  font-size: clamp(14px, 1.4vw, 22px);
+  font-weight: 700;
+}
+.pl-floor {
+  margin: 0;
+  padding: 0.25em 0.8em;
+  border-radius: 999px;
+  font-size: clamp(13px, 1.2vw, 20px);
+  font-weight: 600;
+  text-align: center;
+}
+.pl-floor-nina {
+  background: #e8e1f3;
+  color: #4b2a7a;
+}
+.pl-floor-you {
+  background: #dff3e6;
+  color: #1d5b33;
+}
+.pl-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.pl-btn {
+  padding: 0.35em 0.9em;
+  border-radius: 999px;
+  border: 0;
+  background: rgba(255, 255, 255, 0.92);
+  color: #2b2220;
+  font-size: clamp(13px, 1.2vw, 20px);
+  font-weight: 600;
+  cursor: pointer;
+}
+.pl-hold {
+  touch-action: none;
+  user-select: none;
+}
+.pl-hold.held {
+  outline: 3px solid #1d5b33;
+}
+
+/* Narration : l'orbe vocal V2 occupe le cadre de la vignette tant que Nina live n'est pas en échange. */
+.pl-orb {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* /present sans identifiant : écran d'attente (lion, orbe, phrase) tant qu'aucune session navigateur n'est active. */
+.present-waiting {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2.4%;
+}
+.present-lion {
+  width: 5%;
+  height: auto;
+  opacity: 0.85;
+}
+.present-wait-orb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.present-wait-text {
+  margin: 0;
+  color: #f1ddd6;
+  font-size: clamp(22px, 2.6vw, 44px);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* Démo expirée (12 h écoulées) : lisible à deux mètres sur une télé, au centre de l'écran. */
+.present-expired {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 6vw;
+  background: var(--bg);
+  color: var(--text);
+  text-align: center;
+}
+.present-expired p {
+  margin: 0;
+  max-width: 24ch;
+  font: 600 clamp(28px, 4.2vw, 72px) / 1.25 var(--display);
+}

@@ -7,7 +7,11 @@
  * - while the listener is not `off`, the interface shows it (indicator in the top bar) and offers « Mute »;
  * - the sound never leaves the AudioWorklet: nothing is sent, nothing is stored but the calibrated SETTINGS
  *   (measurements, `nokker.web.knock.settings`);
- * - on the web, a knock only CALLS (focus on the composer): it never approves a card.
+ * - on the web, a knock only CALLS (focus on the composer): it never approves a card;
+ * - CUT in the page on a home node (LOKKAL-PHONE §4.4, decision of dev 06.11): `setKnockBlocked("home")` stops the
+ *   listener and refuses any start; leaving home mode does NOT restart it (a new click is needed). The native shell
+ *   also refuses the microphone to the web view in home mode. There, the owner may switch on the NATIVE listening
+ *   (product decision, 06.11: ios/App/App/NokkerKnock.swift), reported here as `nativeOn`.
  *
  * One listener for the whole app: the setting card (My account) and the indicator (top bar) read the same snapshot.
  */
@@ -25,6 +29,12 @@ export interface KnockSnapshot {
   calibrated: boolean;
   /** Outcome of the last calibration. */
   lastCalibration: "ok" | "none" | null;
+  /** Listening forbidden on this device right now (home node: shared room). */
+  blocked: "home" | null;
+  /** Home node only: the owner switched on the NATIVE listening (the page still has no microphone). */
+  nativeOn: boolean;
+  /** Home node only: the native listening exists for this node (household voice ready); otherwise nothing to switch on. */
+  nativeAvailable: boolean;
 }
 
 /** Why the browser cannot listen; null when it can. */
@@ -67,7 +77,7 @@ function hasSettings(): boolean {
   }
 }
 
-let snap: KnockSnapshot = { enabled: !!readJson<{ enabled?: boolean }>(PREF, {}).enabled, state: "off", error: null, calibrated: hasSettings(), lastCalibration: null };
+let snap: KnockSnapshot = { enabled: !!readJson<{ enabled?: boolean }>(PREF, {}).enabled, state: "off", error: null, calibrated: hasSettings(), lastCalibration: null, blocked: null, nativeOn: false, nativeAvailable: false };
 const subs = new Set<() => void>();
 const knockSubs = new Set<() => void>();
 let listener: Listener | null = null;
@@ -107,7 +117,7 @@ function errorOf(e: unknown): KnockSnapshot["error"] {
 
 /** Start listening. MUST run inside a click handler (the browser asks for the microphone on a gesture). */
 export async function startKnock(): Promise<void> {
-  if (knockUnsupported()) return;
+  if (snap.blocked || knockUnsupported()) return;
   if (listener && listener.state !== "off" && listener.state !== "error") return;
   set({ error: null, state: "starting" });
   try {
@@ -128,6 +138,15 @@ export async function startKnock(): Promise<void> {
 export function stopKnock(): void {
   listener?.stop();
   set({ state: "off" });
+}
+
+/** Home node on (or off): stop and forbid listening ; never restarts by itself when lifted. */
+export function setKnockBlocked(reason: "home" | null, nativeOn = false, nativeAvailable = false): void {
+  const native = !!reason && nativeOn;
+  const avail = !!reason && nativeAvailable;
+  if (snap.blocked === reason && snap.nativeOn === native && snap.nativeAvailable === avail) return;
+  if (reason) listener?.stop();
+  set(reason ? { blocked: reason, state: "off", nativeOn: native, nativeAvailable: avail } : { blocked: null, nativeOn: false, nativeAvailable: false });
 }
 
 /** Switch « Knock to call » on (starts listening: call from a click) or off (frees the microphone). */
@@ -185,5 +204,5 @@ export function playYes(): void {
 export function __resetKnock(): void {
   listener = null;
   ctor = null;
-  snap = { enabled: !!readJson<{ enabled?: boolean }>(PREF, {}).enabled, state: "off", error: null, calibrated: hasSettings(), lastCalibration: null };
+  snap = { enabled: !!readJson<{ enabled?: boolean }>(PREF, {}).enabled, state: "off", error: null, calibrated: hasSettings(), lastCalibration: null, blocked: null, nativeOn: false, nativeAvailable: false };
 }

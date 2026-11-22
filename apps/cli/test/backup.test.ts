@@ -9,19 +9,23 @@ import type { Runner, RunOptions } from "../src/proc.js";
 import { run as realRun } from "../src/proc.js";
 import { needsPassphrase, runBackup, type BackupOptions, type Prompter } from "../src/backup.js";
 import { parseArgs } from "../src/cli-args.js";
+import { lang, setLang } from "../src/i18n/index.js";
 
 let dir: string;
 let inst: string;
 const keep = process.env.NOKKER_CONFIG_DIR_OVERRIDE;
 const SECRET = "correct horse battery staple";
+const keepLang = lang();
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "nokker-cli-backup-"));
   inst = join(dir, "nokker-home");
   await mkdir(inst, { recursive: true });
   process.env.NOKKER_CONFIG_DIR_OVERRIDE = dir;
+  setLang("en"); // backup.sh reçoit NOKKER_LANG = la langue de la commande (attentes ci-dessous en anglais)
 });
 afterAll(async () => {
+  setLang(keepLang);
   if (keep === undefined) delete process.env.NOKKER_CONFIG_DIR_OVERRIDE;
   else process.env.NOKKER_CONFIG_DIR_OVERRIDE = keep;
   await rm(dir, { recursive: true, force: true });
@@ -81,7 +85,7 @@ describe("traduction des options vers backup.sh", () => {
     const { calls } = await go({ action: "backup", prompt: p });
     expect(calls[0]!.args).toEqual([join(inst, "backup.sh"), "backup", "--dir", inst]);
     expect(p.asked).toEqual([]);
-    expect(calls[0]!.opts?.env).toBeUndefined();
+    expect(calls[0]!.opts?.env).toEqual({ NOKKER_LANG: "en" });
   });
 
   it("backup list [--to s3://…] et restore <fichier> --yes", async () => {
@@ -121,7 +125,7 @@ describe("traduction des options vers backup.sh", () => {
     const { calls } = await go({ action: "backup", encrypt: true, prompt: prompter({ secrets: [SECRET, SECRET] }), env: { WSLENV: "USERPROFILE/p" } });
     expect(calls[0]!.cmd).toBe("wsl.exe");
     expect(calls[0]!.args).toEqual(["-d", "Ubuntu", "--", "sh", "/home/nina/.nokker/backup.sh", "backup", "--encrypt", "--dir", "/home/nina/.nokker"]);
-    expect(calls[0]!.opts?.env).toEqual({ NOKKER_BACKUP_PASSPHRASE: SECRET, WSLENV: "USERPROFILE/p:NOKKER_BACKUP_PASSPHRASE" });
+    expect(calls[0]!.opts?.env).toEqual({ NOKKER_BACKUP_PASSPHRASE: SECRET, NOKKER_LANG: "en", WSLENV: "USERPROFILE/p:NOKKER_BACKUP_PASSPHRASE:NOKKER_LANG" });
   });
 });
 
@@ -141,7 +145,7 @@ describe("chiffrement et phrase de passe", () => {
     expect(p.asked).toEqual(["Backup passphrase: ", "Passphrase again: "]);
     expect(calls[0]!.args.join("\0")).not.toContain(SECRET);
     expect(calls[0]!.args.some((a) => a.includes("correct horse"))).toBe(false);
-    expect(calls[0]!.opts?.env).toEqual({ NOKKER_BACKUP_PASSPHRASE: SECRET });
+    expect(calls[0]!.opts?.env).toEqual({ NOKKER_BACKUP_PASSPHRASE: SECRET, NOKKER_LANG: "en" });
   });
 
   it("deux saisies différentes, saisie vide, Ctrl-C : rien n'est lancé", async () => {
@@ -164,7 +168,7 @@ describe("chiffrement et phrase de passe", () => {
     const { code, calls } = await go({ action: "backup", encrypt: true, prompt: p, env: { NOKKER_BACKUP_PASSPHRASE: "x" } });
     expect(code).toBe(0);
     expect(p.asked).toEqual([]);
-    expect(calls[0]!.opts?.env).toBeUndefined();
+    expect(calls[0]!.opts?.env).toEqual({ NOKKER_LANG: "en" });
   });
 
   it("restauration d'une archive .enc : une seule saisie ; .tar en clair : aucune", async () => {
@@ -174,7 +178,7 @@ describe("chiffrement et phrase de passe", () => {
     const p = prompter({ secrets: [SECRET] });
     const { calls } = await go({ action: "restore", source: "s3://bk/nokker/nokker-backup-x.tar.enc", yes: true, prompt: p });
     expect(p.asked).toEqual(["Backup passphrase: "]);
-    expect(calls[0]!.opts?.env).toEqual({ NOKKER_BACKUP_PASSPHRASE: SECRET });
+    expect(calls[0]!.opts?.env).toEqual({ NOKKER_BACKUP_PASSPHRASE: SECRET, NOKKER_LANG: "en" });
     expect(calls[0]!.args).not.toContain(SECRET);
   });
 });

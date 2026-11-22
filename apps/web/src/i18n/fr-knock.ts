@@ -32,4 +32,25 @@ export const FR_KNOCK: Record<string, string> = {
   "Muted": "Coupé",
   "Listening": "À l'écoute",
   "Knock knock knock": "toc toc toc",
+  // Nœud maison (natif) — textes gelés à la relecture des textes le 06.11 (1, 2, 3, 5) ; « Not turned on… » et « I'm listening… » à geler.
+  "Off by default. When on, this device listens to the room to recognise three knocks, and nothing else. The sound is analysed on this device then erased at once: it is neither recorded nor sent, and nothing leaves before the three knocks. A banner shows it while it is on. Turning it on asks for Face ID, Touch ID or the passcode of this device.":
+    "Éteint par défaut. Allumé, cet appareil écoute la pièce pour reconnaître trois coups frappés, et rien d'autre. Le son est analysé sur l'appareil puis effacé aussitôt : il n'est ni enregistré ni envoyé, et rien ne part avant les trois coups. Un bandeau le signale tant que c'est allumé. Allumer demande Face ID, Touch ID ou le code de cet appareil.",
+  "Turn on": "Allumer",
+  "Turn off": "Éteindre",
+  "Listening for three knocks. Nothing is recorded.": "À l'écoute de trois coups frappés. Rien n'est enregistré.",
+  "Listening off. The owner can turn it back on in the home node settings.": "Écoute coupée. Le propriétaire peut la rallumer dans les réglages du nœud maison.",
+  "Listening off: Nokker is no longer in the foreground. It resumes when you come back to the app.":
+    "Écoute coupée : Nokker n'est plus au premier plan. Elle reprend quand tu reviens dans l'app.",
+  "The microphone is not allowed for Nokker. Allow it in the Settings of this device, under Nokker.":
+    "Le micro n'est pas autorisé pour Nokker. Autorise-le dans les Réglages de cet appareil, rubrique Nokker.",
+  "Not turned on: the owner of this device must confirm with Face ID, Touch ID or the passcode.":
+    "Pas allumé : le propriétaire de cet appareil doit confirmer avec Face ID, Touch ID ou le code.",
+  "Off on this device, which serves as a home node in a shared room. Its owner can turn it on in the home node settings.":
+    "Éteint sur cet appareil, qui sert de nœud maison dans une pièce commune. Son propriétaire peut l'allumer dans les réglages du nœud maison.",
+  "Cannot turn on: this device has no passcode. Set one in Settings, so that only the owner can turn on the listening.":
+    "Impossible d'allumer : cet appareil n'a pas de code. Définis-en un dans les Réglages, pour que seul le propriétaire puisse allumer l'écoute.",
+  "Only available when this device serves as a home node.": "Disponible seulement quand cet appareil sert de nœud maison.",
+  // Ancien n°32, montré tant que l'écoute du nœud maison n'est pas disponible (rien à allumer).
+  "Off on this device, which serves as a home node in a shared room: no permanent listening.":
+    "Coupé sur cet appareil, qui sert de nœud maison dans une pièce commune : aucune écoute permanente.",
 };

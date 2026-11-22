@@ -4,13 +4,16 @@
  */
 import { Markdown } from "../Markdown.js";
 import { liveTail, strongCardText } from "@nokker-apps/sdk";
+import { ApprovalTargetFull, ApprovalTargetLine } from "../approvals/TargetLine.js";
 import { gatewayContext, remoteApprovalUrl } from "../auth.js";
+import { onPresentScreen } from "../kiosk/scope.js";
 import React, { useEffect, useRef, useState } from "react";
-import { NokkerApiError, isPayApproval, type Approval, type Bubble, type BubbleBase } from "@nokker-apps/sdk";
+import { NokkerApiError, blockedByText, isPayApproval, type Approval, type Bubble, type BubbleBase } from "@nokker-apps/sdk";
 import { PayBlock } from "../payments/PayBlock.js";
 import { AutoReviewBlock, isAutoDecided } from "../approvals/AutoReviewBlock.js";
 import { LocalPasskeyDecision } from "../approvals/LocalPasskeyDecision.js";
 import { useStore } from "../context.js";
+import { ScreenBody, screenStatusLabel } from "../screen/ScreenBody.js";
 import { Icon } from "../icons.js";
 import { shellLang, tr } from "../i18n/index.js";
 import { approvalStatusLabel } from "../ops/model.js";
@@ -18,6 +21,7 @@ import { PublishPanel } from "../publish/PublishPanel.js";
 import { PackAgents } from "../packs/PackAgents.js";
 import { showMeEnabled } from "../showme/model.js";
 import { PointerBody, pointerStatusLabel } from "../showme/PointerBody.js";
+import { BrowserBody, browserStatusLabel } from "../browser/BrowserBody.js";
 
 type B<K extends Bubble["kind"]> = BubbleBase<K>;
 
@@ -68,8 +72,11 @@ export function bubbleLabel(kind: string): string {
       return tr("Pack agents");
     case "cast":
       return tr("Screen");
+    case "screen": return tr("Wall screen");
     case "pointer":
       return showMeEnabled() ? tr("Show me") : tr("Bubble");
+    case "browser":
+      return tr("Browser");
     default:
       return tr("Bubble");
   }
@@ -99,6 +106,11 @@ export function statusLabel(b: Bubble, now: number): string {
     case "approval":
       // Display only (a bubble can be rewritten); the card itself is read again from GET /v1/approvals/{id}.
       if (b.state.decided_via === "auto-review") return b.state.rollback_applied ? tr("restored") : b.state.revoked ? tr("revoked") : tr("approved");
+      // L'état de la CARTE (`state.status`, écrit par le noyau) dit « en cours » / « exécutée » / « interrompue » ; le statut
+      // de la bulle (working/done/failed) ne distingue pas une carte en attente d'une carte en cours d'exécution.
+      // Toute carte TRANCHÉE ou finie dit son état : une carte refusée ou expirée a le statut de bulle « done » (comme une approuvée), mais
+      // elle n'est pas « approuvée » (défaut vu sur rc.9.39 : en-tête « approuvée » sur une carte refusée).
+      if (b.state.status === "executing" || b.state.status === "interrupted" || b.state.status === "executed" || b.state.status === "failed" || b.state.status === "rejected" || b.state.status === "expired") return approvalStatusLabel(b.state.status);
       return b.status === "working" ? tr("pending") : b.status === "done" ? tr("approved") : b.status === "failed" ? tr("rejected") : b.status;
     case "handoff":
       return handoffLabel(b.state.state);
@@ -108,8 +120,11 @@ export function statusLabel(b: Bubble, now: number): string {
       return b.state.date ? new Date(b.state.date).toLocaleDateString(locale(), { weekday: "short", day: "numeric", month: "short" }) : tr("brief");
     case "cast":
       return castStatusLabel(b.state.status);
+    case "screen": return screenStatusLabel(b.state.status);
     case "pointer":
       return showMeEnabled() ? pointerStatusLabel(b) : b.status;
+    case "browser":
+      return browserStatusLabel(b.state.state);
     default:
       return (b as { status: string }).status;
   }
@@ -518,12 +533,19 @@ function ApprovalBody({ b }: { b: B<"approval"> }) {
   return <ApprovalCard approvalId={b.state.approval_id} rev={b.version} uid={b.id} />;
 }
 
+/** Délai d'armement des boutons qui approuvent, après l'apparition (ou le changement d'état) d'une carte. */
+export const ARM_MS = 600;
+
 export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev?: number; uid: string }) {
   const store = useStore();
   const [a, setA] = useState<Approval | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Armement (600 ms) : un bouton qui APPROUVE ne prend aucun clic juste après l'apparition de la carte — un clic ou
+  // un toucher déjà en route (bulle qui s'ouvre, liste qui saute) ne vaut jamais accord.
+  const [armed, setArmed] = useState(false);
   const [totp, setTotp] = useState("");
+  const [totpOpen, setTotpOpen] = useState(false);
   const [reload, setReload] = useState(0);
   useEffect(() => {
     let live = true;
@@ -543,6 +565,12 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
       live = false;
     };
   }, [approvalId, rev, reload, store]);
+  useEffect(() => {
+    if (!a) return;
+    setArmed(false);
+    const t = window.setTimeout(() => setArmed(true), ARM_MS);
+    return () => window.clearTimeout(t);
+  }, [a?.id, a?.status]);
   if (!a) return <div className="bubble-body">{err ? <span className="error">{err}</span> : <Skel />}</div>;
   // Decided by the automatic review (APPROVALS.md §8): a compact card, never one that reads as waiting.
   if (isAutoDecided(a)) {
@@ -566,6 +594,7 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
     }
   };
   const go = async (decision: "approve" | "reject", withTotp: boolean): Promise<void> => {
+    if (onPresentScreen()) return; // défense en profondeur : rien ne part depuis /present
     setBusy(true);
     setErr(null);
     try {
@@ -585,27 +614,45 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
   const canSign = store.authMode !== "demo" && store.authMode !== null && !viaGateway && !local;
   // Carte « à payer » (PAYMENTS §5) : le détail de l'achat remplace outil/effet ; seule une passkey l'approuve.
   const pays = isPayApproval(a);
+  // Ce qui demande l'accord (BROWSER-LIVE §1) : le nom donné par le foyer, sinon le libellé de la règle, sinon son id.
+  const blockedBy = blockedByText(a);
   return (
     <div className="bubble-body">
       {/* A « to pay » card: its reason is written for the model (third person); the purchase below says it to the person. */}
       {pays ? null : <p className="notify-text">{a.reason}</p>}
+      {blockedBy ? (
+        // Le libellé du noyau seul (il formule déjà l'accord : « … — ton accord est requis ») ; jamais « Bloqué par »,
+        // qui se lit comme un refus. Règle nommée par le foyer : « Règle du foyer : … ».
+        <p className="approval-blocked-by" data-approval-blocked-by>
+          {a.rule_source?.kind === "household" && a.rule_source.name?.trim() ? around(tr("Household rule: {0}", SLOT), <strong>{blockedBy}</strong>) : <strong>{blockedBy}</strong>}
+        </p>
+      ) : null}
+      {pays ? null : <ApprovalTargetLine approval={a} />}
       {pays ? (
         <PayBlock client={store.client} approvalId={a.id} rev={reload + (rev ?? 0)} ownCard={local && a.local_passkey === true} />
       ) : (
-        <dl className="kv">
-          <dt>{tr("Tool")}</dt>
-          <dd className="mono">{a.tool_name}</dd>
-          <dt>{tr("Effect")}</dt>
-          <dd>{tr("{0} · level {1}", a.effect ?? "", a.strength)}</dd>
-        </dl>
+        // Le détail technique (outil, effet, niveau) est replié : la phrase et le libellé de la règle suffisent pour décider.
+        <details className="approval-details" data-approval-details>
+          <summary>{tr("Details")}</summary>
+          <dl className="kv">
+            <dt>{tr("Tool")}</dt>
+            <dd className="mono">{a.tool_name}</dd>
+            <dt>{tr("Effect")}</dt>
+            <dd>{tr("{0} · level {1}", a.effect ?? "", a.strength)}</dd>
+            <ApprovalTargetFull approval={a} />
+          </dl>
+        </details>
       )}
       {a.advice ? <p className="fine">{a.advice}</p> : null}
       {a.auto_review ? <AutoReviewBlock a={a} client={store.client} readOnly={store.authMode === null} onRevoked={(next) => setA({ ...a, ...next })} /> : null}
-      {pending ? (
+      {pending && onPresentScreen() ? (
+        // Écran de présentation : une carte qui attend se DIT, elle ne se tranche jamais ici (portée `present`).
+        <p className="fine" data-present-wait>{tr("Waiting for your approval: decide it on your phone or on the machine.")}</p>
+      ) : pending ? (
         <>
           {canSign ? (
             <div className="bubble-actions">
-              <button type="button" className="btn btn-brass" disabled={busy} onClick={() => void go("approve", false)}>
+              <button type="button" className="btn btn-brass" disabled={busy || !armed} onClick={() => void go("approve", false)} data-armed={armed ? "1" : "0"}>
                 <Icon name="shield" /> {pays ? tr("Approve with my passkey") : tr("Approve (device)")}
               </button>
               <button type="button" className="btn" disabled={busy} onClick={() => void go("reject", false)}>
@@ -618,10 +665,10 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
             <LocalPasskeyDecision a={a} client={store.client} reject={() => guardLocal("reject", "once")} onDecided={() => setReload((n) => n + 1)} />
           ) : local && a.strength !== "strong" ? (
             <div className="bubble-actions">
-              <button type="button" className="btn btn-brass" disabled={busy} onClick={() => void guardLocal("approve", "once")}>
+              <button type="button" className="btn btn-brass" disabled={busy || !armed} onClick={() => void guardLocal("approve", "once")}>
                 {tr("Approve once")}
               </button>
-              <button type="button" className="btn" disabled={busy} onClick={() => void guardLocal("approve", "session")}>
+              <button type="button" className="btn" disabled={busy || !armed} onClick={() => void guardLocal("approve", "session")}>
                 {tr("For the session")}
               </button>
               <button type="button" className="btn" disabled={busy} onClick={() => void guardLocal("reject", "once")}>
@@ -639,17 +686,22 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
               </a>
             </p>
           ) : null}
-          {a.strength === "standard" && !pays && !viaGateway && store.authMode !== "local" ? (
+          {a.strength === "standard" && !pays && !viaGateway && store.authMode !== "local" && canSign && !totpOpen ? (
+            // UNE voie : l'appareil ; le code TOTP en repli, pour qui n'a pas son appareil sous la main.
+            <button type="button" className="linkish approval-totp-open" onClick={() => setTotpOpen(true)} data-approval-totp-open>
+              {tr("Not your device?")}
+            </button>
+          ) : a.strength === "standard" && !pays && !viaGateway && store.authMode !== "local" ? (
             <form
               className="totp"
               onSubmit={(e) => {
                 e.preventDefault();
-                void go("approve", true);
+                if (armed) void go("approve", true);
               }}
             >
               <label htmlFor={`totp-${uid}`}>{tr("TOTP code")}</label>
               <input id={`totp-${uid}`} inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={totp} onChange={(e) => setTotp(e.target.value.replace(/\D/g, ""))} autoComplete="one-time-code" />
-              <button type="submit" className="btn btn-brass" disabled={busy || totp.length !== 6}>
+              <button type="submit" className="btn btn-brass" disabled={busy || !armed || totp.length !== 6}>
                 {tr("Approve")}
               </button>
               <button type="button" className="btn" disabled={busy || totp.length !== 6} onClick={() => void go("reject", true)}>
@@ -660,11 +712,26 @@ export function ApprovalCard({ approvalId, rev, uid }: { approvalId: string; rev
         </>
       ) : (
         // A « to pay » card: the purchase block already says its state (one badge, not two).
-        pays ? null : <span className={`chip ${a.status === "executed" || a.status === "approved" ? "ok" : "ko"}`}>{approvalStatusLabel(a.status)}</span>
+        pays ? null : (
+          <>
+            <span className={`chip ${chipTone(a.status)}`}>{approvalStatusLabel(a.status)}</span>
+            {a.status === "interrupted" ? <span className="fine" role="note">{tr("Interrupted: the outcome is unknown, please check.")}</span> : null}
+          </>
+        )
       )}
       {err ? <span className="error" role="alert">{err}</span> : null}
     </div>
   );
+}
+
+/** Teinte de la pastille d'une carte décidée : exécutée/approuvée = ok ; en cours = neutre (ni échec ni succès) ; interrompue =
+ * à vérifier ; refusée, expirée, en échec = ko. Toujours accompagnée du libellé (jamais la couleur seule). */
+export function chipTone(status: string): "ok" | "running" | "warn" | "ko" {
+  if (status === "executed" || status === "approved") return "ok";
+  // « running », jamais « run » : `.run` est déjà la ligne d'une exécution (grille, marges) et écrasait la pastille.
+  if (status === "executing") return "running";
+  if (status === "interrupted") return "warn";
+  return "ko";
 }
 
 function handoffLabel(state: string): string {
@@ -926,8 +993,11 @@ export function BubbleBody({ b, readOnly }: { b: Bubble; readOnly: boolean }): R
       return <PackAgentsBody b={b} />;
     case "cast":
       return <CastBody b={b} readOnly={readOnly} />;
+    case "screen": return <ScreenBody b={b} readOnly={readOnly} />;
     case "pointer":
       return showMeEnabled() ? <PointerBody b={b} readOnly={readOnly} /> : <UnknownBody />;
+    case "browser":
+      return <BrowserBody state={b.state} readOnly={readOnly} />;
     case "brief":
       return (
         <div className="bubble-body brief">

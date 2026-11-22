@@ -31,3 +31,18 @@ describe("capacités du noyau", () => {
     expect(off("pay_agent")).toBe(true);
   });
 });
+
+describe("fonctions que le noyau ne liste pas encore (folder, accord) : jamais éteintes sur une absence", () => {
+  it("listedCapability : true/false seulement si la clé est listée, null sinon (la sonde d'avant reste)", async () => {
+    const { listedCapability, setCapabilities } = await import("../src/capabilities.js");
+    setCapabilities(null);
+    expect(listedCapability("folder")).toBeNull(); // capacités non lues
+    setCapabilities({ version: 1, mode: "lokkal", features: { local: true } });
+    expect(listedCapability("folder")).toBeNull(); // noyau d'avant : ne la connaît pas → sonder
+    expect(listedCapability("accord")).toBeNull();
+    setCapabilities({ version: 1, mode: "lokkal", features: { local: true, folder: true, accord: false } });
+    expect(listedCapability("folder")).toBe(true);
+    expect(listedCapability("accord")).toBe(false); // listé éteint : aucune sonde, aucun 404
+    setCapabilities(null);
+  });
+});

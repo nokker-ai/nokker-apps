@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { basename } from "node:path";
 import { Box, Text, useApp, useInput } from "ink";
+import { closeOpenSession, setSessionCloser } from "../closesession.js";
 import TextInput from "ink-text-input";
 import { BRAND } from "@nokker-apps/brand";
 import {
@@ -29,6 +30,7 @@ import {
   type LspDiagnosticsResult,
   parseToolJson,
   subagentParent,
+  isQuotaError,
 } from "@nokker-apps/sdk";
 import { connect, login } from "../auth.js";
 import { cliLog } from "../log.js";
@@ -37,6 +39,7 @@ import {
   notLocalMessage,
   findMemoryEntry,
   formatMemory,
+  formatMemoryStatus,
   formatMemoryView,
   formatSubagent,
   mergeSubagentViews,
@@ -60,15 +63,16 @@ import {
   type DiffLine,
   type SubagentState,
 } from "../localtools.js";
-import { applyToolEvent, type ToolLine } from "../toolview.js";
+import { applyToolEvent, setWorkspaceView, type ToolLine } from "../toolview.js";
 import { decisionSummary, resolveEffect } from "../approval-model.js";
 import { ringBell } from "../bell.js";
 import { helpText, parseSlashCommand } from "../commands.js";
 import { initPromptFor } from "../init.js";
 import { exportThread } from "../export.js";
 import { completeAtRef, expandAtRefs } from "../atrefs.js";
-import { t } from "../i18n/index.js";
+import { requestLanguage, t } from "../i18n/index.js";
 import { fileLastThreadStore } from "../lastthread.js";
+import { unifiedThreads, type ThreadRow } from "../threadlist.js";
 import { readLokkal } from "../lokkal.js";
 import { localPathFor, serverCwdFor, type WslContext } from "../wslcwd.js";
 import { hideGoalMarker, isControlTitle, loopThreadTitle, shownUserText } from "../controltext.js";
@@ -78,6 +82,7 @@ import { GOAL_MAX_AUTO_TURNS, formatGoal, goalStatusLine, newGoal, nextGoalStep,
 import { formatQueue, queueLine, clip, type QueuedPrompt, type TurnKind } from "../promptqueue.js";
 import { applyDiagnostics, formatDiagnosticsResult, formatDiagnosticsState, stateFromResult, type DiagnosticsState } from "../diagnostics.js";
 import { ConfirmCard, type ConfirmRequest } from "./ConfirmCard.js";
+import { choiceTitle, formatModels, headerModel, modelChoices, noModelSet, pickModel } from "../models.js";
 import { formatCostTotals, turnCostLine } from "../cost.js";
 import { Markdown } from "./Markdown.js";
 import { ToolCallView } from "./ToolCallView.js";
@@ -92,7 +97,7 @@ const CONTROL_OF: Record<TurnKind, CliControl | undefined> = { user: undefined, 
 type FeedItem =
   | { kind: "user"; id: string; text: string }
   | { kind: "assistant"; id: string; text: string }
-  | { kind: "system"; id: string; text: string }
+  | { kind: "system"; id: string; text: string; costTurn?: string }
   | { kind: "diff"; id: string; lines: DiffLine[]; omitted: number }
   | { kind: "tool"; id: string; call: ToolLine }
   | { kind: "sub"; id: string; childId: string; text: string }
@@ -127,6 +132,16 @@ export function App({
   const sendingRef = useRef(false);
   /** Un tour tourne sur le fil sans être le nôtre (suite d'une carte, autre client) : entre `turn.started` et `turn.done`. */
   const remoteTurnRef = useRef(false);
+  /** Tours lancés par NOS requêtes (turn_id du `turn.started` qui suit un envoi) : leur texte arrive par le flux direct de
+   * /v1/chat/completions. Tout autre tour du fil (suite d'une carte décidée, autre client) ne s'affiche que par `turn.delta`,
+   * même quand il démarre PENDANT notre requête (décision prise avant la fin de la réponse HTTP). */
+  const ownTurnsRef = useRef<Set<string>>(new Set());
+  /** Entre l'envoi et le `turn.started` de notre tour : on ne sait pas encore quel turn_id est le nôtre. */
+  const expectOwnRef = useRef(false);
+  /** Dernières réponses déjà rendues par le flux direct (dédoublonnage d'un `turn.delta` tardif du même texte). */
+  const streamedTextsRef = useRef<string[]>([]);
+  /** Ligne du fil affichée pour le `turn.delta` d'un tour (par turn_id) : un delta cumulatif la remplace. */
+  const deltaFeedIdsRef = useRef<Map<string, string>>(new Map());
   /** File de prompts côté client : envoyés un par un, à la fin du tour en cours. */
   const promptQueueRef = useRef<QueuedPrompt[]>([]);
   const [queueView, setQueueView] = useState<QueuedPrompt[]>([]);
@@ -161,11 +176,17 @@ export function App({
   const [folder, setFolder] = useState<string | null>(null);
   /** Mode de permission de la session locale (noyau du 01.11) ; `null` : fil ordinaire ou noyau sans la route. */
   const [permMode, setPermMode] = useState<SessionModeState | null>(null);
+  /** Modèle par défaut de la machine (`GET /v1/local/setup`, session locale) pour l'en-tête ; `null` : inconnu. */
+  const [machineModel, setMachineModel] = useState<string | null>(null);
+  const [noModel, setNoModel] = useState(false);
+  const noModelTold = useRef(false);
   const [localSessions, setLocalSessions] = useState<LocalSessionSummary[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [threads, setThreads] = useState<Thread[]>([]);
+  const [threads, setThreads] = useState<ThreadRow[]>([]);
   const [approvalsList, setApprovalsList] = useState<Approval[]>([]);
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
+  // Une carte tranchée reste dans l'historique (sa ligne « ✓ Approuvé ») : sa bulle ne suit pas le bas de l'écran.
+  const liveBubbles = bubbles.filter((b) => !(b.kind === "approval" && b.status !== "working"));
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [threadLabel, setThreadLabelState] = useState("…");
   /** Titre du fil courant, lu hors rendu (`/btw`). */
@@ -210,10 +231,42 @@ export function App({
   const summarizedRef = useRef<Set<string>>(new Set());
   const pendingDeviceRef = useRef<{ id: string; user: string } | null>(null);
   const inputRef = useRef("");
+  const prevInputRef = useRef("");
   const swallowRef = useRef(false);
   const lastToolRef = useRef<string | null>(null);
   /** `turn_id` du dernier `turn.cost` reçu pour ce fil (le `turn.done` qui suit ne réaffiche pas les jetons au pied). */
   const costTurnRef = useRef<string | null>(null);
+  /** Texte de réponse « en attente de ton approbation… » : les réponses du fil créées après l'arrivée d'une carte et avant
+   * sa décision (le tour s'arrête sur la carte) disparaissent une fois la carte tranchée. `assistSeq` numérote leur création. */
+  const assistSeqRef = useRef(0);
+  const assistSeqOfRef = useRef<Map<string, number>>(new Map());
+  const cardSeqRef = useRef<Map<string, number>>(new Map());
+  const turnStartSeqRef = useRef(0);
+  /** La ligne de jetons ferme le tour : une réponse qui naît après elle (fil ordinaire : le texte n'arrive qu'à la fin,
+   * après `turn.cost`) se range AVANT. Sans `turnId` (notre propre requête), la ligne de l'un de NOS tours posée depuis
+   * le dernier message tapé. */
+  function placeBeforeCost(f: FeedItem[], item: FeedItem, turnId?: string): FeedItem[] {
+    let from = 0;
+    if (!turnId) for (let i = f.length - 1; i >= 0; i--) if (f[i]!.kind === "user") { from = i; break; }
+    const at = f.findIndex((it, i) => i >= from && it.kind === "system" && it.costTurn !== undefined && (turnId ? it.costTurn === turnId : ownTurnsRef.current.has(it.costTurn)));
+    return at < 0 ? [...f, item] : [...f.slice(0, at), item, ...f.slice(at)];
+  }
+  function noteAssistant(id: string): void {
+    assistSeqOfRef.current.set(id, ++assistSeqRef.current);
+  }
+  /** Ids des réponses nées depuis l'arrivée de la carte `approvalId` (à retirer quand elle est tranchée). */
+  function waitingTextIds(approvalId: string): string[] {
+    const from = cardSeqRef.current.get(approvalId);
+    if (from === undefined) return [];
+    return [...assistSeqOfRef.current].filter(([, n]) => n > from).map(([id]) => id);
+  }
+  function dropWaitingText(approvalId: string, ids = waitingTextIds(approvalId)): void {
+    cardSeqRef.current.delete(approvalId);
+    if (!ids.length) return;
+    const gone = new Set(ids);
+    for (const id of ids) assistSeqOfRef.current.delete(id);
+    setFeed((f) => f.filter((it) => !(it.kind === "assistant" && gone.has(it.id))));
+  }
   /** Résolu à la première connexion `/v1/events` : un tour ne part pas avant (sinon ses premiers événements sont perdus). */
   const connectedRef = useRef<() => void>(() => {});
   // Créée UNE fois : l'argument de useRef est réévalué à chaque rendu, et chaque nouvelle promesse remplaçait le
@@ -233,8 +286,29 @@ export function App({
     return () => clearInterval(t);
   }, [bubbles]);
 
-  const localCardOpen = (pendingApproval !== null && pendingLocal) || confirm !== null;
+  const keyboardCardRef = useRef(false);
 
+  /** Sortie : ferme d'abord la session de code (≤ 1,5 s, erreurs ignorées), puis quitte — jamais bloquée. */
+  function quit(): void {
+    void closeOpenSession().finally(() => exit());
+  }
+  useEffect(() => {
+    setSessionCloser(async () => {
+      const session = sessionRef.current;
+      const client = clientRef.current;
+      if (!session || !client) return;
+      // Toutes les sessions de code ouvertes par ce processus, pas seulement celle du fil actif.
+      await Promise.allSettled([...session.openedCode].map((id) => client.closeLocalSession(id)));
+    });
+    return () => setSessionCloser(null);
+  }, []);
+
+  const localCardOpen = (pendingApproval !== null && pendingLocal) || confirm !== null;
+  // Une carte qui se décide au clavier (locale, ou standard : p / r / t / x) prend le clavier : le composeur ne reçoit
+  // plus rien, et rien de ce qui est tapé pour lui n'atteint la carte (anti-rebond de la carte, ApprovalCard.tsx).
+  const keyboardCard = localCardOpen || (pendingApproval !== null && pendingApproval.strength !== "strong");
+
+  keyboardCardRef.current = keyboardCard;
   useInput((_input, key) => {
     if (key.ctrl && _input === "c") {
       const a = pendingRef.current;
@@ -246,7 +320,13 @@ export function App({
         })();
         return;
       }
-      exit();
+      quit();
+      return;
+    }
+    // Ctrl+D sur une saisie vide (fin de fichier) : sortie, comme /quit.
+    // (Le champ de saisie a déjà inséré le « d » de Ctrl+D : saisie vide = vide avant cette touche.)
+    if (key.ctrl && _input === "d" && (inputRef.current === "" || (inputRef.current === "d" && prevInputRef.current === "")) && !keyboardCardRef.current) {
+      quit();
       return;
     }
     // Tab : complète le dernier `@chemin` de la saisie (dossier de la session de code).
@@ -414,11 +494,13 @@ export function App({
   // retraduisent en chemin Windows (wslcwd.ts). Ailleurs : identité.
   const wslCtxRef = useRef<WslContext>({ platform: process.platform, wslDistro: null });
   const localDir = (p: string): string => localPathFor(p, wslCtxRef.current);
+  // Réécriture d'affichage des chemins du bac à sable (toolview.ts) : propre à cette App, retirée à la sortie.
+  useEffect(() => () => setWorkspaceView(null), []);
 
   useEffect(() => {
     let sub: { close(): void } | undefined;
     (async () => {
-      const client = new NokkerClient({ baseUrl, userAgent: BRAND.userAgent });
+      const client = new NokkerClient({ baseUrl, userAgent: BRAND.userAgent, surface: "cli", language: () => requestLanguage() });
       clientRef.current = client;
       setStatus(t("connecting…"));
 
@@ -475,12 +557,14 @@ export function App({
         }
         const opened = await session.openLocal(target.cwd, fileLastThreadStore(baseUrl));
         setFolder(basename(target.cwd) || target.cwd);
+        setWorkspaceView(cwd, session.workspace); // montage du bac à sable (/workspace/… par défaut) affiché comme chemin du dossier local
         setThreadLabel(session.threadId);
         if (opened.messages.length) setFeed(feedFromMessages(opened.messages));
         const shown = target.kind === "same" ? cwd : `${target.cwd} (WSL ${wslCtxRef.current.wslDistro})`;
         pushSystem(opened.resumed ? t("Code session on {0} (resumed). /help for the commands.", shown) : t("Code session on {0} (new). /help for the commands.", shown));
         skillsRef.current = opened.skills;
         void refreshMode(session);
+        void refreshModel();
         void adoptPendingCard(session);
         if (typeof opened.skills === "object" && opened.skills.project === "untrusted") askTrust(opened.skills);
         else if (typeof opened.skills === "object" && opened.skills.project === "invalid" && opened.skills.notice) pushSystem(opened.skills.notice);
@@ -494,6 +578,13 @@ export function App({
           pushSystem(t("Folder outside the roots declared by the server: {0}. Plain thread opened instead.", target.cwd));
         } else if (err instanceof NokkerApiError && (err.status === 404 || err.status === 405)) {
           pushSystem(t("This server offers no local code session — plain thread."));
+        } else if (err instanceof NokkerApiError && (err.status === 503 || err.code === "sandbox_unavailable")) {
+          // Bac à sable refusé par le noyau (docker injoignable, plafond mémoire/CPU non appliqué) : son message est écrit
+          // pour la personne ({"error":{"code":"sandbox_unavailable","message"}}) ; sans corps, le statut seul.
+          const body = (err.body as { error?: { message?: unknown } } | undefined)?.error?.message;
+          const why = typeof body === "string" && body.trim() ? body.trim() : t("the sandbox is not available (HTTP {0})", String(err.status));
+          pushSystem(t("Code session refused: {0}", why));
+          pushSystem(t("This CLI stays in a plain thread: no code is run here."));
         } else {
           pushSystem(t("Local session impossible: {0} — plain thread.", String(err)));
         }
@@ -501,7 +592,7 @@ export function App({
       }
 
       try {
-        const initial = await session.listBubbles();
+        const initial = await session.reconcileBubbles(await session.listBubbles());
         setBubbles(initial.filter((b) => b.closed_at === null));
       } catch {
         // Fil tout neuf, pas encore connu du serveur — pas de bulle, ce n'est pas une erreur.
@@ -546,6 +637,8 @@ export function App({
   function handleEvent(event: NokkerEvent, session: CliSession): void {
     switch (event.type) {
       case "approval.requested":
+        // Pris tout de suite : la réponse du tour peut naître pendant la relecture de la carte (async) qui suit.
+        if (!cardSeqRef.current.has(event.approval.id)) cardSeqRef.current.set(event.approval.id, assistSeqRef.current);
         void onApprovalRequested(event.approval, session);
         return;
       case "approval.decided":
@@ -558,6 +651,7 @@ export function App({
         if (!summarizedRef.current.has(event.approval_id)) {
           pushSystem(t("Approval {0}: {1} by {2} ({3}).", event.approval_id, event.decision, event.by, event.via));
         }
+        dropWaitingText(event.approval_id);
         applyToolFeed(event); // l'appel qui attendait la carte : « exécution… », ou fermé s'il est refusé
         return;
       case "tool.input.delta":
@@ -616,6 +710,29 @@ export function App({
         // on ignore ici pour ne pas le doubler ; un autre fil/canal reste visible (multi-canal).
         // turn.delta est UNIQUE par tour côté noyau (réponse complète) : on l'affiche d'un bloc.
         // Le fil de /btw a son propre affichage (l'encadré) : pas de doublon.
+        if (event.thread_id === session.threadId) {
+          // Tour du NOYAU sur notre fil (suite d'une carte approuvée, LOKKAL.md §7.4.9 : la décision locale répond 202
+          // `continuation`, l'outil et le tour de suite passent par la file du fil) : aucune requête de notre part ne
+          // porte ce texte ; sans cet affichage, le modèle « ne reprenait pas » (répétition du 07.11). Distingué par
+          // turn_id, pas par `sendingRef` : la décision peut partir pendant notre requête, et la suite démarre alors avant
+          // la fin de la réponse HTTP (course vue sur une machine réelle).
+          const own = ownTurnsRef.current.has(event.turn_id) || (sendingRef.current && expectOwnRef.current);
+          if (!own && event.text && !streamedTextsRef.current.includes(event.text)) {
+            // Un `turn.delta` porte le texte CUMULÉ du tour (hub.py : un seul à la fin, réponse entière) : un 2e delta du
+            // même turn_id REMPLACE la ligne déjà affichée, il ne s'y ajoute pas.
+            const known = deltaFeedIdsRef.current.get(event.turn_id);
+            const text = hideGoalMarker(event.text);
+            if (known !== undefined) setFeed((f) => f.map((it) => (it.id === known && it.kind === "assistant" ? { ...it, text } : it)));
+            else {
+              const id = nextId();
+              deltaFeedIdsRef.current.set(event.turn_id, id);
+              noteAssistant(id);
+              // La ligne de jetons ferme le tour : une réponse qui arrive après elle se range AVANT.
+              setFeed((f) => placeBeforeCost(f, { kind: "assistant", id, text }, event.turn_id));
+            }
+          }
+          return;
+        }
         if (event.thread_id !== session.threadId && event.thread_id !== session.btwThreadId) pushSystem(t("[other thread {0}] {1}", event.thread_id, event.text));
         return;
       case "turn.cost":
@@ -623,11 +740,17 @@ export function App({
         if (event.thread_id === session.threadId) {
           costTurnRef.current = event.turn_id;
           const line = turnCostLine(event);
-          if (line) pushSystem(line);
+          if (line) setFeed((f) => [...f, { kind: "system", id: nextId(), text: line, costTurn: event.turn_id }]);
         }
         return;
       case "turn.started":
-        if (event.thread_id === session.threadId && !sendingRef.current) remoteTurnRef.current = true;
+        if (event.thread_id !== session.threadId) return;
+        if (sendingRef.current && expectOwnRef.current) {
+          // Premier `turn.started` après notre envoi : c'est le nôtre.
+          expectOwnRef.current = false;
+          ownTurnsRef.current.add(event.turn_id);
+          if (ownTurnsRef.current.size > 40) ownTurnsRef.current.delete(ownTurnsRef.current.values().next().value as string);
+        } else if (!ownTurnsRef.current.has(event.turn_id)) remoteTurnRef.current = true;
         return;
       case "session.mode":
         // Changé ici ou par un autre client (VS Code, autre terminal) : la barre d'état suit.
@@ -635,7 +758,7 @@ export function App({
         return;
       case "turn.done":
         if (event.thread_id === session.threadId) {
-          remoteTurnRef.current = false;
+          if (!ownTurnsRef.current.has(event.turn_id)) remoteTurnRef.current = false; // la fin du nôtre ne ferme pas un tour de suite
           setTimeout(drain, 0); // fin d'un tour qui n'était pas le nôtre ; pour le nôtre, la fin de la requête draine
           applyToolFeed(event); // replie les blocs d'écriture encore ouverts de ce tour
           // Noyau sans `turn.cost` : le pied de tour reste le seul affichage des jetons.
@@ -643,7 +766,12 @@ export function App({
           setLastUsage(hasCostLine ? null : event.usage);
           setLastCost(hasCostLine ? null : (event.cost_chf ?? null));
           if (event.cancelled) pushSystem(t("⏹ turn cancelled."));
-          else void adoptPendingCard(session);
+          else {
+            // Ligne d'état du noyau (repli sur le mode allégé…) : déjà dans la langue du tour, telle quelle, jamais une erreur.
+            if (typeof event.notice === "string" && event.notice.trim()) pushSystem(event.notice.trim());
+            if (isQuotaError(event.error)) pushSystem(t("Usage quota reached. Open your nokker.ai account to see your plan and your options: https://app.nokker.ai/account"));
+            else void adoptPendingCard(session);
+          }
         }
         return;
       case "thread.updated":
@@ -689,9 +817,12 @@ export function App({
    * et on la relit par GET /v1/local/approvals (`suggested_rules` calculées par le noyau, absentes de l'événement). */
   async function onApprovalRequested(approval: Approval, session: CliSession): Promise<void> {
     const mine = session.isLocalThread(approval.thread_id);
+    // Fil ordinaire (/thread, sans dossier) : la carte est quand même la NÔTRE ; si le noyau la liste parmi les cartes
+    // locales, elle se décide comme dans une session de code (une fois / toujours / refuser), sans appareil enrôlé.
+    const ours = approval.thread_id === session.threadId || approval.thread_id.startsWith(`${session.threadId}/sa-`);
     let card = approval;
     let local = mine;
-    if (session.cwd) {
+    if (session.cwd || ours) {
       try {
         const hit = (await session.listLocalApprovals()).find((a) => a.id === approval.id);
         if (hit) {
@@ -702,11 +833,13 @@ export function App({
         // noyau sans routes locales : on s'en tient au fil
       }
     }
-    if (local && !mine) return; // carte locale d'un autre dossier : pas la nôtre
+    if (local && !mine && !ours) return; // carte locale d'un autre dossier : pas la nôtre
     const effect = resolveEffect(card, toolLinesRef.current);
     if (effect !== card.effect) card = { ...card, effect };
     pendingRef.current = card;
     pendingLocalRef.current = local;
+    // Carte reprise après la fin du tour (pas d'événement) : le texte du tour qui vient de finir est « en attente ».
+    if (!cardSeqRef.current.has(card.id)) cardSeqRef.current.set(card.id, turnStartSeqRef.current);
     stopGoal(t("an approval card is waiting"));
     setPendingLocal(local);
     setPendingApproval(card);
@@ -719,7 +852,7 @@ export function App({
    * reprise, flux d'événements branché après le dépôt de la carte) : sans cela le tour reste bloqué « en attente
    * d'approbation » et aucune touche ne la décide. */
   async function adoptPendingCard(session: CliSession): Promise<void> {
-    if (!session.cwd || pendingRef.current) return;
+    if (pendingRef.current) return;
     try {
       const hit = (await session.listLocalApprovals()).find((a) => a.status === "pending" && (a.thread_id === session.threadId || a.thread_id.startsWith(`${session.threadId}/sa-`)));
       if (hit && !pendingRef.current) await onApprovalRequested(hit, session);
@@ -757,8 +890,8 @@ export function App({
     return bubbles.find((b) => b.title.toLowerCase().includes(n));
   }
 
-  function feedFromMessages(messages: { role: "user" | "assistant"; content: string }[]): FeedItem[] {
-    return messages.map((m) => ({ kind: m.role, id: nextId(), text: m.role === "assistant" ? hideGoalMarker(m.content) : shownUserText(m.content) }));
+  function feedFromMessages(messages: { role: "user" | "assistant"; content: string; origin?: string | null }[]): FeedItem[] {
+    return messages.map((m) => ({ kind: m.role, id: nextId(), text: m.role === "assistant" ? hideGoalMarker(m.content) : shownUserText(m.content, m.origin) }));
   }
 
   async function onSubmit(value: string): Promise<void> {
@@ -824,12 +957,14 @@ export function App({
     // Vérification /goal : le marqueur GOAL: DONE|CONTINUE est pour goal.ts, pas pour l'écran.
     const shownText = item.kind === "goalCheck" ? (s: string) => hideGoalMarker(s, true) : (s: string) => s;
     sendingRef.current = true;
+    expectOwnRef.current = true;
     stopRequestedRef.current = false;
     setFeed((f) => [...f, { kind: "user", id: nextId(), text: item.shown }]);
     setSending(true);
     let reply = "";
     let failed = false;
     await Promise.race([connectedPromise.current!, new Promise((r) => setTimeout(r, 3000))]);
+    turnStartSeqRef.current = assistSeqRef.current;
     const assistantId = nextId();
     let created = false;
     try {
@@ -840,7 +975,8 @@ export function App({
         if (!created) {
           if (!full) return;
           created = true;
-          setFeed((f) => [...f, { kind: "assistant", id: assistantId, text: shownText(full) }]);
+          noteAssistant(assistantId);
+          setFeed((f) => placeBeforeCost(f, { kind: "assistant", id: assistantId, text: shownText(full) }));
           return;
         }
         // `reset` sans texte (appel fini en outils, tour annulé : le noyau vide le texte partiel avant la réponse finale) :
@@ -859,6 +995,8 @@ export function App({
       pushSystem(t("Send error: {0}", String(err)));
     } finally {
       sendingRef.current = false;
+      expectOwnRef.current = false;
+      if (reply) streamedTextsRef.current = [...streamedTextsRef.current.slice(-19), reply];
       remoteTurnRef.current = false; // notre requête est close : le tour est fini, même si son `turn.done` s'est perdu
       setSending(false);
     }
@@ -874,7 +1012,7 @@ export function App({
         return;
 
       case "quit":
-        exit();
+        quit();
         return;
 
       case "help":
@@ -894,6 +1032,7 @@ export function App({
           setBubbles([]);
           diagRef.current = new Map();
           setFolder(null);
+          setWorkspaceView(null);
           setPermMode(null);
           setThreadLabel(thread.title);
           setLastUsage(null);
@@ -1025,6 +1164,12 @@ export function App({
         return;
       }
 
+      case "model": {
+        if (!session || !localOnly(session)) return;
+        await runModel(cmd.name);
+        return;
+      }
+
       case "diagnostics": {
         if (!session || !localOnly(session)) return;
         if (!cmd.path) {
@@ -1096,8 +1241,9 @@ export function App({
 
       case "threads": {
         if (!session) return;
-        const list = await session.listThreads();
-        setThreads(list);
+        // Fils du compte et sessions de code de la machine réunis (threadlist.ts) ; un serveur sans routes locales : [].
+        const [list, locals] = await Promise.all([session.listThreads(), session.listLocalSessions().catch(() => [] as LocalSessionSummary[])]);
+        setThreads(unifiedThreads(list, locals, new Date().toISOString()));
         setMode("threads");
         return;
       }
@@ -1176,7 +1322,7 @@ export function App({
       case "bubbles": {
         if (!session) return;
         try {
-          const list = await session.listBubbles();
+          const list = await session.reconcileBubbles(await session.listBubbles());
           setBubbles(list.filter((b) => b.closed_at === null));
         } catch (err) {
           pushSystem(t("Error {0}: {1}", "/bubbles", String(err)));
@@ -1314,6 +1460,53 @@ export function App({
       pushSystem(toolCallError(name, err));
       return null;
     }
+  }
+
+  /** Modèle par défaut de la machine pour l'en-tête ; silencieux en cas d'erreur (l'en-tête garde « routage auto »). */
+  async function refreshModel(): Promise<void> {
+    const client = clientRef.current;
+    if (!client) return;
+    const setup = await client.getLocalSetup().catch(() => null);
+    if (setup) {
+      setMachineModel(headerModel(setup));
+      const none = noModelSet(setup);
+      setNoModel(none);
+      // Premier lancement : le dire dès l'ouverture, avec où le régler (une seule fois par processus).
+      if (none && !noModelTold.current) {
+        noModelTold.current = true;
+        const lk = readLokkal();
+        pushSystem(lk.status === "ok" ? t("Set a model: open {0}", `${lk.config.web_url.replace(/\/+$/, "")}/setup`) : t("Set a model in the web app (Settings → Models)."));
+      }
+    }
+  }
+
+  /** `/model` : liste les modèles de la machine ; `/model <nom>` : carte de confirmation, puis défaut de la MACHINE.
+   * Le noyau n'offre aucun choix par session ni par fil (models.ts). Seul `{default}` est envoyé, jamais `byok`, qui
+   * remplacerait la liste des entrées. */
+  async function runModel(name: string | null): Promise<void> {
+    const client = clientRef.current;
+    if (!client) return;
+    let setup;
+    try {
+      setup = await client.getLocalSetup();
+    } catch (err) {
+      if (err instanceof NokkerApiError && [401, 403, 404, 405].includes(err.status)) pushSystem(t("/model: not available on this server (local core only)."));
+      else pushSystem(toolCallError("/model", err));
+      return;
+    }
+    setMachineModel(headerModel(setup));
+    setNoModel(noModelSet(setup));
+    if (!name) {
+      pushSystem(formatModels(setup));
+      return;
+    }
+    const pick = pickModel(setup, name);
+    if (pick.kind === "none") return pushSystem(t("/model: no model named {0} — /model lists them.", pick.query));
+    if (pick.kind === "ambiguous") return pushSystem(t("/model: {0} matches several models ({1}) — type the full name.", pick.query, pick.ids.join(", ")));
+    if (pick.kind === "unusable") return pushSystem(t("/model: {0} cannot be used ({1}).", pick.choice.id, pick.choice.why ?? ""));
+    if (pick.choice.isDefault) return pushSystem(t("{0} is already the default model of this machine.", choiceTitle(pick.choice)));
+    const cur = modelChoices(setup).find((c) => c.isDefault);
+    openConfirm({ kind: "model", id: pick.choice.id, title: choiceTitle(pick.choice), current: cur ? choiceTitle(cur) : setup.default });
   }
 
   /** Lit le mode de la session locale (barre d'état) ; silencieux si le noyau ne le donne pas ou en cas d'erreur. */
@@ -1601,7 +1794,9 @@ export function App({
 
   async function runMemory(session: CliSession, action: "list" | "view" | "forget", name: string | null): Promise<void> {
     if (action === "list") {
-      const [list, status] = await Promise.all([memoryList(session), session.memoryStatus()]);
+      // Le compte indexé se lit APRÈS la liste (l'appel d'outil recale l'index du noyau) : pas en parallèle.
+      const list = await memoryList(session);
+      const status = await session.memoryStatus();
       if (list) pushSystem(formatMemory(list, status));
       return;
     }
@@ -1632,8 +1827,12 @@ export function App({
 
   function forgetDone(content: string, isError: boolean, title: string): void {
     const out = isError ? null : parseToolJson<{ forgotten: string }>(content);
-    if (out?.forgotten) pushSystem(t("✓ Forgotten: {0} ({1}).", title, out.forgotten));
-    else pushSystem(t("✗ Not forgotten: {0}", content));
+    if (out?.forgotten) {
+      pushSystem(t("✓ Forgotten: {0} ({1}).", title, out.forgotten));
+      // L'état de la mémoire longue se relit APRÈS l'oubli (aucune valeur gardée d'avant).
+      const session = sessionRef.current;
+      if (session) void session.memoryStatus().then((st) => { const l = formatMemoryStatus(st); if (l) pushSystem(l); });
+    } else pushSystem(t("✗ Not forgotten: {0}", content));
   }
 
   // -- Cartes de confirmation (oubli, confiance aux skills du dépôt) ---------------------------------------
@@ -1664,12 +1863,26 @@ export function App({
     if (!req || !session) return;
     if (!yes) {
       closeConfirm();
-      pushSystem(req.kind === "forget" ? t("Kept: {0}.", req.title) : t("Repository skills left untrusted (ignored). /skills trust to decide later."));
+      pushSystem(
+        req.kind === "forget"
+          ? t("Kept: {0}.", req.title)
+          : req.kind === "model"
+            ? t("Default model kept: {0}.", req.current ?? t("nothing"))
+            : t("Repository skills left untrusted (ignored). /skills trust to decide later."),
+      );
       return;
     }
     setConfirmBusy(true);
     try {
-      if (req.kind === "forget") {
+      if (req.kind === "model") {
+        const client = clientRef.current;
+        if (!client) return;
+        // `default` SEUL : `byok` remplacerait la liste stockée (une entrée absente disparaît avec sa clé).
+        const setup = await client.putLocalModels({ default: req.id });
+        closeConfirm();
+        setMachineModel(headerModel(setup));
+        pushSystem(t("✓ Default model of this machine: {0}.", req.title));
+      } else if (req.kind === "forget") {
         const r = await session.callTool("memory", { action: "forget", name: req.name });
         closeConfirm();
         // Mode `default` : l'oubli (WRITE) passe par une carte ; son résultat arrive par le tool.result de la carte.
@@ -1682,7 +1895,7 @@ export function App({
         pushSystem(t("✓ Repository skills trusted ({0}, fingerprint {1}…). /skills to list them.", r.root, r.sha256.slice(0, 12)));
       }
     } catch (err) {
-      if (err instanceof NokkerApiError && err.status === 409) {
+      if (err instanceof NokkerApiError && err.status === 409 && req.kind === "trust") {
         // Empreinte périmée : l'arbre a changé ; le noyau publie un nouveau `skill.untrusted` (nouvelle carte).
         closeConfirm();
         pushSystem(t("The skills changed since they were read: review them again (/skills trust)."));
@@ -1702,10 +1915,12 @@ export function App({
       const view = await session.switchThread(target.id);
       diagRef.current = new Map();
       setFeed(feedFromMessages(view.messages));
-      setBubbles(view.bubbles.filter((b) => b.closed_at === null));
+      setBubbles((await session.reconcileBubbles(view.bubbles)).filter((b) => b.closed_at === null));
       const ls = (await session.listLocalSessions().catch(() => [] as LocalSessionSummary[])).find((l) => l.thread_id === view.thread.id);
       session.cwd = ls?.cwd ?? null;
+      session.workspace = ls?.workspace;
       setFolder(ls ? basename(ls.cwd) : null);
+      setWorkspaceView(ls ? localDir(ls.cwd) : null, ls?.workspace);
       setPermMode(null);
       if (ls) void refreshMode(session);
       setThreadLabel(view.thread.title || view.thread.id);
@@ -1723,7 +1938,7 @@ export function App({
 
   return (
     <Box flexDirection="column">
-      <Header threadLabel={threadLabel} folder={folder} status={status} goal={goalView ? goalStatusLine(goalView) : null} loops={loopsStatusLine(loopsView)} permMode={modeStatus(permMode)} />
+      <Header threadLabel={threadLabel} folder={folder} status={status} goal={goalView ? goalStatusLine(goalView) : null} loops={loopsStatusLine(loopsView)} permMode={modeStatus(permMode)} model={machineModel} noModel={noModel} />
 
       {mode === "threads" ? (
         <Box flexDirection="column" borderStyle="single" paddingX={1}>
@@ -1732,7 +1947,10 @@ export function App({
           {threads.map((th) => (
             <Text key={th.id}>
               {th.working ? "● " : "○ "}
-              {th.id} — {th.title} ({t("{0} bubble(s)", th.bubble_count)})
+              {th.id === sessionRef.current?.threadId ? "› " : ""}
+              {th.id} — {th.title}
+              {th.folder ? ` · ${t("code: {0}", th.folder)}` : ""} ({t("{0} bubble(s)", th.bubbles)})
+              {th.pendingApprovals ? ` · ${t("{0} card(s) pending", th.pendingApprovals)}` : ""}
             </Text>
           ))}
           <Text dimColor>{t("/sessions <query> or /goto <query> to switch · /thread [title] to start over")}</Text>
@@ -1815,9 +2033,9 @@ export function App({
         </Box>
       ) : null}
 
-      {mode === "chat" && bubbles.length > 0 ? (
+      {mode === "chat" && liveBubbles.length > 0 ? (
         <Box flexDirection="column" marginTop={1}>
-          {bubbles.map((b) => (
+          {liveBubbles.map((b) => (
             <BubbleLine key={b.id} bubble={b} spinnerFrame={spinnerFrame} />
           ))}
         </Box>
@@ -1851,7 +2069,7 @@ export function App({
         <TextInput
           key={inputEpoch}
           value={input}
-          focus={!localCardOpen}
+          focus={!keyboardCard}
           onChange={(v) => {
             if (swallowRef.current && v === "o") return;
             // Un terminal (ou un pilote de pty) peut livrer « /sessions\r » d'un seul bloc : Ink le traite alors comme du
@@ -1864,6 +2082,7 @@ export function App({
               void onSubmit(v.slice(0, nl));
               return;
             }
+            prevInputRef.current = inputRef.current;
             inputRef.current = v;
             setInput(v);
           }}
@@ -1880,8 +2099,10 @@ export function App({
     summarizedRef.current.add(a.id);
     setApprovalBusy(true);
     setApprovalMessage(null);
+    const waiting = waitingTextIds(a.id); // vus AVANT la décision : la suite du tour arrive après
     try {
       const r = await session.decideLocal(a.id, decision, scope, rule);
+      dropWaitingText(a.id, waiting);
       const queued = r.continuation === "queued" ? t(" — queued, after the turn in progress") : "";
       pushSystem(`${decisionSummary(a, decision === "approve" ? "approved" : "rejected", scope, rule)}${queued}`);
       pendingRef.current = null;
@@ -1902,6 +2123,7 @@ export function App({
     const session = sessionRef.current;
     if (!a || !session) return;
     summarizedRef.current.add(a.id);
+    dropWaitingText(a.id);
     pushSystem(decisionSummary(a, "expired"));
     pendingRef.current = null;
     pendingLocalRef.current = false;

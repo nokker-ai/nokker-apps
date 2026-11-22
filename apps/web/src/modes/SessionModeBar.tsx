@@ -48,6 +48,7 @@ export function SessionModeBar({
   onSend,
   toast,
   compact = false,
+  working = false,
 }: {
   client: NokkerClient;
   target: ModeTarget;
@@ -56,6 +57,8 @@ export function SessionModeBar({
   toast: (text: string, tone?: "ok" | "error") => void;
   /** Phone: the plan starts folded so that the chat keeps the height. */
   compact?: boolean;
+  /** A turn is running on this thread: the plan cannot be applied yet (the core answers 409 to a second turn). */
+  working?: boolean;
 }): React.ReactElement | null {
   const lang = shellLang();
   // `target` is a new object at each render of the shell: depend on its fields, not on it.
@@ -158,7 +161,7 @@ export function SessionModeBar({
           </button>
         ) : null}
         {canApply ? (
-          <button type="button" className="btn btn-brass mode-apply" disabled={busy} onClick={() => void applyPlan()}>
+          <button type="button" className="btn btn-brass mode-apply" disabled={busy || working} title={working ? tr("Wait for the reply to finish, then apply the plan.") : undefined} onClick={() => void applyPlan()}>
             {tr("Apply the plan")}
           </button>
         ) : null}

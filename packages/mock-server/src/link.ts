@@ -10,6 +10,7 @@
  */
 import { randomBytes } from "node:crypto";
 import type { Agent, ApprovalSummary } from "@nokker-apps/sdk";
+import { phoneMachines } from "./phone.js";
 import type { MockState } from "./state.js";
 
 type Send = (status: number, payload: unknown, headers?: Record<string, string>) => void;
@@ -29,6 +30,7 @@ interface MockMachine {
   createdAt: number;
   lastSeenAt: number | null;
   revoked: boolean;
+  mirror?: boolean;
 }
 interface MockRemoteApproval {
   machineId: string;
@@ -101,6 +103,19 @@ export async function handleLinkDev(
   if (b.linked === true) {
     const seen = typeof b.last_seen_s === "number" ? now() - b.last_seen_s : null;
     const mc = addMachine(m, name, null, seen);
+    // Liste unique : `host` (machine de recette servie par un second mock, `127.0.0.1:<port>`), `mirror` (fils en miroir).
+    if (typeof b.host === "string" && b.host) mc.host = b.host;
+    if (b.mirror === true) {
+      mc.mirror = true;
+      // Copies en miroir chez nokker.ai (§6.3) : `lokkal-<machine>-<fil>`, en lecture seule, avec un tour chacune.
+      for (const [suffix, title] of [["site", "site"], ["factures", "Factures"]] as const) {
+        const id = `lokkal-${mc.id}-th_${mc.id}_${suffix}`;
+        if (!state.threads.has(id)) {
+          state.createThread(`${title} (${name})`, { id });
+          state.appendTurn(id, `Où en est ${title} ?`, `${title} : copie du miroir de ${name}.`, { silent: true });
+        }
+      }
+    }
     // `approval: true` : une carte forte en attente sur cette machine (page `/approve/<machine>/<approbation>`).
     // `approval_kind: "mail"` : carte d'un connecteur relayé, résumé rendu par nokker.ai (X20c) ; sinon carte locale.
     if (b.approval === true) {
@@ -180,7 +195,7 @@ export async function handleLink(
   if (method === "GET" && url.pathname === "/v1/link/machines") {
     const list = [...m.machines.values()].filter((mc) => visible(mc, user));
     return send(200, {
-      machines: list.map((mc) => ({ machine_id: mc.id, name: mc.name, host: mc.host, created_at: mc.createdAt, last_seen_at: mc.lastSeenAt })),
+      machines: [...list.map((mc) => ({ machine_id: mc.id, name: mc.name, kind: "lokkal", host: mc.host, created_at: mc.createdAt, last_seen_at: mc.lastSeenAt })), ...phoneMachines(state, user)],
     }), true;
   }
   const ap = /^\/v1\/link\/machines\/([^/]+)\/approvals\/([^/]+)(\/decision)?$/.exec(url.pathname);
@@ -230,10 +245,21 @@ export async function handleLink(
     });
     const agents = [...state.agents.values()];
     const online = (mc: MockMachine) => mc.lastSeenAt !== null && nowS - mc.lastSeenAt < 180;
+    // Deck v2 (docs/APP-CORE-CONTRACTS.md C5) : fils récents de chaque machine, titres sous la règle du miroir.
+    const deckThreads = (mc: MockMachine, i: number) =>
+      [
+        { thread_id: `th_${mc.id}_site`, state: i === 0 ? "working" : "idle", updated_at: new Date((nowS - 600) * 1000).toISOString(), channel: "code", title: "site" },
+        { thread_id: `th_${mc.id}_factures`, state: "idle", updated_at: new Date((nowS - 7200) * 1000).toISOString(), channel: "api", title: "Factures" },
+      ]
+        .map((t) => ({ ...t, title: mc.mirror ? t.title : null }))
+        // MOCK_DECK_ODD=1 : un deck « inattendu » sur chaque machine (dates en secondes, une date absente), comme la
+        // panne de prod 47.1 — la liste ne doit pas tomber.
+        .map((t, j) => (process.env.MOCK_DECK_ODD === "1" ? { ...t, updated_at: (j === 0 ? nowS - 300 : null) as unknown as string } : t));
     return send(200, {
+      v: 2,
       at: nowS,
       machines: machines.map((mc, i) => ({
-        machine_id: mc.id, name: mc.name, host: mc.host, online: online(mc),
+        machine_id: mc.id, name: mc.name, host: mc.host, online: online(mc), mirror: mc.mirror === true, threads: deckThreads(mc, i),
         load_age_s: mc.lastSeenAt === null ? null : nowS - mc.lastSeenAt,
         load: online(mc)
           ? { ram: { total_mb: 32768, free_mb: i === 0 ? 9100 : 21400 }, cpu: { count: 16, load1: i === 0 ? 7.2 : 1.1, rel: i === 0 ? 0.45 : 0.07 }, gpus: i === 0 ? [{ name: "Demo GPU", memory_total_mb: 24576, memory_free_mb: 20000, util_pct: 12 }] : [], sessions: 2, active_turns: i === 0 ? 1 : 0 }
@@ -249,6 +275,13 @@ export async function handleLink(
       web: { engine: true, agents: agents.filter((a) => !a.placement || a.placement.machine === "web").map(deckAgent) },
       auto: { agents: agents.filter((a) => a.placement?.machine === "auto").map(deckAgent) },
     }), true;
+  }
+  // Jeton d'accès à la passerelle d'une machine, sans code (session du compte, LOKKAL §7.3) : 900 s.
+  if (method === "POST" && url.pathname === "/v1/gateway/token") {
+    const b = await readBody();
+    const mc = [...m.machines.values()].find((x) => x.host === b.host && visible(x, user));
+    if (!mc) return send(404, { error: { code: "unknown_host", message: "machine inconnue" } }), true;
+    return send(200, { access_token: process.env.MOCK_GATEWAY_TOKEN || `gw_demo_${mc.id}`, expires_in: 900 }), true;
   }
   const rv = method === "POST" ? /^\/v1\/link\/machines\/([^/]+)\/revoke$/.exec(url.pathname) : null;
   if (rv) {

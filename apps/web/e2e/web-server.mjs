@@ -16,7 +16,7 @@ let built = process.env.E2E_PREVIEW_PREBUILT === "1";
 /** Arguments de `npx` pour lancer le web (après le build si besoin). */
 export function webCommand() {
   if (PREVIEW_MODE && !built) {
-    const b = spawnSync("npx", ["vite", "build"], { cwd: WEB, stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, VITE_NOKKER_SHOW_ME: process.env.VITE_NOKKER_SHOW_ME ?? "1", VITE_NOKKER_GUIDE: process.env.VITE_NOKKER_GUIDE ?? "1" } });
+    const b = spawnSync("npx", ["vite", "build"], { cwd: WEB, stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, VITE_NOKKER_SHOW_ME: process.env.VITE_NOKKER_SHOW_ME ?? "1", VITE_NOKKER_GUIDE: process.env.VITE_NOKKER_GUIDE ?? "1", VITE_NOKKER_KIOSK: process.env.VITE_NOKKER_KIOSK ?? "1" } });
     if (b.status !== 0) throw new Error("vite build failed");
     built = true;
   }

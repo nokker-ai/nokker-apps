@@ -5,3 +5,23 @@ This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
 Third-party dependencies bundled in the builds keep their own licenses (MIT, ISC, Apache-2.0, BSD-3-Clause,
 CC-BY-4.0, CC0-1.0); see each package's license in node_modules.
+
+Fonts shipped in packages/brand/assets/fonts (Cinzel, IBM Plex Sans, IBM Plex Mono, files from @fontsource 5.3.0)
+are licensed under the SIL Open Font License 1.1; their license texts are next to them (LICENSE-*.txt).
+
+The web interface bundles Paper Shaders (@paper-design/shaders 0.0.82, Apache-2.0), loaded on demand for the
+wall screen background. Its NOTICE reads:
+  Paper Shaders
+  Copyright 2026 Paper
+  Powered by Paper Shaders: https://shaders.paper.design
+The web interface's 3D talking avatar (apps/web/src/avatar) is rendered with TalkingHead 1.7.0
+(@met4citizen/talkinghead, Copyright (c) 2023-2024 its author, MIT License) and three.js 0.180.0 (three, Copyright
+(c) 2010-2025 three.js authors, MIT License); both are loaded on demand, only when an avatar is shown. Their license
+texts are in node_modules/@met4citizen/talkinghead/LICENSE and node_modules/three/LICENSE.
+
+The web interface can measure text without the DOM with Pretext 1.0.0 (@chenglou/pretext, Copyright (c) 2026 Pretext
+contributors, MIT License), loaded on demand behind a flag; its license text is in node_modules/@chenglou/pretext/LICENSE.
+
+The default talking avatar, Nina (apps/web/public/avatars/nina-v1/ and nina-v1.webp), is an illustration owned by
+Ninabot Sàrl, all rights reserved; it is excluded from the Apache License of this repository (see
+apps/web/public/avatars/LICENSE.md).

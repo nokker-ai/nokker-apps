@@ -23,6 +23,8 @@ export interface RequestInitLike {
   headers?: Record<string, string>;
   signal?: AbortSignal;
   body?: string;
+  /** Navigateur : la requête survit à la fermeture de la page (corps < 64 Ko). Ignoré ailleurs. */
+  keepalive?: boolean;
   /** Bun : `false` désactive le délai d'inactivité de fetch (5 min par défaut) — indispensable pour un flux SSE ou un tour
    * qui attend une approbation. Ignoré par les autres implémentations. */
   timeout?: false;

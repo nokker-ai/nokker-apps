@@ -49,9 +49,10 @@ describe("éditions lues dans un tool.call", () => {
 
 describe("choix d'une carte (partagés CLI / VS Code / ACP)", () => {
   const base = { tool_name: "terminal", arguments: { command: "pytest -q" }, strength: "standard" as const, suggested_rules: ["terminal(pytest -q)", "terminal(pytest -q*)"] };
-  it("commande de test : « Pour cette session » d'abord ; règles exactes", () => {
+  it("commande de test : « Une fois » d'abord, comme partout ; règles exactes", () => {
     const c = localChoices(base);
-    expect(c.map((x) => x.id)).toEqual(["session", "once", "always", "always", "reject"]);
+    expect(c.map((x) => x.id)).toEqual(["once", "session", "always", "always", "reject"]);
+    expect(localChoices(base, { sessionFirstForTests: true }).map((x) => x.id)).toEqual(["session", "once", "always", "always", "reject"]);
     expect(c[2]!.rule).toBe("terminal(pytest -q)");
   });
   it("« Pour cette session » porte la règle exacte (le noyau répond 400 sans règle hors « une fois »)", () => {
@@ -63,8 +64,8 @@ describe("choix d'une carte (partagés CLI / VS Code / ACP)", () => {
   it("libellés d'après suggested_rule_kinds (noyau du 01.11) ; sans eux, libellés d'avant", () => {
     const term = localChoices({ ...base, suggested_rule_kinds: ["exact", "prefix"] });
     expect(term.map((x) => [x.key, x.label, x.ruleKind])).toEqual([
-      ["1", "Cette commande exacte pour cette session", "exact"],
-      ["2", "Une fois", undefined],
+      ["1", "Une fois", undefined],
+      ["2", "Cette commande exacte pour cette session", "exact"],
       ["3", "Toujours cette commande exacte", "exact"],
       ["3b", "Toujours les commandes qui commencent par « pytest -q »", "prefix"],
       ["4", "Refuser", undefined],

@@ -8,8 +8,12 @@
  * événements `turn.*` historiques gardent leur forme camelCase tant que le noyau n'a pas tranché
  * (voir le rapport du chantier feat/bubbles) ; tout ce qui est nouveau suit BUBBLES.md.
  */
+import type { PhoneFetched, PhoneFetchOffer } from "./egress.js";
+import type { RedactionMeta } from "./redact.js";
 import type { PackAgentsState } from "./packs.js";
 import type { BriefState, PlanSplitState } from "./ops.js";
+import type { BrowserBubbleState } from "./browser-live.js";
+import type { ScreenState } from "./screens.js";
 
 // ---------------------------------------------------------------------------
 // §1 — Fil (« session » dans l'UI), permanent
@@ -52,10 +56,39 @@ export interface ThreadMessage {
   /** Absent côté noyau (P1) ; le mock le pose. */
   created_at?: string;
   /** LOKKAL §7.6 (X7) : images jointes au message user ; octets par `GET /v1/threads/{id}/images/{sha256}`. */
-  images?: { sha256: string; media_type: string; size: number; name?: string | null }[];
+  images?: {
+    sha256: string;
+    media_type: string;
+    size: number;
+    name?: string | null;
+    /** Absent ou `"user"` : pièce jointe de la personne. `"tool:read_file"` (r44) : image lue par Nina pendant le tour,
+     * à montrer côté outil, JAMAIS comme envoyée par la personne. */
+    origin?: "user" | "tool:read_file" | (string & {});
+  }[];
+  /** Pièces texte du message de la personne (P9) ; le texte se relit par `GET /v1/threads/{id}/attachments/{att_id}`. */
+  attachments?: { id: string; kind: "text"; source: "device_ocr" | "device_stt" | "device_dictation"; name: string; chars: number }[];
   /** `"approval"` : message user du tour qui suit une décision (bloc `[Approbation]` écrit par le noyau pour le
    * modèle, APPROVALS §2). Absent pour un message de la personne et pour les tours d'avant le champ. */
-  origin?: "approval" | (string & {});
+  origin?: "approval" | "phone_fetch" | "phone_continue" | (string & {});
+  /** P11 : réponse dont un `web_fetch` a été refusé (403, 451, CAPTCHA, blocage) alors que la personne a un téléphone
+   * dont `egress` est allumé : bouton « Ouvrir par mon téléphone » (geste → `POST /v1/threads/{id}/phone-fetch`). */
+  phone_fetch_offers?: PhoneFetchOffer[];
+  /** P11 : pages ouvertes par le téléphone pendant ce tour (« page ouverte par ton téléphone (hôte) »). */
+  phone_fetched?: PhoneFetched[];
+  /** P7b : tâches du téléphone qui ont dépassé les 20 s du tour (bulle `phone_task`) ; l'état se relit avec le fil. La
+   * suite arrive dans un tour du noyau (message user `origin: "phone_continue"`, jamais affiché comme la personne). */
+  phone_tasks?: PhoneTaskNote[];
+  /** P9b : message de la personne masqué sur son appareil (compteurs par code, jamais de valeur). */
+  redaction?: RedactionMeta;
+}
+
+/** P7b (`nokker/cloud/phone_tools.py::PhoneFollow.message_fields`). */
+export interface PhoneTaskNote {
+  task_id: string;
+  op: "zone.state" | "ocr.image" | "calendar.list" | "stt.audio" | (string & {});
+  machine_id: string;
+  name: string;
+  status: "pending" | "done" | "failed" | "expired" | "cancelled";
 }
 
 export interface ThreadView {
@@ -93,7 +126,7 @@ export interface SessionMessageResult {
 // §2 — Bulle
 // ---------------------------------------------------------------------------
 
-export const BUBBLE_KINDS = ["monitor", "search", "notify", "timer", "script", "media", "artifact", "agent_draft", "approval", "handoff", "plan_split", "brief", "pack_agents", "cast", "pointer"] as const;
+export const BUBBLE_KINDS = ["monitor", "search", "notify", "timer", "script", "media", "artifact", "agent_draft", "approval", "handoff", "plan_split", "brief", "pack_agents", "cast", "pointer", "browser", "screen"] as const;
 export type BubbleKind = (typeof BUBBLE_KINDS)[number];
 
 export const BUBBLE_STATUSES = ["idle", "working", "done", "failed"] as const;
@@ -298,6 +331,8 @@ export interface BubbleStateByKind {
   brief: BriefState;
   cast: CastState;
   pointer: PointerState;
+  browser: BrowserBubbleState;
+  screen: ScreenState;
 }
 
 /**

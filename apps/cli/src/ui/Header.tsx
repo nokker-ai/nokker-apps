@@ -18,6 +18,8 @@ export function Header({
   goal = null,
   loops = null,
   permMode = null,
+  model = null,
+  noModel = false,
 }: {
   threadLabel: string;
   /** Nom du dossier de la session locale (`null` = fil ordinaire). */
@@ -29,6 +31,10 @@ export function Header({
   loops?: string | null;
   /** Mode de permission de la session (`modeStatus`), mis à jour par `session.mode`. */
   permMode?: string | null;
+  /** Modèle par défaut de la machine (`/v1/local/setup`, session locale) ; `null` : inconnu → « routage auto ». */
+  model?: string | null;
+  /** Aucun modèle réglé sur la machine (réglage lu) : l'en-tête le dit au lieu de « routage auto ». */
+  noModel?: boolean;
 }): React.ReactElement {
   return (
     <Box flexDirection="column">
@@ -38,7 +44,7 @@ export function Header({
           {BRAND.productName}
         </Text>
         {folder ? <Text bold> {folder}</Text> : null}
-        <Text dimColor> — {t("thread {0} · model: auto routing", shortLabel(threadLabel))}</Text>
+        <Text dimColor> — {model ? t("thread {0} · model: {1}", shortLabel(threadLabel), model) : noModel ? t("thread {0} · no model set", shortLabel(threadLabel)) : t("thread {0} · model: auto routing", shortLabel(threadLabel))}</Text>
       </Box>
       <Text dimColor>
         {t("status: {0}", status)}

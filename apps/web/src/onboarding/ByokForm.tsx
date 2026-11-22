@@ -7,9 +7,9 @@ import React, { useRef, useState } from "react";
 import type { LocalModelTestRequest, LocalModelTestResult } from "@nokker-apps/sdk";
 import { localErrorKey, testErrorKind } from "./errors.js";
 import { t, type Key, type Lang } from "./i18n.js";
-import { byokName, validApiUrl, type ByokEntry } from "./localFlow.js";
+import { byokName, validApiUrl, validByokName, type ByokEntry } from "./localFlow.js";
 
-export type ByokListItem = Pick<ByokEntry, "name" | "base_url" | "model" | "hasKey">;
+export type ByokListItem = Pick<ByokEntry, "name" | "base_url" | "model" | "hasKey"> & Partial<Pick<ByokEntry, "pending">>;
 
 /** `https://` seulement (nokker.ai : l'inférence du client part du nuage, jamais en clair). */
 export function httpsApiUrl(baseUrl: string): boolean {
@@ -72,9 +72,14 @@ export function ByokForm(props: {
   const add = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!tested) return;
-    const model = String(new FormData(e.currentTarget).get("model") ?? "").trim();
+    const data = new FormData(e.currentTarget);
+    const model = String(data.get("model") ?? "").trim();
     if (!model) return;
-    props.onAdd(byokName(tested.baseUrl), tested.baseUrl, model, testedKey.current);
+    // Le nom (celui de la clé au coffre) vient de l'hôte mais reste modifiable avant « Ajouter ».
+    const name = String(data.get("name") ?? "").trim().toLowerCase() || byokName(tested.baseUrl);
+    if (!validByokName(name)) return void setError(t(L, "lkByokNameInvalid"));
+    setError(undefined);
+    props.onAdd(name, tested.baseUrl, model, testedKey.current);
     testedKey.current = "";
     setTested(null);
     setInfo(undefined);
@@ -91,7 +96,7 @@ export function ByokForm(props: {
       {ready.map((b) => (
         <p key={b.name} className="ob-account lk-byok-ok">
           <span className="mono">{b.name}</span>
-          <span className="ob-muted"> · <span className="mono">{b.model}</span> · {t(L, b.hasKey ? "lkByokKeyStored" : "lkByokNoKey")} </span>
+          <span className="ob-muted"> · <span className="mono">{b.model}</span> · {t(L, b.pending ? "lkByokPending" : b.hasKey ? "lkByokKeyStored" : "lkByokNoKey")} </span>
           <button type="button" className="ob-btn link" onClick={() => props.onRemove(b.name)}>{t(L, "lkByokRemove")}</button>
         </p>
       ))}
@@ -115,7 +120,12 @@ export function ByokForm(props: {
         </form>
       )}
       {tested && props.canAdd !== false && (
-        <form className="ob-form lk-byok-model" onSubmit={add} autoComplete="off">
+        <form className="ob-form lk-byok-model" onSubmit={add} autoComplete="off" key={tested.baseUrl}>
+          <div className="ob-field">
+            <label htmlFor={id("-name")}>{t(L, "lkByokName")}</label>
+            <input id={id("-name")} name="name" type="text" defaultValue={byokName(tested.baseUrl)} maxLength={40} autoCapitalize="none" spellCheck={false} aria-describedby={id("-name-hint")} />
+            <p id={id("-name-hint")} className="ob-hint">{t(L, "lkByokNameHint")}</p>
+          </div>
           <div className="ob-field">
             <label htmlFor={id("-model")}>{t(L, "lkByokModel")}</label>
             {tested.models.length > 0 ? (

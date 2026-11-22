@@ -36,12 +36,18 @@ const SHOTS = process.env.E2E_SHOTS ? resolve(process.env.E2E_SHOTS) : null;
 
 /** 4xx that are part of the contract: feature probes off by default, local-only routes outside Lokkal. */
 const ALLOWED_4XX = [
-  [404, /\/v1\/(speech|billing\/voucher|account\/models|capabilities|packs|code\/sessions|household\/invitations\/received|sso\/connections|glance\/devices|house|presence|memory\/consolidation\/runs|payments\/budgets|payments\/mandates|payments\/method|local\/folder\/runs)(\?|$)/],
+  [404, /\/v1\/(speech|billing\/voucher|account\/models|capabilities|local\/sites|packs|code\/sessions|household\/invitations\/received|sso\/connections|glance\/devices|house|presence|memory\/consolidation\/runs|memory\/long|payments\/budgets|payments\/mandates|payments\/method|local\/folder\/runs)(\?|$)/],
   [401, /\/v1\/local\//],
   // « Ta carte » journey: approving before the machine has a passkey (the card says to create one).
   [412, /\/v1\/local\/approvals\/[^/]+\/challenge$/],
   // Models journey: a private address refused by the server (blocked_address).
   [400, /\/v1\/account\/models\/test$/],
+  // ACCORD journey: a wrong code (400), a closed window (409) and a blocked pairing (423) are the states to show.
+  [400, /\/v1\/local\/accord\/pair$/],
+  [409, /\/v1\/local\/accord\/pair$/],
+  [423, /\/v1\/local\/accord\/pair(\/open)?$/],
+  // Session-code journey: reusing a one-time link is the state to show (410 code_used).
+  [410, /\/v1\/local\/session-code\/exchange$/],
 ];
 
 const PHONE = {
@@ -93,14 +99,14 @@ async function startServers() {
   // Folder mode: a folder of files to sort (the mock only lists it, never writes).
   mkdirSync(join(work, "photos"), { recursive: true });
   for (const f of ["a.jpg", "b.jpg", "notes.txt"]) writeFileSync(join(work, "photos", f), "x");
-  const env = { ...process.env, NOKKER_CONFIG_DIR_OVERRIDE: cfg, MOCK_PORT: String(mockPort), MOCK_LOCAL_ROOTS: work, MOCK_CAST: "1", MOCK_HOUSE_ROOM: "1", MOCK_WHO_DOES_WHAT: "1", MOCK_CONSOLIDATION: "1", MOCK_PAYMENTS: "1", MOCK_APPROVAL_BUBBLES: "1", MOCK_TTS: "1", MOCK_FOLDER: "1", MOCK_SHOW_ME: "1", MOCK_GUIDE: "1", MOCK_CLOUD_BYOK: "open" };
+  const env = { ...process.env, NOKKER_CONFIG_DIR_OVERRIDE: cfg, MOCK_PORT: String(mockPort), MOCK_LOCAL_ROOTS: work, MOCK_CAST: "1", MOCK_HOUSE_ROOM: "1", MOCK_WHO_DOES_WHAT: "1", MOCK_CONSOLIDATION: "1", MOCK_PAYMENTS: "1", MOCK_APPROVAL_BUBBLES: "1", MOCK_TTS: "1", MOCK_FOLDER: "1", MOCK_SHOW_ME: "1", MOCK_GUIDE: "1", MOCK_CLOUD_BYOK: "open", MOCK_ACCORD: "1" };
   // E2E_PREVIEW=1 : build (VITE_NOKKER_SHOW_ME / VITE_NOKKER_GUIDE allumés) puis `vite preview`, voir web-server.mjs.
   const procs = [
     spawn("npx", ["tsx", "src/run.ts"], { cwd: MOCK, env, stdio: ["ignore", "ignore", "inherit"], detached: true }),
     spawn("npx", [...webCommand(), "--port", String(webPort), "--strictPort", "--host", "127.0.0.1"], {
       cwd: WEB,
       // « Show me » is a build flag (VITE_NOKKER_SHOW_ME), off by default: on here so its journey runs.
-      env: { ...process.env, NOKKER_SERVER_URL: `http://127.0.0.1:${mockPort}`, VITE_NOKKER_SHOW_ME: process.env.VITE_NOKKER_SHOW_ME ?? "1", VITE_NOKKER_GUIDE: process.env.VITE_NOKKER_GUIDE ?? "1" },
+      env: { ...process.env, NOKKER_SERVER_URL: `http://127.0.0.1:${mockPort}`, VITE_NOKKER_SHOW_ME: process.env.VITE_NOKKER_SHOW_ME ?? "1", VITE_NOKKER_GUIDE: process.env.VITE_NOKKER_GUIDE ?? "1", VITE_NOKKER_KIOSK: process.env.VITE_NOKKER_KIOSK ?? "1" },
       stdio: ["ignore", "ignore", "inherit"],
       detached: true,
     }),
@@ -177,9 +183,30 @@ async function overflow(page) {
   }, SIDE_SCROLLERS);
 }
 
+/** Phone (≤ 430 px wide): Safari iOS zooms the page on focus of any field whose computed font-size is under 16 px. */
+async function smallFields(page) {
+  return page.evaluate(() => {
+    const skip = /^(hidden|checkbox|radio|range|file|color|button|submit|reset|image)$/;
+    const out = [];
+    for (const el of document.querySelectorAll("input,textarea,select,[contenteditable]:not([contenteditable=false])")) {
+      if (el.tagName === "INPUT" && skip.test(el.type)) continue;
+      const r = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      if (!r.width || !r.height || cs.visibility === "hidden" || cs.display === "none") continue;
+      const px = parseFloat(cs.fontSize);
+      if (px < 16) out.push(`${el.tagName.toLowerCase()}${el.id ? "#" + el.id : "." + String(el.className).trim().split(/\s+/)[0]} ${px}px`);
+    }
+    return [...new Set(out)].slice(0, 6);
+  });
+}
+
 async function noOverflow(page, where) {
   const o = await overflow(page);
   if (o.length) throw new StepError(`horizontal overflow on ${where}: ${o.join(" | ")}`);
+  if ((page.viewportSize()?.width ?? 9999) <= 430) {
+    const small = await smallFields(page);
+    if (small.length) throw new StepError(`field under 16px on ${where} (iOS zooms on focus): ${small.join(" | ")}`);
+  }
 }
 
 async function shot(page, name) {
@@ -305,6 +332,39 @@ async function openView(page, id) {
 }
 
 /** Every view reachable from the drawer and the account menu, without horizontal overflow; then back to the chat. */
+/** Phone: at the end of the scroll nothing (text or control) may sit under the round menu button (☰). */
+async function fabClear(page, where) {
+  const bad = await page.evaluate(() => {
+    const fab = document.querySelector(".drawer-fab");
+    if (!fab || !fab.getBoundingClientRect().width) return [];
+    for (const el of document.querySelectorAll("body *")) {
+      const cs = getComputedStyle(el);
+      if (/(auto|scroll)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 1) el.scrollTop = el.scrollHeight;
+    }
+    const f = fab.getBoundingClientRect();
+    const hit = (r) => r.width > 0 && r.height > 0 && r.left < f.right && r.right > f.left && r.top < f.bottom && r.bottom > f.top;
+    const shown = (el) => {
+      const cs = getComputedStyle(el);
+      return cs.display !== "none" && cs.visibility !== "hidden" && !el.closest("[inert],.toasts,.drawer-fab");
+    };
+    const out = [];
+    for (const el of document.querySelectorAll("a[href],button,input:not([type=hidden]),select,textarea,[role=button],[role=tab]")) {
+      if (el === fab || !shown(el)) continue;
+      if (hit(el.getBoundingClientRect())) out.push(`${el.tagName.toLowerCase()}.${String(el.className).trim().split(/\s+/)[0]} "${(el.getAttribute("aria-label") || el.textContent || "").trim().slice(0, 24)}"`);
+    }
+    const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let n = w.nextNode(); n; n = w.nextNode()) {
+      const t = (n.textContent ?? "").trim();
+      if (!t || !n.parentElement || !shown(n.parentElement) || n.parentElement.closest("script,style")) continue;
+      const rg = document.createRange();
+      rg.selectNodeContents(n);
+      if ([...rg.getClientRects()].some(hit)) out.push(`text "${t.slice(0, 24)}"`);
+    }
+    return [...new Set(out)].slice(0, 6);
+  });
+  if (bad.length) throw new StepError(`${where}: under the menu button at the end of the scroll: ${bad.join(" | ")}`);
+}
+
 async function views(page, where) {
   const ids = await page.evaluate(async () => {
     const work = [...document.querySelectorAll(".drawer-places .place")].map((e) => e.dataset.view);
@@ -320,6 +380,8 @@ async function views(page, where) {
     await page.waitForTimeout(400);
     await noOverflow(page, `${where} / view ${id}`);
     await shot(page, `${where}-view-${id}`);
+    await fabClear(page, `${where} / view ${id}`);
+    await shot(page, `${where}-view-${id}-end`);
   }
   await page.locator(".back-chat").click();
   await until(page, "back to the chat", () => !!document.querySelector(".view.view-chat #nk-composer"));
@@ -474,6 +536,9 @@ async function modes(page, base, t, local) {
   });
   await noOverflow(page, "modes");
   await shot(page, "modes-plan");
+  // The refusal shows while the first turn is still streaming: a click now would start the next turn (and the page's
+  // own tools/call) on a busy thread, which the mock rightly answers with 409. Wait for the turn to be over first.
+  await until(page, "the first turn is over", () => !!document.querySelector(".topbar") && !document.querySelector(".topbar.working"));
   const users = await page.$$eval(".msg.user", (els) => els.length);
   await page.click(".mode-apply");
   await until(page, "plan mode lifted", () => !document.querySelector(".mode-bar")?.classList.contains("is-plan"));
@@ -481,6 +546,62 @@ async function modes(page, base, t, local) {
   // Leave the local session at rest: the next journey opens the latest local thread, and a turn still running there
   // answers its first calls with 409 (turn_running).
   await until(page, "the turn is over", () => !!document.querySelector(".topbar") && !document.querySelector(".topbar.working"));
+}
+
+/** « Apply the plan » clicked WHILE the turn still streams must not start a second turn (the core answers 409): the
+ * button waits for the end of the turn. Needs a turn that stays open after the refusal shows: run with
+ * MOCK_CHAT_TAIL_MS=2000 (E2E_ONLY=modes-busy); skipped otherwise. */
+async function modesBusy(page, base, t, local) {
+  if (!local) return void (t.skipped = "no local token");
+  if (!Number(process.env.MOCK_CHAT_TAIL_MS)) return void (t.skipped = "needs MOCK_CHAT_TAIL_MS (a turn that stays open)");
+  const r = await fetch(`${local.api}/v1/local/sessions`, { method: "POST", headers: { Authorization: `Bearer ${local.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ cwd: local.cwd }) });
+  if (r.status !== 201) throw new StepError(`local session: HTTP ${r.status}`);
+  await page.goto(`${base}/#token=${local.token}`);
+  await page.waitForSelector("#nk-composer", { timeout: STEP_MS });
+  await page.locator(`button.session-row`, { hasText: "proj" }).last().click();
+  await page.waitForSelector("#nk-session-mode", { timeout: STEP_MS });
+  await page.selectOption("#nk-session-mode", "plan");
+  await until(page, "mode is plan", () => document.querySelector(".mode-bar")?.classList.contains("is-plan"));
+  await page.fill("#nk-composer", "fix the add test");
+  await page.click("button.send");
+  await page.waitForSelector(".mode-refused", { timeout: STEP_MS });
+  if (!(await page.$(".topbar.working"))) throw new StepError("the turn was already over: nothing to test (raise MOCK_CHAT_TAIL_MS)");
+  const users = await page.$$eval(".msg.user", (els) => els.length);
+  if (!(await page.locator(".mode-apply").isDisabled())) throw new StepError("« Apply the plan » is clickable while the turn runs");
+  await page.locator(".mode-apply").click({ force: true, timeout: 1000 }).catch(() => undefined);
+  if ((await page.$$eval(".msg.user", (els) => els.length)) !== users) throw new StepError("a second turn started during the first");
+  await shot(page, "modes-busy");
+  await until(page, "the turn is over", () => !!document.querySelector(".topbar") && !document.querySelector(".topbar.working"));
+  await until(page, "the button is enabled again", () => !document.querySelector(".mode-apply")?.disabled);
+  await page.click(".mode-apply");
+  await until(page, "plan mode lifted", () => !document.querySelector(".mode-bar")?.classList.contains("is-plan"));
+  await until(page, "the plan is asked for", (n) => document.querySelectorAll(".msg.user").length > n, users);
+  await until(page, "the second turn is over", () => !!document.querySelector(".topbar") && !document.querySelector(".topbar.working"));
+}
+
+/** The palette leads to the settings: « régl » proposes My account, and a sub-section (« régl appar ») opens the account
+ * view scrolled to it. */
+async function paletteSettings(page, base, t) {
+  await login(page, base, t);
+  await page.focus("#nk-composer");
+  await page.keyboard.press("Control+k");
+  await page.waitForSelector(".palette input", { timeout: STEP_MS });
+  await page.keyboard.type("régl");
+  await until(page, "« régl » proposes My account", () => [...document.querySelectorAll(".palette-item")].some((e) => /Mon compte|My account/i.test(e.textContent ?? "")));
+  const labels = await page.$$eval(".palette-item", (els) => els.map((e) => e.textContent ?? ""));
+  if (labels.some((l) => /Nouvelle session|New session/i.test(l) && labels.length === 1)) throw new StepError("« régl » only offers a new session");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Control+k");
+  await page.keyboard.type("régl devices");
+  await until(page, "« régl devices » proposes the Devices section", () => [...document.querySelectorAll(".palette-item")].some((e) => /›\s*(Appareils|Devices)/i.test(e.textContent ?? "")));
+  await page.keyboard.press("Enter");
+  await until(page, "the account view opens on Devices", () => {
+    const el = document.getElementById("acc-devices");
+    if (!el || !document.querySelector("[data-account-tab]")) return false;
+    const r = el.getBoundingClientRect();
+    return r.top >= 0 && r.top < window.innerHeight;
+  });
+  await shot(page, "palette-settings");
 }
 
 /** Chat-first shell: no tab strip, a short top bar, the command palette and the account menu work from the keyboard,
@@ -968,6 +1089,37 @@ async function consolidation(page, base, t) {
   await shot(page, "consolidation-undone");
 }
 
+/** Learning → Memory (cloud long memory, mock): add a note, see « Noted », add it again → « Already noted », delete with a
+ * confirmation; the pending « Nina suggests keeping » card is approved and the note's name is said. */
+async function longMemory(page, base, t) {
+  await login(page, base, t);
+  await page.locator(".acct-btn").click();
+  await page.locator('.menu-pop [data-view="learning"]').click();
+  await page.locator(".lrn-tab", { hasText: "To approve" }).click();
+  await until(page, "Nina's proposal is shown", () => /Nina suggests keeping/.test(document.querySelector(".lrn")?.textContent ?? ""));
+  await page.locator(".lrn-card", { hasText: "Tutoiement" }).locator("button", { hasText: "Remember" }).click();
+  await until(page, "the note is said as noted, with its name", () => /Noted: /.test(document.querySelector(".lrn-noted")?.textContent ?? ""));
+  await page.locator(".lrn-tab", { hasText: "Memory" }).click({ timeout: STEP_MS }).catch(() => {
+    throw new StepError("no Memory tab (long memory off in the mock?)");
+  });
+  await until(page, "the seeded note", () => document.querySelectorAll(".lrn-card[data-note]").length === 1);
+  const add = async () => {
+    await page.fill('.lrn-form input', "Café");
+    await page.fill(".lrn-form textarea", "Je bois mon café sans sucre.");
+    await page.locator(".lrn-form button[type=submit]").click();
+  };
+  await add();
+  await until(page, "noted", () => /^Noted$/.test(document.querySelector(".lrn-noted")?.textContent?.trim() ?? "") && document.querySelectorAll(".lrn-card[data-note]").length === 2);
+  await add();
+  await until(page, "already noted", () => /Already noted/.test(document.querySelector(".lrn-noted")?.textContent ?? "") && document.querySelectorAll(".lrn-card[data-note]").length === 2);
+  await noOverflow(page, "memory");
+  await shot(page, "long-memory");
+  const card = page.locator(".lrn-card[data-note]", { hasText: "Café" });
+  await card.locator("button", { hasText: "Delete" }).click();
+  await card.locator("button", { hasText: "Yes, delete" }).click();
+  await until(page, "the note is gone", () => document.querySelectorAll(".lrn-card[data-note]").length === 1);
+}
+
 /** « To pay » card (PAYMENTS §5, mock with MOCK_PAYMENTS=1): « achète … » prepares a cart; the approval card shows the
  * purchase (merchant, amount, items), says only a passkey approves it, offers no TOTP; My account → Spending shows the
  * budgets and the waiting card. (A device signed in by mail code decides nothing, so no decision here: see the mock tests.) */
@@ -1234,6 +1386,354 @@ async function folder(page, base, t, local) {
   if ((await page.locator(".fm-runs li").count()) !== 2) throw new StepError("the runs list does not show both runs");
 }
 
+/** ACCORD, Settings → Devices (nokker docs/ACCORD-DEVICE.md §2): the screen exists only when the machine serves
+ * GET /v1/local/accord. Pairing window with its countdown, the 8 characters of the machine and of the device side by
+ * side and BIG, the 6-digit code, the error states, the list, the revocation with its confirmation. The device is
+ * played by the mock (POST /v1/dev/accord/request): a real one sends `pair` over a WebSocket. */
+/** Quota atteint : la phrase du noyau reste la réponse, un lien « Mon compte » est dessous et ouvre le compte. */
+async function quota(page, base, t, local) {
+  if (!local) return void (t.skipped = "no local token");
+  await page.goto(`${base}/#token=${local.token}`);
+  await page.waitForSelector("#nk-composer", { timeout: STEP_MS });
+  // An ordinary turn never carries the link.
+  await send(page, "hello", "");
+  if (await page.locator(".msg.nina .msg-body").last().locator("[data-quota-account]").count()) throw new StepError("an ordinary reply carries the quota link");
+  await send(page, "simulate a quota", "Usage quota reached");
+  await until(page, "the account link sits under the quota sentence", () => {
+    const last = [...document.querySelectorAll(".msg.nina .msg-body")].pop();
+    return !!last?.querySelector("[data-quota-account]");
+  });
+  await noOverflow(page, "quota sentence");
+  await shot(page, "quota-link");
+  await page.locator("[data-quota-account]").last().click();
+  await until(page, "the account view opens", () => !!document.querySelector(".acc-usage, [data-usage-household], #acc-consent"));
+  await shot(page, "quota-account");
+}
+
+/** Lokkal : le propriétaire local n'est pas un compte nokker.ai (`capabilities.account` faux, 403 sur /v1/account*, /v1/connectors).
+ * Mon compte n'appelle pas ces routes, montre une carte vers nokker.ai (sans bandeau d'erreur), et le bouton du quota ouvre
+ * la page de compte nokker.ai. */
+async function lokkalAccount(page, base, t, local) {
+  if (!local) return void (t.skipped = "no local token");
+  const dev = (on) => page.request.post(`${local.api}/v1/dev/capabilities`, { data: { on } });
+  await dev(true);
+  try {
+    const calls = [];
+    page.on("request", (r) => /\/v1\/(account|connectors)(\/|$|\?)/.test(r.url()) && calls.push(`${r.method()} ${new URL(r.url()).pathname}`));
+    await page.goto("about:blank");
+    await page.goto(`${base}/#token=${local.token}`);
+    await page.waitForSelector("#nk-composer", { timeout: STEP_MS });
+    // The quota button says where it goes and opens the nokker.ai account page.
+    await send(page, "simulate a quota", "Usage quota reached");
+    const btn = page.locator("[data-quota-account]").last();
+    await btn.waitFor({ timeout: STEP_MS });
+    if (!/nokker\.ai/.test(await btn.innerText())) throw new StepError(`the quota button does not say nokker.ai: ${await btn.innerText()}`);
+    const [popup] = await Promise.all([page.waitForEvent("popup", { timeout: STEP_MS }), btn.click()]);
+    if (!/^https:\/\/app\.nokker\.ai\/account/.test(popup.url())) throw new StepError(`the quota button opened ${popup.url()}`);
+    await popup.close().catch(() => {});
+    // Mon compte: a card to nokker.ai, no error banner, and the account routes are never called.
+    await openView(page, "account");
+    await page.locator("[data-account-remote]").waitFor({ timeout: STEP_MS }).catch(() => {
+      throw new StepError("no nokker.ai account card on a Lokkal");
+    });
+    const href = await page.locator("[data-account-remote-link]").getAttribute("href");
+    if (href !== "https://app.nokker.ai/account") throw new StepError(`the account link is not nokker.ai: ${href}`);
+    await page.waitForTimeout(800);
+    if ((await page.locator(".ob-error, [role=alert]").count()) !== 0) throw new StepError("an error banner shows on Mon compte");
+    if (calls.length) throw new StepError(`account routes were called on a Lokkal: ${calls.join(", ")}`);
+    await shot(page, "lokkal-account");
+  } finally {
+    await dev(false);
+  }
+}
+
+/** Repli Deep → Ship (noyau 3992fc13) : `turn.done.notice` est une ligne d'état DISCRÈTE sous la réponse, telle quelle ; jamais dans le
+ * texte de la réponse, jamais une erreur ; rien sans repli ; perdue au rechargement (le noyau ne la garde pas). */
+async function turnNotice(page, base, t) {
+  await login(page, base, t);
+  const NOTICE = "Reply in lighter mode: deep mode is unavailable right now.";
+  const lastBody = () => page.locator(".msg.nina .msg-body").last();
+  await send(page, "hello", "");
+  if (await page.locator("[data-turn-notice]").count()) throw new StepError("an ordinary reply carries a status line");
+  await send(page, "simulate a deep fallback", "");
+  await until(page, "the status line shows under the reply", (n) => [...document.querySelectorAll("[data-turn-notice]")].some((e) => e.textContent.trim() === n), NOTICE);
+  const noticeNodes = await lastBody().locator("[data-turn-notice]").count();
+  if (noticeNodes !== 1) throw new StepError(`expected one status line under the last reply, found ${noticeNodes}`);
+  // The reply text itself (the body without the status line) never carries it.
+  const replyWithout = await lastBody().evaluate((el) => {
+    const c = el.cloneNode(true);
+    c.querySelectorAll("[data-turn-notice]").forEach((n) => n.remove());
+    return c.innerText ?? c.textContent ?? "";
+  });
+  if (replyWithout.includes(NOTICE)) throw new StepError("the status line is inside the reply text");
+  if (await page.locator('.toasts > *, [role=alert]').filter({ hasText: NOTICE }).count()) throw new StepError("the status line shows as an error");
+  await noOverflow(page, "turn notice");
+  await shot(page, "turn-notice");
+  // The kernel keeps it out of the history: after a reload it is gone, the reply stays.
+  await page.reload();
+  await page.waitForSelector("#nk-composer", { timeout: STEP_MS });
+  if (await page.locator("[data-turn-notice]").count()) throw new StepError("the status line survived a reload (it is not in the history)");
+}
+
+/** Face d'une carte d'approbation : la CIBLE lisible du noyau (`target`) est visible sans dépliage ; jamais `arguments` (le corps du
+ * message tapé par la personne n'y paraît pas), jamais de JSON brut. */
+async function approvalTarget(page, base, t) {
+  await login(page, base, t);
+  await newSession(page, `e2e target ${tag()}`); // un fil à soi : une carte laissée en attente ne gêne aucun autre parcours
+  await page.fill("#nk-composer", "send the quarterly report");
+  await page.click("button.send");
+  const face = page.locator("[data-approval-target]").first();
+  await face.waitFor({ timeout: STEP_MS }).catch(() => {
+    throw new StepError("no target on the face of the approval card (is the mock up to date?)");
+  });
+  const text = (await face.innerText()).replace(/\s+/g, " ");
+  if (!/recipient@example\.com/.test(text)) throw new StepError(`the face does not say what goes out: ${text}`);
+  if (/quarterly report/.test(text)) throw new StepError(`the face shows the arguments (the typed body): ${text}`);
+  if (/[{}]/.test(text)) throw new StepError(`raw JSON on the face: ${text}`);
+  if (!(await face.locator("code").isVisible())) throw new StepError("the target is not visible without opening anything");
+  await noOverflow(page, "approval target");
+  await shot(page, "approval-target");
+  // The card stays pending (this demo session cannot decide it): it lives in a thread of its own, so no other journey sees it.
+}
+
+async function accord(page, base, t, local) {
+  if (!local) return void (t.skipped = "no local token");
+  const dev = (path, body) => page.request.post(`${local.api}/v1/dev/accord/${path}`, { headers: { Authorization: `Bearer ${local.token}` }, data: body ?? {} });
+  await dev("reset");
+  await dev("seed", { device_id: "acc_7d4291008af2", key8: "7d429100" });
+  await dev("seed", { device_id: "acc_5f897e8b4bda", key8: "5f897e8b", last_seen_at: Math.floor(Date.now() / 1000) - 180, name: "Salon" });
+  await page.goto(`${base}/#token=${local.token}`);
+  await page.waitForSelector("#nk-composer", { timeout: STEP_MS });
+  await openView(page, "devices").catch(() => {
+    throw new StepError("no Devices view on the machine (is the mock started with MOCK_ACCORD=1?)");
+  });
+  await until(page, "the paired device is listed", () => /7d429100/.test(document.querySelector(".accord-list")?.textContent ?? ""));
+  // Name and last connection: the kernel's name (or « ACCORD <key8> »), « 3 min ago », « never connected ».
+  const rows = await page.locator("[data-device]").evaluateAll((els) => els.map((e) => ({ id: e.getAttribute("data-device"), text: e.textContent ?? "" })));
+  const salon = rows.find((r) => r.id === "acc_5f897e8b4bda");
+  const other = rows.find((r) => r.id === "acc_7d4291008af2");
+  if (!salon || !/Salon/.test(salon.text) || !/(3 min ago|il y a 3 min)/.test(salon.text)) throw new StepError(`the named device does not show its name and « 3 min ago »: ${salon?.text}`);
+  if (!other || !/ACCORD 7d429100/.test(other.text) || !/(Never connected|Jamais connecté)/.test(other.text)) throw new StepError(`the default name or « never connected » is missing: ${other?.text}`);
+  await noOverflow(page, "accord list");
+  await shot(page, "accord-list");
+
+  // Rename in place: Enter saves, the list shows the new name; empty goes back to the default name; Escape cancels.
+  const first = page.locator('[data-device="acc_7d4291008af2"]');
+  await first.locator("button", { hasText: /^(Rename|Renommer)$/ }).click();
+  const field = first.locator("input");
+  await field.fill("Bureau de Nina");
+  await shot(page, "accord-rename");
+  await field.press("Enter");
+  await until(page, "the new name is shown", () => /Bureau de Nina/.test(document.querySelector('[data-device="acc_7d4291008af2"]')?.textContent ?? ""));
+  await first.locator("button", { hasText: /^(Rename|Renommer)$/ }).click();
+  await first.locator("input").fill("");
+  await first.locator("input").press("Enter");
+  await until(page, "back to the default name", () => /ACCORD 7d429100/.test(document.querySelector('[data-device="acc_7d4291008af2"]')?.textContent ?? ""));
+  await first.locator("button", { hasText: /^(Rename|Renommer)$/ }).click();
+  await first.locator("input").fill("x".repeat(41));
+  if (!(await first.locator("button[type=submit]").isDisabled())) throw new StepError("a 41-character name can be sent");
+  await first.locator("input").press("Escape");
+  if (await first.locator("input").count()) throw new StepError("Escape does not close the rename field");
+
+  // Pairing window: countdown, the machine's characters, "waiting for the device".
+  await page.locator("button", { hasText: /Add a device|Ajouter un appareil/ }).click();
+  await until(page, "the window is open", () => !!document.querySelector("[data-accord-pairing]"));
+  if (!/\d:\d\d/.test(await page.locator(".accord-countdown").innerText())) throw new StepError("no countdown in the pairing window");
+  const hostChars = (await page.locator(".accord-fp-chars").first().innerText()).replace(/\s+/g, "");
+  if (!/^[0-9a-f]{8}$/.test(hostChars)) throw new StepError(`the machine fingerprint is not 8 hex characters: ${hostChars}`);
+  if (!(await page.locator("button[type=submit]").isDisabled())) throw new StepError("the code can be sent before the device has asked to pair");
+  await noOverflow(page, "accord waiting");
+  await shot(page, "accord-waiting");
+
+  // The device asks: its 8 characters appear next to the machine's, side by side, big.
+  await dev("request", { key8: "1a2b3c4d", code: "246810" });
+  await until(page, "the device characters appear", () => document.querySelectorAll(".accord-fp-chars").length === 2);
+  const boxes = await page.locator(".accord-fp").evaluateAll((els) => els.slice(0, 2).map((e) => e.getBoundingClientRect()));
+  if (Math.abs(boxes[0].top - boxes[1].top) > 4) throw new StepError("the two fingerprints are not side by side");
+  const size = await page.locator(".accord-fp-chars").first().evaluate((e) => parseFloat(getComputedStyle(e).fontSize));
+  if (size < 18) throw new StepError(`the fingerprint is not big (${size}px)`);
+  // Each fingerprint must fit INSIDE its own box (a clipped character is a wrong comparison).
+  const clipped = await page.locator(".accord-fp").evaluateAll((els) => els.filter((e) => { const c = e.querySelector(".accord-fp-chars"); return c && (c.scrollWidth > e.clientWidth - 2 || c.getBoundingClientRect().right > e.getBoundingClientRect().right); }).length);
+  if (clipped) throw new StepError("a fingerprint overflows its box");
+  if ((await page.locator(".accord-fp-chars").nth(1).innerText()).replace(/\s+/g, "") !== "1a2b3c4d") throw new StepError("the device characters are wrong");
+  await noOverflow(page, "accord compare");
+  await shot(page, "accord-compare");
+
+  // Wrong code, then the right one.
+  await page.fill("#accord-code", "000000");
+  await page.locator("button[type=submit]").click();
+  await until(page, "the wrong-code message", () => /Wrong code|Code incorrect/.test(document.querySelector("[data-accord-error]")?.textContent ?? ""));
+  await shot(page, "accord-wrong-code");
+  await page.fill("#accord-code", "246810");
+  await page.locator("button[type=submit]").click();
+  await until(page, "the device is paired", () => !!document.querySelector("[data-accord-paired]") && /1a2b3c4d/.test(document.querySelector(".accord-list")?.textContent ?? ""));
+  await noOverflow(page, "accord paired");
+  await shot(page, "accord-paired");
+
+  // Revocation: asks first; Cancel leaves it; confirming revokes.
+  const row = page.locator('[data-device]', { hasText: "1a2b3c4d" });
+  await row.locator("button", { hasText: /^(Revoke|Révoquer)$/ }).click();
+  await until(page, "the confirmation", () => /no longer be able|plus répondre/.test(document.querySelector(".accord-confirm")?.textContent ?? ""));
+  await shot(page, "accord-revoke");
+  await row.locator("button", { hasText: /Cancel|Annuler/ }).click();
+  if (await page.locator(".accord-confirm").count()) throw new StepError("Cancel does not close the confirmation");
+  await row.locator("button", { hasText: /^(Revoke|Révoquer)$/ }).click();
+  await row.locator("button", { hasText: /Revoke the device|Révoquer l'appareil/ }).click();
+  await until(page, "the device is revoked", () => /revoked|révoqué/.test(document.querySelector('[data-device]:nth-child(2)')?.textContent ?? "") || document.querySelectorAll(".accord-device.revoked").length === 1);
+
+  // Window closed: a code now says so; then three wrong codes block the pairing.
+  await dev("reset");
+  await page.goto("about:blank");
+  await page.goto(`${base}/#token=${local.token}`);
+  // The app restores the last view (Devices): the composer is then hidden, so wait for either.
+  await page.waitForSelector("#nk-composer, .view-devices", { timeout: STEP_MS });
+  await openView(page, "devices");
+  await page.locator("button", { hasText: /Add a device|Ajouter un appareil/ }).click();
+  await until(page, "the window is open again", () => !!document.querySelector("[data-accord-pairing]"));
+  await dev("request", { key8: "5e6f7a8b", code: "135790" });
+  await until(page, "the device characters appear again", () => document.querySelectorAll(".accord-fp-chars").length === 2);
+  for (const bad of ["111111", "222222", "333333"]) {
+    await page.fill("#accord-code", bad);
+    await page.locator("button[type=submit]").click();
+    await page.waitForTimeout(250);
+  }
+  await until(page, "pairing blocked", () => /blocked for|bloqué pendant/.test(document.body.textContent ?? ""));
+  if (!(await page.locator("button", { hasText: /Add a device|Ajouter un appareil/ }).isDisabled())) throw new StepError("Add a device stays enabled while pairing is blocked");
+  const blockedMessages = await page.evaluate(() => (document.querySelector("[data-accord]")?.textContent ?? "").split(/blocked for|bloqué pendant/).length - 1);
+  if (blockedMessages !== 1) throw new StepError(`the blocked pairing is said ${blockedMessages} times (once, with the countdown)`);
+  await noOverflow(page, "accord blocked");
+  await shot(page, "accord-blocked");
+  await dev("reset");
+}
+
+/** Opening a Lokkal WITHOUT the key in the URL: the link carries `#code=<one-time code>` (never the local key). The page
+ * clears the fragment before anything else, exchanges the code (no Authorization header) for a SESSION token of its own,
+ * and opens. The same link a second time opens nothing and says so (a fresh browser: nothing stored). */
+/** Kiosque et présentation par code (noyau p2/integ-kiosk-code) : la portée du code décide où va le jeton. */
+async function kioskCode(page, base, t, local) {
+  if (!local) return void (t.skipped = "no local token");
+  const mint = async (scope) => (await (await page.request.post(`${local.api}/v1/local/session-code`, { headers: { Authorization: `Bearer ${local.token}`, "Content-Type": "application/json" }, data: scope ? { scope } : {} })).json()).code;
+  const keys = (pg) => pg.evaluate(() => ({
+    kiosk: window.sessionStorage.getItem("nokker.kiosk-token"),
+    appSession: window.sessionStorage.getItem("nokker.local-token"),
+    appLocal: window.localStorage.getItem("nokker.local-token"),
+    scope: window.sessionStorage.getItem("nokker.token-scope"),
+    note: window.sessionStorage.getItem("nokker.code-note"),
+  }));
+  const browser = page.context().browser();
+  const fresh = async () => {
+    const ctx = await browser.newContext({ viewport: page.viewportSize() ?? { width: 1280, height: 800 } });
+    return { ctx, p: await ctx.newPage() };
+  };
+
+  // /kiosk + a kiosk code: the kiosk's own key, never the app's; the link leaves the address bar.
+  {
+    const { ctx, p } = await fresh();
+    try {
+      const code = await mint("kiosk");
+      if (!code) throw new StepError("no kiosk code (is the mock up to date?)");
+      const seen = [];
+      p.on("pageerror", (e) => seen.push(`pageerror: ${e.message}`));
+      p.on("console", (m) => m.type() === "error" && seen.push(`console: ${m.text()}`));
+      await p.goto(`${base}/kiosk#code=${code}`);
+      await p.waitForTimeout(2500);
+      if (!(await p.locator("[data-kiosk]").count())) throw new StepError(`no kiosk page: ${seen.join(" | ") || "no console error"} (url ${p.url().replace(code, "<code>")}; text ${JSON.stringify((await p.evaluate(() => document.body.innerText)).slice(0, 120))}; kiosk key ${JSON.stringify(await keys(p))})`);
+      await p.waitForSelector("[data-kiosk]", { timeout: STEP_MS });
+      await until(p, "the kiosk reads its screen", () => document.querySelector("[data-kiosk]")?.getAttribute("data-kiosk") === "ready");
+      if (/code=|token=/.test(p.url())) throw new StepError("the code stays in the address bar");
+      const k = await keys(p);
+      if (!k.kiosk) throw new StepError("no kiosk key kept");
+      if (k.appSession || k.appLocal) throw new StepError("the kiosk code became the app key");
+      await shot(p, "kiosk-code");
+    } finally {
+      await ctx.close();
+    }
+  }
+  // /kiosk + an owner code: thrown away, nothing kept, the kiosk says to restart it from the machine.
+  {
+    const { ctx, p } = await fresh();
+    try {
+      const ownerCode = await mint();
+      await p.goto(`${base}/kiosk#code=${ownerCode}`);
+      await p.waitForSelector("[data-kiosk]", { timeout: STEP_MS });
+      await until(p, "the kiosk asks for a restart", () => document.querySelector("[data-kiosk]")?.getAttribute("data-kiosk") === "need_key");
+      const k = await keys(p);
+      if (k.kiosk || k.appSession || k.appLocal) throw new StepError("an owner code opened the kiosk or left a key");
+      // The kernel said 409 without using the code: the same code still opens the app on this machine.
+      await p.goto(`${base}/#code=${ownerCode}`);
+      await p.waitForSelector("#nk-composer", { timeout: STEP_MS });
+    } finally {
+      await ctx.close();
+    }
+  }
+  // The app + a kiosk code: never the app key.
+  {
+    const { ctx, p } = await fresh();
+    try {
+      await p.goto(`${base}/#code=${await mint("kiosk")}`);
+      await p.waitForTimeout(1500);
+      const k = await keys(p);
+      if (k.kiosk || k.appSession || k.appLocal) throw new StepError("a kiosk code became the app key");
+      if (k.note !== "scope") throw new StepError(`a kiosk code on the app is not noted as a wrong scope (${k.note})`);
+    } finally {
+      await ctx.close();
+    }
+  }
+  // /present + a present code: the app key for this tab only, never kept on disk; the scope is remembered.
+  {
+    const { ctx, p } = await fresh();
+    try {
+      await p.goto(`${base}/present#code=${await mint("present")}`);
+      await p.waitForTimeout(1500);
+      if (/code=|token=/.test(p.url())) throw new StepError("the code stays in the address bar");
+      const k = await keys(p);
+      if (!k.appSession) throw new StepError("no session key kept for the presentation");
+      if (k.appLocal) throw new StepError("the presentation key was kept on disk (localStorage)");
+      if (k.scope !== "present") throw new StepError(`scope not remembered (${k.scope})`);
+      await shot(p, "present-code");
+    } finally {
+      await ctx.close();
+    }
+  }
+}
+
+async function sessionCode(page, base, t, local) {
+  if (!local) return void (t.skipped = "no local token");
+  const mint = async () => (await (await page.request.post(`${local.api}/v1/local/session-code`, { headers: { Authorization: `Bearer ${local.token}` } })).json()).code;
+  const code = await mint();
+  if (!code) throw new StepError("the machine gave no code (is the mock up to date?)");
+  const exchanges = [];
+  page.on("request", (r) => {
+    if (/\/v1\/local\/session-code\/exchange$/.test(r.url())) exchanges.push({ auth: r.headers()["authorization"] ?? null, body: r.postData() });
+  });
+  await page.goto(`${base}/#code=${code}`);
+  await page.waitForSelector("#nk-composer", { timeout: STEP_MS });
+  if (/code=|token=/.test(page.url())) throw new StepError(`the code is still in the address bar: ${page.url().replace(code, "<code>")}`);
+  if (exchanges.length !== 1 || exchanges[0].auth) throw new StepError("the exchange must be one request without Authorization");
+  const stored = await page.evaluate(() => window.localStorage.getItem("nokker.local-token") ?? window.sessionStorage.getItem("nokker.local-token"));
+  if (!stored) throw new StepError("no session token kept after the exchange");
+  if (stored === local.token) throw new StepError("the page holds the LOCAL token: a session token of its own was expected");
+  await shot(page, "session-code-opened");
+
+  // The same link again, in a fresh browser: used, nothing opens, the page says what to do.
+  const browser = page.context().browser();
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  try {
+    const p2 = await ctx.newPage();
+    await p2.goto(`${base}/#code=${code}`);
+    // The mock server is not a Lokkal core, so the app does not show the key page there: what is checked here is that the
+    // used code opened NOTHING (no token kept), left the address bar, and was noted for the key page (the visible text is
+    // covered by test/session-code.test.ts and by the real-core walk-through).
+    await p2.waitForTimeout(1500);
+    if (/code=/.test(p2.url())) throw new StepError("the used code stays in the address bar");
+    const kept = await p2.evaluate(() => ({ token: window.localStorage.getItem("nokker.local-token") ?? window.sessionStorage.getItem("nokker.local-token"), note: window.sessionStorage.getItem("nokker.code-note") }));
+    if (kept.token) throw new StepError("a used link opened a session");
+    if (kept.note !== "used") throw new StepError(`a used link is not noted as used (${kept.note})`);
+  } finally {
+    await ctx.close();
+  }
+}
+
 /** Knock to call (KNOCK.md §7): off by default and nothing listens; switching it on asks for the microphone (refused
  * here: no microphone in a test), the top bar then offers « Listen » again; switched off, the indicator goes. A browser
  * without AudioWorklet (old iOS Safari) greys the setting and says why. No real microphone. */
@@ -1277,6 +1777,62 @@ async function knockSetting(page, base, t) {
   if (!/AudioWorklet/.test(await page.locator("[data-knock-unsupported]").innerText())) throw new StepError("the reason is not said");
   await page.locator("[data-knock-card]").scrollIntoViewIfNeeded();
   await shot(page, "knock-unsupported-dark");
+}
+
+/** Message envoyé depuis un AUTRE client (noyau 1ce737f1, `turn.started.user_message`) : il s'affiche dès le début du tour,
+ * puis l'historique le remplace à la fin sans doublon ; coupé à 16 Kio, une ligne le dit. Le mock simule l'autre client
+ * (`POST /v1/dev/remote-turn`). */
+async function startedMessage(page, base, t, local) {
+  if (!local) return void (t.skipped = "no mock api url");
+  await login(page, base, t);
+  // The other client writes in the thread this page shows (its title is in the conversation's label).
+  const title = await page.evaluate(() => (document.querySelector("section.chat")?.getAttribute("aria-label") ?? "").replace(/^.*session\s+/, ""));
+  if (!title) throw new StepError("cannot read the current thread's title");
+  const remote = async (text, holdMs) => (await page.request.post(`${local.api}/v1/dev/remote-turn`, { data: { text, hold_ms: holdMs, title } })).status();
+  const users = (needle) => page.evaluate((n) => [...document.querySelectorAll(".msg.user")].filter((e) => e.textContent.includes(n)).length, needle);
+
+  const text = `from the other client ${tag()}`;
+  if ((await remote(text, 3500)) !== 202) throw new StepError("the mock refused the remote turn");
+  await until(page, "the other client's message is shown at the start of the turn", (n) => !!document.querySelector("[data-started-message]") && document.body.innerText.includes(n), text);
+  if ((await page.locator(".msg.nina").filter({ hasText: "Reply to the other client" }).count()) !== 0) throw new StepError("the reply is already there: the message was not shown BEFORE the turn ended");
+  await shot(page, "started-message");
+  await until(page, "the history replaces the preview", (n) => !document.querySelector("[data-started-message]") && [...document.querySelectorAll(".msg.nina")].some((e) => e.textContent.includes("Reply to the other client")), text);
+  if ((await users(text)) !== 1) throw new StepError(`the message is shown ${await users(text)} times after the turn (expected once)`);
+
+  // Cut at 16 KiB: the preview says so, and the full text from the history replaces it without a duplicate.
+  const big = `BIG-${tag()} ` + "word ".repeat(5000);
+  await remote(big, 3000);
+  await until(page, "the cut message is shown with its note", () => !!document.querySelector("[data-started-message]") && !!document.querySelector(".started-cut"));
+  await until(page, "the full history replaces it", () => !document.querySelector("[data-started-message]"));
+  if ((await users(big.slice(0, 12))) !== 1) throw new StepError("the long message is duplicated after the turn");
+  await noOverflow(page, "started message");
+}
+
+/** Mon compte → Langue de l'interface (`PATCH /v1/account {lang}`) : choisir une langue l'écrit sur le compte et recharge l'interface
+ * dans cette langue ; « Automatique » rend la main à la détection (le 400 `bad_lang` est couvert par les tests du mock). */
+async function accountLang(page, base, t) {
+  await login(page, base, t);
+  await openView(page, "account");
+  const row = page.locator("[data-account-lang]");
+  await row.waitFor({ timeout: STEP_MS }).catch(() => {
+    throw new StepError("no language selector on Mon compte");
+  });
+  const sel = row.locator("select");
+  const values = await sel.locator("option").evaluateAll((os) => os.map((o) => o.value));
+  if (values.join(",") !== "auto,fr,en") throw new StepError(`unexpected language choices: ${values}`);
+  const pick = async (v) => {
+    await Promise.all([page.waitForNavigation({ waitUntil: "load", timeout: STEP_MS }), sel.selectOption(v)]);
+    await page.waitForSelector("[data-account-lang] select", { timeout: STEP_MS });
+  };
+  await pick("fr");
+  await until(page, "the interface is in French", () => document.documentElement.lang === "fr");
+  if ((await page.locator("[data-account-lang] select").inputValue()) !== "fr") throw new StepError("the selector does not show the account language");
+  await shot(page, "account-lang-fr");
+  await pick("en");
+  await until(page, "the interface is in English", () => document.documentElement.lang === "en");
+  await pick("auto");
+  if ((await page.locator("[data-account-lang] select").inputValue()) !== "auto") throw new StepError("Automatic is not kept");
+  await noOverflow(page, "account lang");
 }
 
 /** Mon compte → Modèles (BYOK cloud, core docs/CLOUD-BYOK.md; mock MOCK_CLOUD_BYOK=open): http refused before any
@@ -1347,7 +1903,9 @@ async function lokkalKey(page, base, t, local) {
   t.lokkalPageMs = Date.now() - t0;
   const text = await page.locator("main").innerText();
   if (/private beta|Apply\b/i.test(text)) throw new StepError("the private beta / Apply shows on a Lokkal");
-  if (!text.includes(`${lk}/setup`) || !text.includes("~/.nokker/state/local-token")) throw new StepError("the page does not say where the key is");
+  // The page offers the one-time code only: the local key never enters a browser (no key file to copy, no key field).
+  if (!text.includes(`${lk}/setup`) || !text.includes("nokker open --code")) throw new StepError("the page does not say how to get an opening code");
+  if (/local-token|cat ~/.test(text)) throw new StepError("the page still points to the local key file");
   await noOverflow(page, "lokkal without key");
   await shot(page, "lokkal-key-light");
   // `/setup` without the key: locked, with the same help.
@@ -1362,10 +1920,20 @@ async function lokkalKey(page, base, t, local) {
   await page.locator("[data-local-key] button[type=submit]").click();
   await page.locator('[data-local-key-error="wrong"]').waitFor({ timeout: STEP_MS });
   await shot(page, "lokkal-key-wrong");
+  // The local key pasted out of habit is refused and never kept.
   await page.fill("#lk-key-input", local.token);
   await page.locator("[data-local-key] button[type=submit]").click();
-  await until(page, "the key opens this Lokkal", () => (location.pathname === "/setup" || location.pathname === "/") && !document.querySelector("[data-local-key]"));
-  if ((await page.evaluate(() => localStorage.getItem("nokker.local-token"))) !== local.token) throw new StepError("the key is not kept in localStorage");
+  await page.locator('[data-local-key-error="wrong"]').waitFor({ timeout: STEP_MS });
+  if ((await page.evaluate(() => localStorage.getItem("nokker.local-token") ?? sessionStorage.getItem("nokker.local-token"))) !== null) throw new StepError("the local key was kept by the key page");
+  // A code from `nokker open --code` opens it, with a session key of its own (never the local key).
+  const code = (await (await page.request.post(`${local.api}/v1/local/session-code`, { headers: { Authorization: `Bearer ${local.token}` } })).json()).code;
+  await page.fill("#lk-key-input", code);
+  await page.locator("[data-local-key] button[type=submit]").click();
+  await until(page, "the code opens this Lokkal", () => (location.pathname === "/setup" || location.pathname === "/") && !document.querySelector("[data-local-key]"));
+  const kept = await page.evaluate(() => localStorage.getItem("nokker.local-token"));
+  if (!kept) throw new StepError("no session key kept after the code");
+  if (kept === local.token) throw new StepError("the page holds the LOCAL key: a session key of its own was expected");
+  const sessionKey = kept;
   // A new tab on the same machine: the kept key opens the app, no key page.
   const tab = await ctx.newPage();
   await tab.goto(`${lk}/`);
@@ -1382,7 +1950,7 @@ async function lokkalKey(page, base, t, local) {
   if ((await probe).status() !== 200) throw new StepError("the key check did not accept the kept key");
   await tab.waitForTimeout(300);
   if (await tab.locator("[data-local-key-page]").count()) throw new StepError("a 401 about something else closed the session");
-  if ((await tab.evaluate(() => localStorage.getItem("nokker.local-token"))) !== local.token) throw new StepError("a 401 about something else forgot the key");
+  if ((await tab.evaluate(() => localStorage.getItem("nokker.local-token"))) !== sessionKey) throw new StepError("a 401 about something else forgot the key");
   await tab.unroute("**/v1/chat/completions");
   // Key revoked while the tab stays open (install reset): the core refuses it everywhere → forgotten, key page.
   await tab.route("**/v1/**", fail401);
@@ -1545,9 +2113,22 @@ async function main() {
     ["phone-fr", { ...SMALL_PHONE, locale: "fr-CH" }, phoneFr], // French labels are longer: same overflow checks
     // Before `modes`: its local session (Lokkal) is not readable by the account, and would become the latest thread.
     ["navigation", DESKTOP, navigation],
+    ["palette-settings", { ...DESKTOP, locale: "fr-CH" }, paletteSettings],
     ["navigation-phone", PHONE, navigation],
     ["modes", DESKTOP, modes],
+    ["modes-busy", DESKTOP, modesBusy],
     ["folder", PHONE, folder],
+    ["kiosk-code", DESKTOP, kioskCode],
+    ["lokkal-account", DESKTOP, lokkalAccount],
+    ["turn-notice", DESKTOP, turnNotice],
+    ["approval-target", DESKTOP, approvalTarget],
+    ["approval-target-phone", PHONE, approvalTarget],
+    ["accord", DESKTOP, accord],
+    ["quota", DESKTOP, quota],
+    ["quota-phone", PHONE, quota],
+    ["accord-phone", PHONE, accord],
+    ["accord-fr", { ...PHONE, locale: "fr-CH" }, accord],
+    ["session-code", DESKTOP, sessionCode],
     ["glance", GLASSES, glance],
     ["cast", DESKTOP, cast],
     ["artifact", DESKTOP, artifact],
@@ -1556,6 +2137,7 @@ async function main() {
     ["presence-phone", PHONE, presence],
     ["presence-phone-fr", { ...PHONE, locale: "fr-CH" }, presence],
     ["consolidation", DESKTOP, consolidation],
+    ["long-memory", DESKTOP, longMemory],
     ["payments", DESKTOP, payments],
     ["auto-review", PHONE, autoReview],
     ["auto-review-fr", { ...DESKTOP, locale: "fr-CH" }, autoReview],
@@ -1570,6 +2152,8 @@ async function main() {
     ["trial-cancelled", PHONE, trialCancelled],
     ["trial-cancelled-fr", { ...PHONE, locale: "fr-CH" }, trialCancelled],
     ["models", PHONE, models],
+    ["started-message", DESKTOP, startedMessage],
+    ["account-lang", DESKTOP, accountLang],
     ["models-fr", { ...DESKTOP, locale: "fr-CH" }, models],
     ["glance-pair", PHONE, glancePair],
     ["knock", PHONE, knockSetting],

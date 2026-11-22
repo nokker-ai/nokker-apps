@@ -1,6 +1,7 @@
 /** Approbations fortes d'une machine liée, signées depuis app.nokker.ai (LOKKAL §7.3) — fonctions pures. */
 import type { RemoteApprovalStatus } from "@nokker-apps/sdk";
 import { shellLang, tr } from "../i18n/index.js";
+import { isNativeShell } from "../platform/native.js";
 
 export type RemoteTarget = { kind: "id"; machineId: string; approvalId: string } | { kind: "host"; host: string; approvalId: string };
 
@@ -65,6 +66,8 @@ export const isIOS = (ua: string): boolean => /iPhone|iPad|iPod/i.test(ua);
 
 export interface BrowserEnv {
   ua: string;
+  /** Coque Nokker native (Capacitor). */
+  native?: boolean;
   /** `window.PublicKeyCredential` présent. */
   webauthn: boolean;
   /** `window.TelegramWebviewProxy` (ou `TelegramWebview`) : navigateur intégré de Telegram, iOS comme Android. */
@@ -73,12 +76,14 @@ export interface BrowserEnv {
 
 export function browserEnv(): BrowserEnv {
   const w = window as unknown as Record<string, unknown>;
-  return { ua: navigator.userAgent, webauthn: typeof w.PublicKeyCredential !== "undefined", telegram: "TelegramWebviewProxy" in w || "TelegramWebview" in w };
+  return { ua: navigator.userAgent, webauthn: typeof w.PublicKeyCredential !== "undefined", telegram: "TelegramWebviewProxy" in w || "TelegramWebview" in w, native: isNativeShell() };
 }
 
 /** Pourquoi CE navigateur ne peut pas signer avec une passkey : navigateur intégré (nom de l'appli si connu), ou
  * WebAuthn absent ; `null` s'il le peut. Une vue web iOS sans le jeton `Safari/` est un navigateur intégré. */
 export function signBlocker(env: BrowserEnv): { kind: "in_app"; app: string | null } | { kind: "no_webauthn" } | null {
+  // Coque Nokker native : sa vue web n'est pas un « navigateur intégré » à fuir, la décision se fait dans l'app (W12).
+  if (env.native) return null;
   if (env.telegram) return { kind: "in_app", app: "Telegram" };
   const hit = IN_APP.find(([re]) => re.test(env.ua));
   if (hit) return { kind: "in_app", app: hit[1] };

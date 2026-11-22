@@ -16,6 +16,7 @@ import { randomBytes } from "node:crypto";
 import { pagesPublicAllowed } from "./pages.js";
 import type { LocalLinkStart, LocalModelTestResult, LocalSetup } from "@nokker-apps/sdk";
 import { cardOf, KINDS } from "./onboarding.js";
+import { accessSessionOf } from "./local-access.js";
 import type { MockState } from "./state.js";
 
 type Send = (status: number, payload: unknown) => void;
@@ -171,7 +172,9 @@ export async function handleLocal(
   // Seulement les routes de l'écran /setup (les autres `/v1/local/*` sont servies par local.ts).
   if (!path.startsWith("/v1/local/setup") && !path.startsWith("/v1/local/link")) return false;
   if (!hostAllowed(headers.host, headers.localPort)) return bad(send, 403, "hôte non autorisé");
-  const ok = headers.authorization === `Bearer ${LOCAL_TOKEN}` || (!!state.localToken && headers.authorization === `Bearer ${state.localToken}`);
+  // Le jeton local, ou une session d'accès de portée propriétaire (le code `nokker open` échangé : mêmes droits sur /v1/local/*).
+  const bearer = String(headers.authorization ?? "").replace(/^Bearer /, "").trim();
+  const ok = headers.authorization === `Bearer ${LOCAL_TOKEN}` || (!!state.localToken && headers.authorization === `Bearer ${state.localToken}`) || (bearer !== "" && accessSessionOf(state, bearer)?.scope === "owner");
   if (!ok) return bad(send, 401, "jeton local requis");
 
   if (method === "GET" && path === "/v1/local/setup") {

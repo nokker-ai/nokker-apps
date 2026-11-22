@@ -15,7 +15,9 @@ import { t } from "../i18n/index.js";
 
 export type ConfirmRequest =
   | { kind: "forget"; name: string; title: string }
-  | { kind: "trust"; skills: ProjectSkillsStatus };
+  | { kind: "trust"; skills: ProjectSkillsStatus }
+  /** `/model <nom>` : défaut de TOUTE la machine (`PUT /v1/local/setup/models {default}` seul) ; Entrée ne confirme pas. */
+  | { kind: "model"; id: string; title: string; current: string | null };
 
 export function ConfirmCard({
   request,
@@ -40,6 +42,22 @@ export function ConfirmCard({
     else if (key.escape || input === "n" || input === "N") onAnswer(false);
   });
 
+  if (request.kind === "model") {
+    return (
+      <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginY={1}>
+        <Text bold color="yellow">
+          {t("Change the default model of this machine?")}
+        </Text>
+        <Text>
+          {request.current ?? t("nothing")} → <Text bold>{request.title}</Text>
+        </Text>
+        <Text dimColor>{t("Every session and every thread of this machine will use it, not only this one (the core cannot choose per session yet).")}</Text>
+        <Text dimColor>{t("y: change it · n / Esc: keep {0}", request.current ?? t("nothing"))}</Text>
+        {busy ? <Text dimColor>…</Text> : null}
+        {message ? <Text color="red">{message}</Text> : null}
+      </Box>
+    );
+  }
   if (request.kind === "forget") {
     return (
       <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginY={1}>

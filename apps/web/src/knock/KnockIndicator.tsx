@@ -11,7 +11,7 @@ import { knockStateText, useKnock } from "./KnockCard.js";
 
 export function KnockIndicator(): React.ReactElement | null {
   const k = useKnock();
-  if (!k.enabled || knockUnsupported()) return null;
+  if (!k.enabled || knockUnsupported() || k.blocked) return null;
   if (k.state === "off" || k.state === "error") {
     return (
       <button type="button" className="knock-pill paused" data-knock-indicator="off" onClick={() => void startKnock()} title={tr("Knock to call is paused: listen again")} aria-label={tr("Knock to call is paused: listen again")}>

@@ -16,6 +16,10 @@ export interface HouseholdWindow {
 export interface HouseholdMember {
   account_id: string;
   email: string;
+  /** Prénom saisi (Mon compte, ou recopié de l'invitation) ; vide si aucun (noyau p2/member-first-name ebb9ae3). */
+  first_name?: string;
+  /** Nom montré partout (068, sites, textes du modèle) : le prénom, sinon la partie locale de l'adresse. */
+  name?: string;
   payer: boolean;
   profile: HouseholdProfile;
   status: "active" | "suspended";
@@ -28,6 +32,8 @@ export interface HouseholdMember {
 export interface HouseholdInvitation {
   id: string;
   email: string;
+  /** Prénom donné par le payeur à l'invitation (recopié dans le compte à l'acceptation s'il n'en a pas). */
+  first_name?: string;
   profile: HouseholdProfile;
   state: "pending" | "accepted" | "declined" | "revoked" | "expired";
   created_at: string;

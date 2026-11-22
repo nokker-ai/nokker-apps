@@ -10,8 +10,9 @@ import type { Lang } from "../onboarding/i18n.js";
 import { diffRows, journalLine, learningError, when } from "./model.js";
 import { Consolidations } from "./Consolidations.js";
 import { capability } from "../capabilities.js";
+import { LongMemoryPane } from "./LongMemory.js";
 
-export type LearningSection = "pending" | "journal" | "skills" | "consolidations";
+export type LearningSection = "pending" | "memory" | "journal" | "skills" | "consolidations";
 
 export function LearningView({
   client,
@@ -43,8 +44,21 @@ export function LearningView({
       live = false;
     };
   }, [client]);
+  // L'écran « Mémoire » n'existe que si le noyau a la fonction allumée (404 sinon : rien à montrer).
+  const [lm, setLm] = useState(false);
+  useEffect(() => {
+    let live = true;
+    client.getLongMemory().then(
+      () => live && setLm(true),
+      () => live && setLm(false),
+    );
+    return () => {
+      live = false;
+    };
+  }, [client]);
   const tabs: [LearningSection, string][] = [
     ["pending", tr("To approve")],
+    ...(lm ? ([["memory", tr("Memory")]] as [LearningSection, string][]) : []),
     ["journal", tr("What Nokker learned")],
     ["skills", tr("Learned skills")],
     ...(cx ? ([["consolidations", tr("Consolidations")]] as [LearningSection, string][]) : []),
@@ -59,6 +73,7 @@ export function LearningView({
         ))}
       </div>
       {section === "pending" ? <Pending client={client} lang={lang} onOpenThread={onOpenThread} onChanged={onChanged} /> : null}
+      {section === "memory" && lm ? <LongMemoryPane client={client} lang={lang} /> : null}
       {section === "journal" ? <Journal client={client} lang={lang} onOpenThread={onOpenThread} /> : null}
       {section === "skills" ? <Skills client={client} lang={lang} onOpenThread={onOpenThread} /> : null}
       {section === "consolidations" && cx ? <Consolidations client={client} lang={lang} /> : null}
@@ -89,6 +104,7 @@ function Pending({ client, lang, onOpenThread, onChanged }: { client: NokkerClie
   const [sugg, setSugg] = useState<ApprovalSuggestions | null | "off">(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [noted, setNoted] = useState<string | null>(null);
   const load = useCallback(() => {
     client.listPendingMemory().then((r) => setNotes(r.notes), () => setNotes("off"));
     client.listApprovalSuggestions().then(setSugg, () => setSugg("off"));
@@ -98,6 +114,7 @@ function Pending({ client, lang, onOpenThread, onChanged }: { client: NokkerClie
   const act = async (key: string, p: Promise<unknown>): Promise<void> => {
     setBusy(key);
     setErr(null);
+    setNoted(null);
     try {
       await p;
     } catch (e) {
@@ -109,6 +126,11 @@ function Pending({ client, lang, onOpenThread, onChanged }: { client: NokkerClie
     }
   };
 
+  const approve = (id: string): Promise<void> =>
+    act(
+      id,
+      client.decidePendingMemory(id, "approve").then((r) => setNoted(r.note.result ?? "")),
+    );
   const noteList = Array.isArray(notes) ? notes : [];
   const suggList = sugg && sugg !== "off" ? sugg.suggestions : [];
   const loading = notes === null || sugg === null;
@@ -117,6 +139,11 @@ function Pending({ client, lang, onOpenThread, onChanged }: { client: NokkerClie
       {err ? (
         <p className="error" role="alert">
           {err}
+        </p>
+      ) : null}
+      {noted !== null ? (
+        <p className="ob-note lrn-noted" role="status">
+          {noted ? tr("Noted: {0}", noted) : tr("Noted")}
         </p>
       ) : null}
       {loading ? <p className="fine">{tr("Loading…")}</p> : null}
@@ -129,12 +156,13 @@ function Pending({ client, lang, onOpenThread, onChanged }: { client: NokkerClie
               <li key={n.id} className="lrn-card">
                 <div className="lrn-card-head">
                   <strong>{n.title}</strong>
-                  <span className={`lrn-badge ${n.scope}`}>{n.scope === "user" ? tr("everywhere") : tr("this project")}</span>
+                  <span className={`lrn-badge ${n.scope}`}>{n.scope === "user" ? tr("everywhere") : n.scope === "household" ? tr("household") : tr("this project")}</span>
                 </div>
+                <p className="fine lrn-who">{n.source === "household" ? tr("A member of your household suggests keeping:") : tr("Nina suggests keeping:")}</p>
                 <p className="lrn-text">{n.text}</p>
                 <Origin threadId={n.thread_id} at={n.at} lang={lang} onOpenThread={onOpenThread} />
                 <div className="lrn-actions">
-                  <button type="button" className="btn btn-brass" disabled={busy !== null} onClick={() => void act(n.id, client.decidePendingMemory(n.id, "approve"))}>
+                  <button type="button" className="btn btn-brass" disabled={busy !== null} onClick={() => void approve(n.id)}>
                     {tr("Remember")}
                   </button>
                   <button type="button" className="btn btn-ghost" disabled={busy !== null} onClick={() => void act(n.id, client.decidePendingMemory(n.id, "reject"))}>

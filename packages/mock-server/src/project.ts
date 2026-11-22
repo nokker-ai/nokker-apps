@@ -189,6 +189,7 @@ export function memoryTool(state: MockState, threadId: string, args: Record<stri
     const i = st.notes.findIndex((x) => x.name === name);
     if (i < 0) return err(`note inconnue : ${name}`);
     const [n] = st.notes.splice(i, 1);
+    if (typeof state.memory.store?.notes === "number") state.memory.store.notes -= 1; // l'index suit l'oubli
     state.publish({ type: "memory.forgotten", thread_id: threadId, name: n!.name, kind: n!.kind, scope: n!.scope });
     return json({ forgotten: n!.name });
   }

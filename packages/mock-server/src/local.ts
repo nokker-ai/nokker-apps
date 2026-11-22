@@ -76,7 +76,7 @@ export interface LocalTurnResult {
   /** `turn.done.refused` (noyau du 01.11) : un effet refusé d'office (deny, hardline) ou une carte rejetée pendant le tour. */
   refused?: boolean;
   /** `turn.done.error` (noyau du 01.11) : le tour a échoué. */
-  error?: { code: string; message: string };
+  error?: { code: string; message: string; retry_at?: string };
 }
 
 interface Step {
@@ -105,10 +105,12 @@ function sleep(state: MockState, ms: number, signal: AbortSignal): Promise<void>
   });
 }
 
-function scenarioFor(text: string): { kind: "fix" | "hardline" | "delegate" | "background" | "lsp" | "lspFix" | "fail" | "long" | "plain"; test: string } {
+function scenarioFor(text: string): { kind: "fix" | "hardline" | "delegate" | "background" | "lsp" | "lspFix" | "fail" | "quota" | "long" | "plain"; test: string } {
   const n = normalize(text);
   const test = text.match(/\btest[\s_:]*([\w./-]+)/i)?.[1] ?? "test_app";
   // Tour en échec (D7) : `turn.done.error {code: provider_error}`.
+  // Quota d'utilisation atteint : la phrase du noyau comme réponse, `turn.done.error {code: quota_exceeded, retry_at}`.
+  if (/simulate (?:a )?quota|simule un quota/.test(n)) return { kind: "quota", test };
   if (/simulate (?:a |an )?(?:provider )?(?:error|failure)|simule une (?:erreur|panne)/.test(n)) return { kind: "fail", test };
   // Longue réponse streamée PENDANT le tour (D6) : l'annulation coupe le texte partiel (reset + réponse finale).
   if (/long (?:answer|reply|essay)|longue reponse/.test(n)) return { kind: "long", test };
@@ -171,6 +173,16 @@ export async function runLocalTurn(
       reply: "The model provider did not answer; the turn stopped without a conclusion.",
       cancelled: false,
       error: { code: "provider_error", message: "upstream 502 (mock)" },
+    };
+  }
+  if (sc.kind === "quota") {
+    await sleep(state, 60, signal);
+    if (signal.aborted) return { reply: "", cancelled: true };
+    const retryAt = "2026-12-01T00:00:00Z";
+    return {
+      reply: "Usage quota reached. It renews on 1 December at 01:00 (Swiss time). You can also upgrade to a higher plan from your account.",
+      cancelled: false,
+      error: { code: "quota_exceeded", message: "usage quota reached", retry_at: retryAt },
     };
   }
   if (sc.kind === "long") {
@@ -239,6 +251,7 @@ export async function runLocalTurn(
     state.continuations.set(pending.id, {
       threadId,
       run: () => continueAfterDecision(state, threadId, pending, pendingStep!, rest, sc.test),
+      refuse: () => continueAfterRefusal(state, threadId, pending, rest, sc.test),
     });
     return { reply: `The command \`${String(pending.arguments.command ?? pending.tool_name)}\` is waiting for your approval on the card.`, cancelled: false };
   }
@@ -418,9 +431,33 @@ async function continueAfterDecision(
     ms: step.ms,
   });
 
+  await followUpTurn(state, threadId, card, rest, test, "approved");
+}
+
+/** Refus d'une carte (noyau n27, `POST …/decide` → 202) : l'appel resté en attente se ferme sur un `tool.result`
+ * « refused / declined » (même `call_id` et `approval_id`), puis le modèle reçoit le refus et CONTINUE le tour. */
+async function continueAfterRefusal(state: MockState, threadId: string, card: Approval, rest: Step[], test: string): Promise<void> {
+  state.publish({
+    type: "tool.result",
+    thread_id: card.thread_id,
+    turn_id: `${card.thread_id}:${card.turn_index}`,
+    ...(card.call_id ? { call_id: card.call_id } : {}),
+    approval_id: card.id,
+    name: card.tool_name,
+    ok: false,
+    is_error: true,
+    status: "refused",
+    reason: "declined",
+    preview: "refusé par local-owner.", // texte du noyau : jamais montré tel quel (identifiant interne)
+  });
+  await followUpTurn(state, threadId, card, rest, test, "rejected");
+}
+
+/** Tour de suite d'une décision : le bloc `[Approbation]` (origin approval), les étapes restantes, la réponse. */
+async function followUpTurn(state: MockState, threadId: string, card: Approval, rest: Step[], test: string, decided: "approved" | "rejected"): Promise<void> {
   const rec = state.ensureThread(threadId, "");
   const turnId = `${threadId}:${rec.turns.length}`;
-  const block = `[Approbation]\nOutil : ${card.tool_name}\nDécision : approved\n[/Approbation]`;
+  const block = `[Approbation]\nOutil : ${card.tool_name}\nDécision : ${decided}\n[/Approbation]`;
   state.publish({ type: "turn.started", thread_id: threadId, turn_id: turnId });
   const ctl = new AbortController();
   state.activeTurns.set(threadId, { turnId, abort: ctl });
@@ -433,9 +470,13 @@ async function continueAfterDecision(
       cancelled = true;
     } else if (r.pending) {
       const { pending, pendingStep, rest: left } = r;
-      state.continuations.set(pending.id, { threadId, run: () => continueAfterDecision(state, threadId, pending, pendingStep!, left, test) });
+      state.continuations.set(pending.id, {
+        threadId,
+        run: () => continueAfterDecision(state, threadId, pending, pendingStep!, left, test),
+        refuse: () => continueAfterRefusal(state, threadId, pending, left, test),
+      });
       reply = `The command \`${String(pending.arguments.command ?? pending.tool_name)}\` is waiting for your approval on the card.`;
-    } else reply = `Test ${test} passes.${r.rejected ? " One action was refused." : ""}`;
+    } else reply = `Test ${test} passes.${r.rejected || decided === "rejected" ? " One action was refused." : ""}`;
   } finally {
     state.activeTurns.delete(threadId);
   }
@@ -465,19 +506,22 @@ export function scheduleLocalDecision(state: MockState, approval: Approval): App
   const waiter = state.approvalWaiters.get(approval.id);
   if (approval.status !== "approved") {
     waiter?.("rejected");
-    return "none";
-  }
-  if (!cont) {
+    // Noyau n27 : un refus répond 202 et le tour CONTINUE (le modèle reçoit le refus). Style `inline` : le tour qui
+    // attendait la décision reprend de lui-même (`running`) ; style `kernel` : la suite passe par la file du fil.
+    if (!cont?.refuse) return waiter ? "running" : "none";
+  } else if (!cont) {
     waiter?.("approved"); // l'action s'exécute, puis le tour reprend
     return "running";
   }
-  const root = cont.threadId.split("/sa-")[0]!;
+  const follow = approval.status !== "approved" ? cont!.refuse! : cont!.run;
+  const root = cont!.threadId.split("/sa-")[0]!;
   const epoch = state.cancelEpochs.get(root) ?? 0;
-  const immediate = !state.threadBusy(cont.threadId);
-  const place = state.lockThread(cont.threadId);
+  const immediate = !state.threadBusy(cont!.threadId);
+  const place = state.lockThread(cont!.threadId);
   void (async () => {
     const release = await place;
     try {
+      if ((state.cancelEpochs.get(root) ?? 0) !== epoch && approval.status !== "approved") return; // refus puis annulation : pas de suite
       if ((state.cancelEpochs.get(root) ?? 0) !== epoch) {
         approval.status = "failed";
         approval.error = "annulé par l'utilisateur";
@@ -494,7 +538,7 @@ export function scheduleLocalDecision(state: MockState, approval: Approval): App
         });
         return;
       }
-      await cont.run();
+      await follow();
     } catch {
       // le mock ne lève pas ici ; une suite cassée ne doit pas bloquer la file
     } finally {

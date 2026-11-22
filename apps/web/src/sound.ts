@@ -5,6 +5,7 @@
  */
 import { DEFAULT_PREFS, KNOCKS, androidWaveform, type KnockKind, type SignaturePrefs } from "@nokker-apps/brand";
 import { readJson, writeJson } from "./viewState.js";
+import { nativeHaptics } from "./platform/native.js";
 
 const coarse = (): boolean => {
   try {
@@ -45,6 +46,8 @@ export function knock(kind: KnockKind, prefs: SignaturePrefs): void {
       /* audio indisponible */
     }
   }
+  // Dans l'app : le plugin natif (iOS n'a pas navigator.vibrate) ; dans un navigateur : navigator.vibrate.
+  if (prefs.haptics && nativeHaptics(androidWaveform(kind))) return;
   if (prefs.haptics && typeof navigator.vibrate === "function") {
     try {
       navigator.vibrate(androidWaveform(kind));

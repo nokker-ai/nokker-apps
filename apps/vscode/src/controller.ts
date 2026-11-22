@@ -62,6 +62,8 @@ export interface ControllerOptions {
   t?: Translate;
   /** Langue des montants et des jetons. */
   lang?: CostLang;
+  /** Langue de VS Code (`vscode.env.language`), posée en `Accept-Language` sur les appels au noyau. */
+  language?: string;
   /** Dossiers ouverts dans la fenêtre (vue Sessions) ; défaut : `folder`. */
   folders?: () => string[];
 }
@@ -165,7 +167,7 @@ export class ChatController {
     try {
       this.closeSession();
       if (!this.client || !this.hub) {
-        this.client = new NokkerClient({ baseUrl: this.opts.serverUrl, token: tok.token, userAgent: this.opts.userAgent ?? "nokker-vscode/0.1" });
+        this.client = new NokkerClient({ baseUrl: this.opts.serverUrl, token: tok.token, userAgent: this.opts.userAgent ?? "nokker-vscode/0.1", surface: "vscode", language: this.opts.language ?? this.lang });
         this.hub = new LocalEventHub(this.client, (err) => this.host.log?.("warn", `events: ${String(err)}`));
         this.sessionsModel = new SessionsModel(this.client, this.hub, {
           folders: () => this.opts.folders?.() ?? (this.opts.folder ? [this.opts.folder] : []),

@@ -5,6 +5,7 @@
 import { deletionGranted } from "./account/lifecycle.js";
 import { messageContent } from "./composer/images.js";
 import { userErrorText } from "./errors/userError.js";
+import { visibleBubbles } from "./bubbles/visible.js";
 import { agentEventText, refusalText } from "./payments/model.js";
 import { applyLiveInputEvent, formatCostLine, type LiveInputs } from "@nokker-apps/sdk";
 import { chfOnly } from "./account/cost.js";
@@ -35,8 +36,10 @@ import { knock, loadSignaturePrefs, saveSignaturePrefs } from "./sound.js";
 import { readJson, writeJson } from "./viewState.js";
 import { shellLang, tr } from "./i18n/index.js";
 import { loadAgents, loadMembers, loadOpenNotifications, type Member } from "./extensions.js";
-import { applyChatChunk, parseTurnId } from "@nokker-apps/sdk";
+import { applyChatChunk, isQuotaError, parseTurnId, type TextAttachment, type RedactionMeta } from "@nokker-apps/sdk";
 import { cwdByThread, mergeLocalSessions } from "./lokkal/sessions.js";
+import { threadUrl } from "./nav/history.js";
+import { isNetworkError, loadThread as cachedThread, loadThreads as cachedThreads, saveThread as keepThread, saveThreads as keepThreads } from "./offline/cache.js";
 
 export interface Toast {
   id: number;
@@ -56,6 +59,8 @@ export interface NokkerStore {
   client: NokkerClient;
   status: string;
   ready: boolean;
+  /** Hors ligne : on montre la copie gardée dans l'appareil, prise à cette date (ms) ; `null` en ligne (W6). */
+  offlineAt: number | null;
   access: Access;
   /** Relance la reprise de session (après une connexion par code, ou pour réessayer après une erreur). */
   retryAccess(): void;
@@ -76,11 +81,17 @@ export interface NokkerStore {
   markAccountGone(): void;
   threads: Thread[];
   current: Thread | null;
+  /** Origine du fil ouvert : `cloud`, ou la machine (`mc_…`) dont le client sert ce fil (LOKKAL-PHONE §1.2). */
+  currentOrigin: string;
+  /** Ouvre le fil d'une machine dans la page : lecture, envoi et événements par le client de SA passerelle. */
+  selectRemote(origin: string, thread: Thread, remote: NokkerClient): void;
   messages: ThreadMessage[];
   streaming: string | null;
   /** Réponse d'un tour lancé ailleurs (ask, action de bulle → 202), reçue par `turn.delta` sur /v1/events et
    * affichée tant que `GET /v1/threads/{id}` ne la porte pas encore. */
   live: { turn_id: string; text: string } | null;
+  /** Message envoyé depuis un AUTRE client, reçu par `turn.started` : affiché dès le début du tour, remplacé par l'historique à la fin. */
+  startedMessage: { turn_id: string; text: string; truncated: boolean } | null;
   /** Fils qui ont répondu pendant qu'on était ailleurs (compteur client : `unread` vaut 0 côté noyau P1). */
   unseen: Record<string, number>;
   members: Member[];
@@ -92,6 +103,10 @@ export interface NokkerStore {
   agentRuns: Record<string, AgentRun>;
   /** X2 : ligne de coût par tour (`turn_id` → « 12,4 k jetons · 0,03 € »), reçue par `turn.cost` (LOKKAL §7.8). */
   turnCosts: Record<string, string>;
+  /** Tours finis par un quota atteint (`turn_id`) : sous leur phrase, le lien « Mon compte ». Perdu au rechargement. */
+  quotaTurns: Record<string, true>;
+  /** Ligne d'état d'un tour (`turn.done.notice`, ex. repli sur le mode allégé), par `turn_id` : sous la réponse, telle quelle. Perdue au rechargement (le noyau ne la garde pas dans l'historique). */
+  turnNotices: Record<string, string>;
   /** X22 : ce que le modèle est en train d'écrire, par `call_id` (BUBBLES §6) ; clos au `tool.result` ou au `turn.done`. */
   liveInputs: LiveInputs;
   /** X3 : hooks du dépôt pas encore de confiance, par fil (`hook.untrusted`). */
@@ -117,7 +132,8 @@ export interface NokkerStore {
   refreshThreads(): Promise<void>;
   /** Événements des sessions de code (§7.28 : `subagent.*`, `skill.untrusted`) pour l'onglet Code ; rend le désabonnement. */
   onCodeEvent(fn: (e: NokkerEvent) => void): () => void;
-  createThread(title: string): Promise<void>;
+  /** Crée le fil, le sélectionne et le rend (`null` : échec, dit par un toast). */
+  createThread(title: string): Promise<Thread | null>;
   /** Web servi par Lokkal (auth `local` ou `gateway`) : `thread_id` → dossier des sessions de code ; `{}` ailleurs. */
   codeSessions: Record<string, string>;
   /** Racines où une session de code peut s'ouvrir ; `null` hors Lokkal (pas de « + session de code »). */
@@ -129,7 +145,8 @@ export interface NokkerStore {
   deleteThread(id: string): Promise<void>;
   /** `images` : `data:` des images jointes (X7) ; le message part alors en parties texte + image. */
   /** `false` when the message could not be sent (the composer puts it back). */
-  send(text: string, images?: string[]): Promise<boolean>;
+  /** `texts` : pièces texte reconnues sur l'appareil (P9 : OCR, transcription, dictée). */
+  send(text: string, images?: string[], texts?: TextAttachment[], opts?: { redaction?: RedactionMeta }): Promise<boolean>;
   closeBubble(b: Bubble): Promise<void>;
   transfer(b: Bubble, toThread: string, mode: TransferMode): Promise<void>;
   share(b: Bubble, req: ShareRequest): Promise<void>;
@@ -150,6 +167,8 @@ function sortThreads(list: Thread[]): Thread[] {
 }
 
 function parseHash(): { thread?: string; bubble?: string } {
+  // `#/t/<mc_…>/<fil>` : fil d'une machine (liste unique) — ouvert par App quand la machine est connue, pas ici.
+  if (/^#\/t\/mc_[^/]+\/(?!b\/)[^/]+/.test(window.location.hash)) return {};
   const m = window.location.hash.match(/^#\/t\/([^/]+)(?:\/b\/([^/]+))?/);
   return m ? { thread: m[1], bubble: m[2] } : {};
 }
@@ -171,6 +190,12 @@ export function useNokker(): NokkerStore {
   const [status, setStatus] = useState(() => tr("connecting…"));
   const [ready, setReady] = useState(false);
   const [access, setAccess] = useState<Access>("booting");
+  const [offlineAt, setOfflineAt] = useState<number | null>(null);
+  // Fil d'une machine ouvert dans la page : son client (passerelle) et sa fiche (titre) — le reste reste au cloud.
+  const remoteOriginRef = useRef<{ origin: string; id: string; client: NokkerClient; sub: { close(): void } | null } | null>(null);
+  const [remoteThread, setRemoteThread] = useState<Thread | null>(null);
+  /** Client qui sert CE fil : celui de sa machine si c'est le fil distant ouvert, sinon le cloud. */
+  const clientOf = useCallback((id: string): NokkerClient => (remoteOriginRef.current?.id === id ? remoteOriginRef.current.client : client), [client]);
   const [deviceStatus, setDeviceStatus] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [mock, setMock] = useState(false);
@@ -181,6 +206,8 @@ export function useNokker(): NokkerStore {
   const [localRoots, setLocalRoots] = useState<string[] | null>(null);
   const [missingThread, setMissingThread] = useState<string | null>(null);
   const codeSessionsRef = useRef<Record<string, string>>({});
+  /** Sessions de code créées ici et sans tour : le hub ne les connaît pas, on ne demande pas leur fil (pas de 404 au chargement). */
+  const freshCodeRef = useRef<Set<string>>(new Set());
   codeSessionsRef.current = codeSessions;
   /** Auth `local` ou `gateway` : le web parle à une machine Lokkal (sessions de code possibles). */
   const lokkalRef = useRef<{ user: string } | null>(null);
@@ -188,10 +215,14 @@ export function useNokker(): NokkerStore {
   const [streaming, setStreaming] = useState<string | null>(null);
   /** Fils dont un tour part de ce client : l'envoi n'est bloqué que dans CE fil, jamais dans les autres. */
   const [sendingIds, setSendingIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [bubbles, setBubbles] = useState<Bubble[]>([]);
+  const [rawBubbles, setBubbles] = useState<Bubble[]>([]);
+  // Les bulles de la maison connectée ne s'affichent pas (bubbles/visible.ts) : tout l'écran lit la liste filtrée.
+  const bubbles = useMemo(() => visibleBubbles(rawBubbles), [rawBubbles]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentRuns, setAgentRuns] = useState<Record<string, AgentRun>>({});
   const [turnCosts, setTurnCosts] = useState<Record<string, string>>({});
+  const [quotaTurns, setQuotaTurns] = useState<Record<string, true>>({});
+  const [turnNotices, setTurnNotices] = useState<Record<string, string>>({});
   const [liveInputs, setLiveInputs] = useState<LiveInputs>(() => new Map());
   const [hookNotices, setHookNotices] = useState<Record<string, { sha256: string; count: number; notice: string }>>({});
   const [forwardedApprovals, setForwardedApprovals] = useState<ReadonlySet<string>>(() => new Set());
@@ -216,6 +247,7 @@ export function useNokker(): NokkerStore {
   }, [ready, currentId, refreshCost]);
   const [members, setMembers] = useState<Member[]>([]);
   const [live, setLive] = useState<{ turn_id: string; text: string } | null>(null);
+  const [startedMessage, setStartedMessage] = useState<{ turn_id: string; text: string; truncated: boolean } | null>(null);
   const [unseen, setUnseen] = useState<Record<string, number>>({});
   /** Dernière réponse reçue par fil (`turn.delta` est unique par tour côté noyau P1). */
   const deltas = useRef(new Map<string, { turn_id: string; text: string }>());
@@ -227,7 +259,9 @@ export function useNokker(): NokkerStore {
   const [flying, setFlying] = useState<Set<string>>(() => new Set());
 
   const currentRef = useRef<string | null>(null);
+  useEffect(() => setStartedMessage(null), [currentId]); // l'aperçu appartient au fil courant
   const sendingRef = useRef(new Set<string>());
+  const doneTurnsRef = useRef(new Set<string>());
   const signatureRef = useRef(signature);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastSeq = useRef(0);
@@ -256,9 +290,27 @@ export function useNokker(): NokkerStore {
   const loadThread = useCallback(
     async (id: string, withBubbles: boolean) => {
       let view: Awaited<ReturnType<NokkerClient["getThread"]>>;
+      if (freshCodeRef.current.has(id)) {
+        if (currentRef.current === id) {
+          setMessages([]);
+          setLive(null);
+        }
+        return;
+      }
       try {
-        view = await client.getThread(id);
+        view = await clientOf(id).getThread(id);
+        void keepThread(id, view);
       } catch (err) {
+        // Pas de réseau : la copie gardée de ce fil, en lecture seule, avec son âge (W6).
+        if (isNetworkError(err)) {
+          const c = await cachedThread<typeof view>(id);
+          if (c && currentRef.current === id) {
+            setMessages(c.view.messages);
+            if (withBubbles) setBubbles((cur) => [...cur.filter((b) => b.thread_id === null && !b.closed_at), ...(c.view.bubbles ?? [])]);
+            setOfflineAt(c.at);
+            return;
+          }
+        }
         // Session de code sans tour : le hub ne la connaît pas encore, la conversation est vide.
         if (err instanceof NokkerApiError && err.status === 404 && codeSessionsRef.current[id]) {
           if (currentRef.current === id) {
@@ -271,6 +323,14 @@ export function useNokker(): NokkerStore {
       }
       if (currentRef.current !== id) return;
       setMessages(view.messages);
+      // Réconciliation : l'aperçu du message d'un autre client part quand le tour est fini, ou quand l'historique porte déjà ce texte.
+      setStartedMessage((s) => {
+        if (!s) return s;
+        const lastUser = [...view.messages].reverse().find((m) => m.role === "user");
+        const idx = parseTurnId(s.turn_id)?.index; // le message user et la réponse d'un tour partagent l'index du tour
+        const inHistory = idx !== undefined && view.messages.some((m) => m.role === "user" && m.index === idx);
+        return inHistory || doneTurnsRef.current.has(s.turn_id) || (!s.truncated && lastUser?.content.trim() === s.text.trim()) ? null : s;
+      });
       // Réponse reçue par événement mais pas encore servie par l'historique : on la garde affichée.
       const d = deltas.current.get(id);
       const idx = d ? parseTurnId(d.turn_id)?.index : undefined;
@@ -281,13 +341,14 @@ export function useNokker(): NokkerStore {
         setLive(null);
       }
       // Fil ouvert par un lien et absent de la liste : il y entre.
-      setThreads((list) => sortThreads(list.some((t) => t.id === id) ? list.map((t) => (t.id === id ? view.thread : t)) : [...list, view.thread]));
+      if (remoteOriginRef.current?.id === id) setRemoteThread(view.thread);
+      else setThreads((list) => sortThreads(list.some((t) => t.id === id) ? list.map((t) => (t.id === id ? view.thread : t)) : [...list, view.thread]));
       if (withBubbles) {
         // Les notify sans fil suivent l'utilisateur d'un fil à l'autre.
         setBubbles((cur) => [...cur.filter((b) => b.thread_id === null && !b.closed_at), ...view.bubbles]);
       }
     },
-    [client],
+    [clientOf],
   );
 
   const scheduleRefresh = useCallback(() => {
@@ -330,7 +391,7 @@ export function useNokker(): NokkerStore {
 
   const onEvent = useCallback(
     (e: NokkerEvent) => {
-      if (e.type.startsWith("subagent.") || e.type === "skill.untrusted" || e.type === "session.mode" || e.type === "todo.updated" || e.type.startsWith("house.") || e.type === "presence.changed" || e.type === "turn.done" || (e.type === "tool.result" && !!e.reason))
+      if (e.type.startsWith("subagent.") || e.type === "skill.untrusted" || e.type === "session.mode" || e.type === "todo.updated" || e.type.startsWith("house.") || e.type === "presence.changed" || e.type === "turn.done" || e.type.startsWith("browser.") || e.type === "approval.requested" || e.type === "approval.decided" || (e.type === "tool.result" && !!e.reason))
         for (const fn of codeListeners.current) fn(e);
       // X22 : accumulation pure (SDK) ; la même fonction clôt un bloc au tool.result ou au turn.done.
       if (e.type === "tool.input.delta" || e.type === "tool.result" || e.type === "turn.done") setLiveInputs((l) => applyLiveInputEvent(l, e));
@@ -393,6 +454,16 @@ export function useNokker(): NokkerStore {
           setAgents((a) => [...a.filter((x) => x.id !== e.agent.id), e.agent]);
           setCrewPulse((n) => n + 1);
           return;
+        case "device.request":
+          // Données du téléphone à la demande (P8) : platform/pim.ts répond, seulement dans l'app native.
+          window.dispatchEvent(new CustomEvent("nokker:device-request", { detail: e }));
+          break;
+        case "turn.started":
+          // Un tour lancé AILLEURS (autre client, CLI) : son message s'affiche tout de suite. Le nôtre est déjà à l'écran.
+          if (e.thread_id === currentRef.current && !sendingRef.current.has(e.thread_id) && e.user_message) {
+            setStartedMessage({ turn_id: e.turn_id, text: e.user_message, truncated: e.truncated === true });
+          }
+          return;
         case "turn.delta":
           deltas.current.set(e.thread_id, { turn_id: e.turn_id, text: e.text });
           if (e.thread_id === currentRef.current) {
@@ -407,6 +478,11 @@ export function useNokker(): NokkerStore {
           if (e.thread_id === currentRef.current) void refreshCost(e.thread_id);
           return;
         case "turn.done":
+          // L'historique, relu à la fin du tour, porte le message : l'aperçu part avec la relecture (jamais de doublon).
+          doneTurnsRef.current.add(e.turn_id);
+          window.setTimeout(() => setStartedMessage((s) => (s?.turn_id === e.turn_id ? null : s)), 8000); // relecture impossible (hors ligne) : ne reste pas affiché
+          if (isQuotaError(e.error)) setQuotaTurns((q) => ({ ...q, [e.turn_id]: true }));
+          if (typeof e.notice === "string" && e.notice.trim()) setTurnNotices((n) => ({ ...n, [e.turn_id]: e.notice!.trim() }));
           if (e.thread_id === currentRef.current) scheduleRefresh();
           return;
         case "session.message":
@@ -491,8 +567,10 @@ export function useNokker(): NokkerStore {
           } catch {
             setMissingThread(linked);
           }
-        } else if (!first) first = list[0] ?? null;
+        } else if (!first) first = list.find((t) => !/^lokkal-mc_/.test(t.id)) ?? list[0] ?? null; // jamais une copie du miroir par défaut
         setThreads(list);
+        void keepThreads(list);
+        setOfflineAt(null);
         if (first) {
           currentRef.current = first.id;
           setCurrentId(first.id);
@@ -515,6 +593,8 @@ export function useNokker(): NokkerStore {
                 merged = mergeLocalSessions(l, sessions, lokkalRef.current.user, new Date().toISOString());
               }
               setThreads(sortThreads(merged));
+              void keepThreads(merged);
+              setOfflineAt(null);
             });
             if (currentRef.current) void loadThread(currentRef.current, true);
           },
@@ -556,6 +636,31 @@ export function useNokker(): NokkerStore {
           setAccess("device-refused");
           return;
         }
+        // Pas de réseau et une copie gardée : on la montre en lecture seule ; la connexion se refait quand le réseau revient.
+        if (isNetworkError(err)) {
+          const c = await cachedThreads();
+          if (cancelled) return;
+          if (c && c.view.length) {
+            const list = sortThreads(c.view);
+            const first = list.find((t) => t.id === (parseHash().thread ?? readJson<string | null>("currentThread", null))) ?? list[0]!;
+            setThreads(list);
+            currentRef.current = first.id;
+            setCurrentId(first.id);
+            const v = await cachedThread<{ messages: ThreadMessage[]; bubbles?: Bubble[] }>(first.id);
+            if (cancelled) return;
+            setMessages(v?.view.messages ?? []);
+            if (v?.view.bubbles) setBubbles(v.view.bubbles);
+            setOfflineAt(v?.at ?? c.at);
+            setStatus(tr("offline"));
+            setAccess("ready");
+            const back = (): void => {
+              window.removeEventListener("online", back);
+              setAttempt((n) => n + 1);
+            };
+            window.addEventListener("online", back);
+            return;
+          }
+        }
         setStatus(tr("connection failed: {0}", errText(err)));
         setAccess("error");
       }
@@ -577,7 +682,14 @@ export function useNokker(): NokkerStore {
 
   const selectThread = useCallback(
     (id: string) => {
-      if (id === currentRef.current) return;
+      if (id === currentRef.current && !remoteOriginRef.current) return;
+      const prev = currentRef.current;
+      // Retour à un fil du cloud : le client et le flux de la machine ouverte se ferment.
+      if (remoteOriginRef.current) {
+        remoteOriginRef.current.sub?.close();
+        remoteOriginRef.current = null;
+        setRemoteThread(null);
+      }
       currentRef.current = id;
       setCurrentId(id);
       setMissingThread(null);
@@ -588,7 +700,9 @@ export function useNokker(): NokkerStore {
       setBubbles((cur) => cur.filter((b) => b.thread_id === null));
       writeJson("currentThread", id);
       try {
-        history.replaceState(null, "", `#/t/${id}`);
+        // Changer de fil = une entrée d'historique (le retour ramène au fil d'avant, LOKKAL-PHONE §1.1 W2) ; arriver sur
+        // le premier fil, ou y revenir par le retour (le hash y est déjà), remplace seulement l'adresse.
+        threadUrl(history, id, prev !== null && window.location.hash !== `#/t/${id}`);
       } catch {
         /* pas d'historique (aperçu) */
       }
@@ -602,6 +716,49 @@ export function useNokker(): NokkerStore {
       });
     },
     [loadThread, toast],
+  );
+
+  /** Fil d'une machine (liste unique, LOKKAL-PHONE §1.2) : lu, écrit et suivi par le client de SA passerelle. Seuls les
+   * événements de CE fil passent (ceux des autres fils de la machine n'entrent pas dans la liste du cloud). */
+  const selectRemote = useCallback(
+    (origin: string, thread: Thread, remote: NokkerClient) => {
+      const id = thread.id;
+      if (id === currentRef.current && remoteOriginRef.current?.origin === origin) return;
+      const prev = currentRef.current;
+      const route = `#/t/${origin}/${encodeURIComponent(id)}`;
+      remoteOriginRef.current?.sub?.close();
+      const rec: { origin: string; id: string; client: NokkerClient; sub: { close(): void } | null } = { origin, id, client: remote, sub: null };
+      remoteOriginRef.current = rec;
+      setRemoteThread(thread);
+      currentRef.current = id;
+      setCurrentId(id);
+      setMissingThread(null);
+      setMessages([]);
+      setStreaming(null);
+      setLive(null);
+      setBubbles((cur) => cur.filter((b) => b.thread_id === null));
+      try {
+        threadUrl(history, id, prev !== null && window.location.hash !== route, route);
+      } catch {
+        /* pas d'historique (aperçu) */
+      }
+      const threadOf = (e: { thread?: { id: string }; bubble?: { thread_id: string | null }; thread_id?: string }): string | null | undefined => e.thread?.id ?? e.bubble?.thread_id ?? e.thread_id;
+      rec.sub = remote.subscribeEvents({
+        onEvent: (e) => {
+          if (remoteOriginRef.current !== rec || threadOf(e as never) !== id) return;
+          if (e.type === "thread.updated") {
+            setRemoteThread(e.thread);
+            scheduleRefresh();
+            return;
+          }
+          if (e.type === "thread.deleted") return;
+          onEvent(e);
+        },
+        onError: () => undefined,
+      });
+      void loadThread(id, true).catch((err) => toast(errText(err), "error"));
+    },
+    [loadThread, onEvent, scheduleRefresh, toast],
   );
 
   // Lien `#/t/<id>` suivi pendant que l'app est ouverte (autre onglet, notification) : on va sur CE fil.
@@ -634,6 +791,7 @@ export function useNokker(): NokkerStore {
       const s = await client.createLocalSession({ cwd });
       setCodeSessions((c) => ({ ...c, [s.thread_id]: s.cwd }));
       codeSessionsRef.current = { ...codeSessionsRef.current, [s.thread_id]: s.cwd };
+      freshCodeRef.current.add(s.thread_id);
       const user = lokkalRef.current?.user ?? "";
       setThreads((l) => sortThreads(mergeLocalSessions(l, [{ thread_id: s.thread_id, cwd: s.cwd, title: null }], user, new Date().toISOString())));
       selectThread(s.thread_id);
@@ -647,21 +805,26 @@ export function useNokker(): NokkerStore {
         const t = await client.createThread(title);
         setThreads((l) => sortThreads([...l.filter((x) => x.id !== t.id), t]));
         selectThread(t.id);
+        return t;
       } catch (err) {
         toast(errText(err), "error");
+        return null;
       }
     },
     [client, selectThread, toast],
   );
 
   const send = useCallback(
-    async (text: string, images: string[] = []): Promise<boolean> => {
+    async (text: string, images: string[] = [], texts: TextAttachment[] = [], opts: { redaction?: RedactionMeta } = {}): Promise<boolean> => {
       const id = currentRef.current;
-      if (!id || (!text.trim() && images.length === 0)) return false;
+      if (!id || (!text.trim() && images.length === 0 && texts.length === 0)) return false;
       let sent = true;
       sendingRef.current.add(id);
+      freshCodeRef.current.delete(id); // le premier tour crée le fil : on peut le relire
       setSendingIds(new Set(sendingRef.current));
-      const shown = images.length ? `${text}${text ? "\n\n" : ""}_${images.length === 1 ? tr("1 image attached") : tr("{0} images attached", images.length)}_` : text;
+      // Une dictée (P9) EST le message de la personne quand le champ est vide (le noyau fait de même).
+      const said = text.trim() ? text : texts.filter((x) => x.source === "device_dictation").map((x) => x.text).join("\n");
+      const shown = images.length ? `${said}${said ? "\n\n" : ""}_${images.length === 1 ? tr("1 image attached") : tr("{0} images attached", images.length)}_` : said;
       setMessages((m) => [...m, { index: (m.at(-1)?.index ?? -1) + 1, role: "user", content: shown }]);
       setStreaming("");
       try {
@@ -669,13 +832,13 @@ export function useNokker(): NokkerStore {
         // outils → l'animation de réflexion reprend), le chunk final `nokker.final` porte la réponse qui fait foi.
         let current = "";
         const content = messageContent(text, images.map((dataUrl) => ({ dataUrl })));
-        await client.streamChatCompletion(id, [{ role: "user", content }], (chunk) => {
+        await clientOf(id).streamChatCompletion(id, [{ role: "user", content }], (chunk) => {
           const next = applyChatChunk(current, chunk);
           if (next !== current) {
             current = next;
             if (currentRef.current === id) setStreaming(next);
           }
-        });
+        }, "nokker", { ...(texts.length ? { attachments: texts } : {}), ...(opts.redaction ? { redaction: opts.redaction } : {}) });
       } catch (err) {
         sent = false;
         // The message went nowhere: the composer puts it back (`false`), the toast says why in plain words.
@@ -691,7 +854,7 @@ export function useNokker(): NokkerStore {
       }
       return sent;
     },
-    [client, loadThread, toast],
+    [clientOf, loadThread, toast],
   );
 
   const guard = useCallback(
@@ -835,6 +998,7 @@ export function useNokker(): NokkerStore {
     client,
     status,
     ready,
+    offlineAt,
     access,
     retryAccess,
     deviceStatus,
@@ -847,10 +1011,13 @@ export function useNokker(): NokkerStore {
     decideLocal,
     user: auth?.user ?? null,
     threads,
-    current: threads.find((t) => t.id === currentId) ?? null,
+    current: threads.find((t) => t.id === currentId) ?? (remoteThread && remoteThread.id === currentId ? remoteThread : null),
+    currentOrigin: remoteThread && remoteThread.id === currentId ? remoteOriginRef.current?.origin ?? "cloud" : "cloud",
+    selectRemote,
     messages,
     streaming,
     live,
+    startedMessage,
     unseen,
     members,
     sending: currentId !== null && sendingIds.has(currentId),
@@ -858,6 +1025,8 @@ export function useNokker(): NokkerStore {
     agents,
     agentRuns,
     turnCosts,
+  quotaTurns,
+  turnNotices,
     liveInputs,
     hookNotices,
     forwardedApprovals,

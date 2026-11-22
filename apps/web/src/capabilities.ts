@@ -32,6 +32,13 @@ export function capability(name: CapabilityName): boolean | null {
   return caps ? caps.features[name] === true : null;
 }
 
+/** `true`/`false` SEULEMENT si le noyau LISTE cette fonction (une clé absente ne dit rien : un noyau plus ancien ne la
+ * connaît pas encore, la sonde d'avant reste nécessaire) ; `null` sinon. Pour les fonctions que les noyaux déjà posés ne
+ * listent pas (`folder`, `accord`) : on ne les éteint jamais sur une absence. */
+export function listedCapability(name: CapabilityName): boolean | null {
+  return caps && Object.prototype.hasOwnProperty.call(caps.features, name) ? caps.features[name] === true : null;
+}
+
 /** Le noyau a dit que la fonction est éteinte pour cet appelant : ne pas appeler ses routes. */
 export function off(name: CapabilityName): boolean {
   return capability(name) === false;

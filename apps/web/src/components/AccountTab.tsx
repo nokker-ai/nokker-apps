@@ -2,6 +2,9 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { NokkerApiError, type AccountExport, type AccountInfo, type AccountUsage, type BillingStatus, type Device, type NokkerClient, type VoucherCheck } from "@nokker-apps/sdk";
 import { deleteOutcome, exportIssue, fmtSize, fmtWhen, signOutDevice, suspendedError, type ExportIssue } from "../account/lifecycle.js";
 import { forgetDevice, readStoredDeviceKey } from "../auth.js";
+import { RemoteAccountCard } from "../account/RemoteAccountCard.js";
+import { normLang } from "../onboarding/i18n.js";
+import { writeJson } from "../viewState.js";
 import { DeletingScreen } from "./DeletingScreen.js";
 import { shortVersion, termsVersionLabel } from "../account/terms.js";
 import { forgetVoucher, recallVoucher, type BillingReturn } from "../account/links.js";
@@ -14,6 +17,10 @@ import { billingView, subscriptionNote, fmtAmount, fmtReset, monthTurns, planCap
 import { ConnectorsStep, TelegramStep } from "../onboarding/Connectors.js";
 import { errorCode, errorKey } from "../onboarding/errors.js";
 import { t, type Key, type Lang } from "../onboarding/i18n.js";
+import { purchasesAllowed } from "../platform/native.js";
+import { ZonesCard } from "./ZonesCard.js";
+import { DeviceCard } from "./DeviceCard.js";
+import { PhoneNodeCard } from "./PhoneNodeCard.js";
 import { off as offCap } from "../capabilities.js";
 
 const fmtDate = (lang: Lang, iso: string): string => {
@@ -131,7 +138,7 @@ function HouseholdUsage({ lang, hh }: { lang: Lang; hh: NonNullable<AccountUsage
   );
 }
 
-function ProfileCard({ client, lang, info }: { client: NokkerClient; lang: Lang; info: AccountInfo }): React.ReactElement {
+function ProfileCard({ client, lang, info, canSetLang }: { client: NokkerClient; lang: Lang; info: AccountInfo; canSetLang: boolean }): React.ReactElement {
   // Version lisible : lue dans le texte courant, seulement si l'empreinte acceptée est la sienne.
   const [termsLabel, setTermsLabel] = useState<string | null>(null);
   const accepted = info.terms?.version ?? null;
@@ -151,10 +158,11 @@ function ProfileCard({ client, lang, info }: { client: NokkerClient; lang: Lang;
     <section className="ob-conn" aria-labelledby="acc-profile">
       <h3 id="acc-profile">{t(lang, "accProfile")}</h3>
       <dl className="acc-dl">
+        {info.first_name !== undefined ? <FirstNameRow client={client} lang={lang} info={info} /> : null}
         <dt>{t(lang, "accEmail")}</dt>
         <dd className="ob-account">{info.email}</dd>
         <dt>{t(lang, "accLang")}</dt>
-        <dd>{info.lang.toUpperCase()}</dd>
+        {canSetLang ? <LangRow client={client} lang={lang} info={info} /> : <dd>{info.lang.toUpperCase()}</dd>}
         <dt>{t(lang, "accSince")}</dt>
         <dd>{fmtDate(lang, info.created_at)}</dd>
         <dt>{t(lang, "accTerms")}</dt>
@@ -167,6 +175,94 @@ function ProfileCard({ client, lang, info }: { client: NokkerClient; lang: Lang;
         </dd>
       </dl>
     </section>
+  );
+}
+
+/** Langue de l'interface du compte : celles qui ont un catalogue dans ce web (FR, EN), ou « Automatique » (suivre le
+ * navigateur). `PATCH /v1/account {lang}` puis l'interface se recharge dans la langue choisie. DE/IT : ajoutés ici
+ * quand leurs catalogues existent. */
+export const UI_LANG_CHOICES: ReadonlyArray<"fr" | "en"> = ["fr", "en"];
+
+function LangRow({ client, lang, info }: { client: NokkerClient; lang: Lang; info: AccountInfo }): React.ReactElement {
+  const other = info.lang === "de" || info.lang === "it" ? info.lang : null; // posée ailleurs : le web n'a pas encore ce catalogue, on dit la vérité
+  const current = info.lang_is_default === true ? "auto" : other ?? normLang(info.lang);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<"accLangFail" | "accLangBad" | null>(null);
+  const change = async (value: string): Promise<void> => {
+    if (value === current) return;
+    setBusy(true);
+    setNote(null);
+    try {
+      const r = await client.setAccountLang(value === "auto" ? null : (value as "fr" | "en"));
+      writeJson("lang", value === "auto" ? "" : normLang(r.lang)); // la mémoire du navigateur suit le compte
+      window.location.reload();
+    } catch (e) {
+      setNote(e instanceof NokkerApiError && e.status === 400 ? "accLangBad" : "accLangFail");
+      setBusy(false);
+    }
+  };
+  return (
+    <dd data-account-lang>
+      <select aria-label={t(lang, "accLangPick")} value={current} disabled={busy} onChange={(e) => void change(e.target.value)}>
+        <option value="auto">{t(lang, "accLangAuto")}</option>
+        {UI_LANG_CHOICES.map((l) => (
+          <option key={l} value={l}>{t(lang, l === "fr" ? "accLangNameFr" : "accLangNameEn")}</option>
+        ))}
+        {other ? <option value={other} disabled>{t(lang, other === "de" ? "accLangNameDe" : "accLangNameIt")}</option> : null}
+      </select>
+      {note ? <p className="ob-error" role="alert">{t(lang, note)}</p> : null}
+    </dd>
+  );
+}
+
+/** Prénom du profil (noyau ebb9ae3, `PATCH /v1/account {first_name}`) : le nom que Nina et le foyer voient ; vide l'efface. */
+function FirstNameRow({ client, lang, info }: { client: NokkerClient; lang: Lang; info: AccountInfo }): React.ReactElement {
+  const [first, setFirst] = useState(info.first_name ?? "");
+  const [name, setName] = useState(info.name ?? info.email.split("@")[0]!);
+  const [edit, setEdit] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<"accFirstNameSaved" | "accFirstNameBad" | "errGeneric" | null>(null);
+  const save = async (value: string): Promise<void> => {
+    setBusy(true);
+    setNote(null);
+    try {
+      const r = await client.setFirstName(value.trim());
+      setFirst(r.first_name);
+      setName(r.name);
+      setEdit(false);
+      setNote("accFirstNameSaved");
+    } catch (e) {
+      setNote(e instanceof NokkerApiError && e.status === 400 ? "accFirstNameBad" : "errGeneric");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <dt>{t(lang, "accFirstName")}</dt>
+      <dd data-first-name>
+        {edit ? (
+          <form
+            className="acc-first"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void save(String(new FormData(e.currentTarget).get("first_name") ?? ""));
+            }}
+          >
+            <input name="first_name" aria-label={t(lang, "accFirstName")} defaultValue={first} maxLength={40} autoComplete="given-name" autoCapitalize="words" aria-describedby="acc-first-hint" autoFocus />
+            <button type="submit" className="ob-btn primary small" disabled={busy}>{t(lang, "accFirstNameSave")}</button>
+            <button type="button" className="ob-btn small" onClick={() => setEdit(false)}>{t(lang, "cancel")}</button>
+            <p id="acc-first-hint" className="ob-note">{t(lang, "accFirstNameHint")}</p>
+          </form>
+        ) : (
+          <>
+            {first ? <strong>{first}</strong> : <span className="ob-muted">{t(lang, "accFirstNameNone", { name })}</span>}{" "}
+            <button type="button" className="ob-btn small" onClick={() => setEdit(true)}>{t(lang, "accFirstNameEdit")}</button>
+          </>
+        )}
+        {note ? <p className={note === "accFirstNameSaved" ? "ob-okline" : "ob-error"} role={note === "accFirstNameSaved" ? "status" : "alert"}>{t(lang, note)}</p> : null}
+      </dd>
+    </>
   );
 }
 
@@ -308,6 +404,7 @@ function SignOutCard({ client, lang, onSignOut }: { client: NokkerClient; lang: 
 function SubscriptionCard({ client, lang, billing }: { client: NokkerClient; lang: Lang; billing: BillingStatus }): React.ReactElement {
   const view = billingView(billing);
   const note = subscriptionNote(view);
+  const store = !purchasesAllowed();
   const [err, setErr] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   // Code d'essai : caché derrière « J'ai un code » (l'essai n'est pas une offre publique sans code), ouvert d'emblée si
@@ -378,10 +475,15 @@ function SubscriptionCard({ client, lang, billing }: { client: NokkerClient; lan
               {t(lang, note.key, { date: note.zurich ? fmtZurich(lang, note.at) : fmtDate(lang, note.at) })}
             </p>
           ) : null}
-          <button type="button" className="ob-btn" disabled={busy} onClick={() => go(client.billingPortal())}>
-            {busy ? t(lang, "accRedirecting") : t(lang, "accPortal")}
-          </button>
+          {store ? null : (
+            <button type="button" className="ob-btn" disabled={busy} onClick={() => go(client.billingPortal())}>
+              {busy ? t(lang, "accRedirecting") : t(lang, "accPortal")}
+            </button>
+          )}
         </>
+      ) : store ? (
+        // Build de magasin (Apple 3.1.1, 3.1.3(b) ; LOKKAL-PHONE §6.3) : l'état seulement, ni prix ni bouton d'achat.
+        <p data-store-build>{t(lang, "accPlanFree")}</p>
       ) : (
         <>
           <p>{t(lang, "accPlanFree")}</p>
@@ -695,6 +797,7 @@ export function AccountTab({
   onSignOut,
   signDecision = null,
   billingReturn = null,
+  canSetLang = false,
 }: {
   client: NokkerClient;
   lang: Lang;
@@ -706,6 +809,8 @@ export function AccountTab({
   onSignOut?: () => void;
   /** Retour de Stripe Checkout (`?billing=`) : message en tête de page. */
   billingReturn?: BillingReturn | null;
+  /** Le noyau écrit la langue du compte (`PATCH /v1/account {lang}`) : cloud seulement ; un Lokkal garde celle de l'installation. */
+  canSetLang?: boolean;
 }): React.ReactElement {
   const [info, setInfo] = useState<AccountInfo | null>(null);
   const [usage, setUsage] = useState<AccountUsage | null>(null);
@@ -715,8 +820,12 @@ export function AccountTab({
   const [exported, setExported] = useState(false);
   const [exportReady, setExportReady] = useState(false);
   const granted = useCallback(() => (onGone ? onGone() : setDeleting(true)), [onGone]);
+  // Lokkal : le propriétaire local n'est pas un compte nokker.ai (`capabilities.account` faux) : /v1/account, /usage, /connectors
+  // répondent 403. On ne les appelle pas ; une carte renvoie vers nokker.ai, le reste (appareils, lunettes…) reste.
+  const remote = offCap("account");
 
   useEffect(() => {
+    if (remote) return;
     let live = true;
     const fail = (e: unknown): void => {
       if (!live) return;
@@ -729,7 +838,7 @@ export function AccountTab({
     return () => {
       live = false;
     };
-  }, [client]);
+  }, [client, remote]);
 
   if (deleting) return <DeletingScreen lang={lang} />;
   return (
@@ -742,7 +851,12 @@ export function AccountTab({
             {t(lang, billingReturn === "success" ? "accBillingSuccess" : "accBillingCancel")}
           </p>
         ) : null}
-        {info ? <ProfileCard client={client} lang={lang} info={info} /> : null}
+        {remote ? <RemoteAccountCard lang={lang} /> : null}
+        {info ? <ProfileCard client={client} lang={lang} info={info} canSetLang={canSetLang} /> : null}
+        {/* Zones du membre : dans l'app native seulement (LOKKAL-PHONE §4.2) */}
+        <ZonesCard client={client} />
+        <DeviceCard client={client} />
+        <PhoneNodeCard client={client} />
         {info?.consents ? <ConsentCard client={client} lang={lang} initial={info.consents.training} locked={info.consents.training_locked === "minor"} /> : null}
         {billing ? <SubscriptionCard client={client} lang={lang} billing={billing} /> : null}
         <ModelsCard client={client} lang={lang} />
@@ -753,11 +867,15 @@ export function AccountTab({
         <PayMethodCard client={client} signDecision={signDecision} />
         <KnockCard />
         {onSignOut ? <SignOutCard client={client} lang={lang} onSignOut={onSignOut} /> : null}
-        <h3 className="ob-sub">{t(lang, "tabConnectors")}</h3>
-        <ConnectorsStep client={client} lang={lang} embedded />
-        <TelegramStep client={client} lang={lang} embedded />
-        <ExportCard client={client} lang={lang} onDownloaded={() => setExported(true)} onReady={setExportReady} />
-        <DeleteCard client={client} lang={lang} pollMs={pollMs} exported={exported} exportReady={exportReady} subscribed={billing?.plan != null} onGranted={granted} />
+        {remote ? null : (
+          <>
+            <h3 className="ob-sub">{t(lang, "tabConnectors")}</h3>
+            <ConnectorsStep client={client} lang={lang} embedded />
+            <TelegramStep client={client} lang={lang} embedded />
+            <ExportCard client={client} lang={lang} onDownloaded={() => setExported(true)} onReady={setExportReady} />
+            <DeleteCard client={client} lang={lang} pollMs={pollMs} exported={exported} exportReady={exportReady} subscribed={billing?.plan != null} onGranted={granted} />
+          </>
+        )}
       </div>
     </div>
   );

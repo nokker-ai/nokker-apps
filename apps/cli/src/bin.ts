@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { closeOpenSession } from "./closesession.js";
 import React from "react";
 import { render } from "ink";
 import { App } from "./ui/App.js";
@@ -6,7 +7,8 @@ import { CLI_VERSION } from "./version.js";
 import { parseArgs, type ParsedArgs } from "./cli-args.js";
 import { NokkerClient } from "@nokker-apps/sdk";
 import { BRAND } from "@nokker-apps/brand";
-import { connect, defaultUser } from "./auth.js";
+import { connect, defaultUser, isLocalServer, readLocalToken } from "./auth.js";
+import { runOpen, runSessions } from "./access.js";
 import { cliLog } from "./log.js";
 import { runPrint } from "./headless.js";
 import { formatChecks, runDoctor } from "./doctor.js";
@@ -14,15 +16,16 @@ import { readLokkal, resolveServer } from "./lokkal.js";
 import { runLogs } from "./logs.js";
 import { runUpdate } from "./update.js";
 import { runBackup } from "./backup.js";
+import { runSites } from "./sites.js";
 import { runImport } from "./import.js";
 import { runAcp } from "./acp/run.js";
-import { parseLang, setLang, t } from "./i18n/index.js";
+import { parseLang, requestLanguage, setLang, t } from "./i18n/index.js";
 import { fileLastThreadStore } from "./lastthread.js";
 
 // `--lang` d'abord : les erreurs d'usage sont déjà dans la bonne langue.
 const argv = process.argv.slice(2);
 const langArg = parseLang(argv[argv.indexOf("--lang") + 1] ?? undefined);
-if (argv.includes("--lang") && langArg) setLang(langArg);
+if (argv.includes("--lang") && langArg) setLang(langArg, true);
 const args = parseArgs(argv);
 // --server > NOKKER_SERVER_URL > api_url de lokkal.json > http://127.0.0.1:8742
 const resolvedServer = resolveServer(args);
@@ -57,11 +60,14 @@ if (args.error) {
 } else {
   const { waitUntilExit, unmount } = render(
     React.createElement(App, { baseUrl: args.serverUrl, sound: args.sound, cwd: process.cwd() }),
+    // Ctrl+C est traité par l'écran (refus d'une carte, fermeture de la session de code, puis sortie) : Ink ne doit pas
+    // sortir seul avant.
+    { exitOnCtrlC: false },
   );
 
   process.on("SIGINT", () => {
     unmount();
-    process.exit(0);
+    void closeOpenSession().finally(() => process.exit(0));
   });
 
   waitUntilExit().then(() => {
@@ -88,6 +94,25 @@ async function runSubcommand(opts: ParsedArgs): Promise<number> {
       to: opts.to, keep: opts.keep, encrypt: opts.encrypt, yes: opts.yes, source: opts.source,
     });
   }
+  if (opts.command === "open" || opts.command === "sessions") {
+    // Accès web SANS jeton dans l'URL : un code d'ouverture à usage unique (60 s) ; le jeton local ne sort jamais.
+    if (!isLocalServer(opts.serverUrl)) {
+      process.stderr.write(`${t("Error: {0}", t("open and sessions only work against this machine's own Nokker (--server is not local)"))}\n`);
+      return 1;
+    }
+    const local = await readLocalToken();
+    if (!local) {
+      process.stderr.write(`${t("Error: {0}", t("no local key found here: run this on the machine that runs Nokker (nokker doctor)"))}\n`);
+      return 1;
+    }
+    const client = new NokkerClient({ baseUrl: opts.serverUrl, token: local, userAgent: BRAND.userAgent, surface: "cli", language: () => requestLanguage() });
+    const lk = readLokkal();
+    const io = { out: (s: string) => void process.stdout.write(s), err: (s: string) => void process.stderr.write(s) };
+    return opts.command === "open" ? runOpen(client, lk.status === "ok" ? lk.config.web_url : null, opts.positional[0], io, { codeOnly: opts.codeOnly }) : runSessions(client, opts.positional, io);
+  }
+  if (opts.command === "sites" && opts.sitesAction) {
+    return runSites({ action: opts.sitesAction });
+  }
   if (opts.command === "import" && opts.importSource) {
     return runImport({ source: opts.importSource, project: opts.project, apply: opts.apply, yes: opts.yes });
   }
@@ -106,6 +131,11 @@ function printHelp(): void {
     ["backup [--to <dir|s3://…>] [--keep N] [--encrypt]", t("full backup of the install (databases, .env, config, state, vault); encryption required for S3, passphrase asked without echo")],
     ["backup list [--to <dir|s3://…>]", t("list the backups")],
     ["restore <file|s3://…> [--yes]", t("replace the data of the install with a backup (asks for confirmation without --yes)")],
+    ["open [/setup|path]", t("print a link that opens the web app of this machine: it carries a one-time code (60 s), never the local key")],
+    ["open --code", t("print only a one-time code (60 s) to paste on the key page of another device, instead of a link")],
+    ["sessions [revoke <id>]", t("list the browsers that hold access to this machine (when created, last used), or revoke one")],
+    ["sites enable", t("turn on connected sites: fetch the sites browser image, verify its signature, start it (machine linked to a nokker.ai account)")],
+    ["sites update", t("fetch and verify the sites browser image again (nokker update also does it)")],
     ["import <claude-code|cursor|openclaw|…> [--project <dir>] [--apply] [--yes]", t("take over another agent's install: the kernel lists what it reads, those paths are mounted read-only (never credentials or identity files) into a one-off container; dry run, then --apply writes after confirmation; --project (claude-code, cursor) also reads a repository. Not followed: a custom home folder of a compatible agent, an OpenClaw agents.defaults.workspace outside ~/.openclaw")],
     ["acp", t("ACP agent on stdio for an editor (Zed, JetBrains, Neovim…): session of the editor's folder")],
     ["--server <url>", t("server (default {0}, or $NOKKER_SERVER_URL)", args.serverUrl)],
@@ -126,14 +156,14 @@ ${lines.join("\n")}
 
 ${t("-p exit codes: 0 done, 3 an effect was refused, 4 the turn failed, 130 cancelled, 1 client error (error wins over cancelled, cancelled over refused).")}
 
-${t("In a session, /help lists the commands (/sessions, /thread, /diff, /checkpoints, /rollback, /skills, /plan, /agents, /memory, /cost, /cancel, /approvals…). Esc cancels the turn in progress. A strong card is decided locally once only; from the web or the gateway, on the phone.")}
+${t("In a session, /help lists the commands (/sessions, /thread, /diff, /checkpoints, /rollback, /skills, /plan, /agents, /memory, /cost, /model, /cancel, /approvals…). Esc cancels the turn in progress. A strong card is decided locally once only; from the web or the gateway, on the phone.")}
 `);
 }
 
 /** Un tour dans le dossier courant, sans terminal interactif. */
 async function runNonInteractive(opts: ParsedArgs): Promise<number> {
   try {
-    const client = new NokkerClient({ baseUrl: opts.serverUrl, userAgent: BRAND.userAgent });
+    const client = new NokkerClient({ baseUrl: opts.serverUrl, userAgent: BRAND.userAgent, surface: "cli", language: () => requestLanguage() });
     const name = `cli-${process.platform}-batch`;
     const conn = await connect(client, opts.serverUrl, name, {
       user: defaultUser(),
@@ -144,6 +174,8 @@ async function runNonInteractive(opts: ParsedArgs): Promise<number> {
     const wsl = { platform: process.platform, wslDistro: lk?.status === "ok" ? (lk.config.wsl_distro ?? null) : null };
     const res = await runPrint(opts.print ?? "", client, conn, process.cwd(), fileLastThreadStore(opts.serverUrl), wsl);
 
+    if (res.notice && !opts.json) process.stderr.write(`${res.notice}\n`); // en JSON : le champ `notice`
+    if (res.turn_notice && !opts.json) process.stderr.write(`${res.turn_notice}\n`); // ligne d'état du noyau ; en JSON : `turn_notice`
     if (opts.json) {
       process.stdout.write(`${JSON.stringify(res)}\n`);
     } else {

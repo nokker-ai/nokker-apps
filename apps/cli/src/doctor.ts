@@ -11,7 +11,7 @@ import { isLocalServer, loadSession, readLocalToken } from "./auth.js";
 import { existsSync } from "node:fs";
 import { legacyLokkalFilePaths, lokkalFilePath } from "./config.js";
 import { t } from "./i18n/index.js";
-import { composeArgs, hostCommand, readLokkal, resolveTokenPath, sourceLabel, type ServerSource } from "./lokkal.js";
+import { composeArgs, hostCommand, readLokkal, sourceLabel, type ServerSource } from "./lokkal.js";
 import { firstLine, run as realRun, type Runner } from "./proc.js";
 import { CLI_VERSION, compareVersions } from "./version.js";
 import { checkVault } from "./vault-check.js";
@@ -61,14 +61,19 @@ export function memoryCheck(m: LocalMemoryStatus): Check {
 
 /**
  * Premier réglage (Lokkal) : fait, et un modèle par défaut utilisable. AVERTISSEMENT seulement (le reste marche), avec
- * le lien du setup. Le jeton n'est jamais écrit : la commande qui le lit (`$(cat <token_path>)`), comme l'installeur.
+ * la commande qui donne le lien du setup : `nokker open /setup` (code à usage unique de 60 s). Aucun jeton, jamais, dans
+ * un lien ni dans cette sortie.
  */
-export function setupCheck(s: LocalSetup, web: string, tokenPath: string): Check {
+export function setupCheck(s: LocalSetup): Check {
   const name = t("model");
-  const link = `${web.replace(/\/+$/, "")}/setup#token=$(cat ${tokenPath})`;
+  const link = "nokker open /setup";
   const d = s.default;
   let why: string | null = null;
-  if (!s.done) why = t("first setup not finished");
+  // Machine reliée au Router sans modèle choisi : les paliers de la config servent (comme setup.has_model côté noyau) ;
+  // `done` n'est posé que par l'assistant (répétition du 07.11 : faux « premier réglage » sur une machine reliée).
+  const linked = s.models.router.linked;
+  if (!d && linked) return { name, status: "ok", detail: t("default {0}", `router (${s.models.router.model ?? "?"})`) };
+  if (!s.done && !d) why = t("first setup not finished");
   else if (!d) why = t("no default model chosen");
   else if (d === "router" && !s.models.router.linked) why = t("default model is the nokker.ai Router but this machine is not linked");
   else if (d.startsWith("byok:")) {
@@ -77,7 +82,7 @@ export function setupCheck(s: LocalSetup, web: string, tokenPath: string): Check
     else if (!b.has_key) why = t("default model {0} has no key", d);
     else if (!b.model) why = t("default model {0} has no model name", d);
   } else if (d.startsWith("local:") && !d.split("|")[1]) why = t("default model {0} has no model name", d);
-  if (why) return { name, status: "warn", detail: t("{0} — open {1}", why, link) };
+  if (why) return { name, status: "warn", detail: t("{0} — run {1}", why, link) };
   const label = d!.startsWith("byok:") ? `${d} (${s.models.byok.find((x) => x.name === d!.slice(5))?.model})`
     : d === "router" ? `router (${s.models.router.model ?? "?"})` : d!;
   return { name, status: "ok", detail: t("default {0}", label) };
@@ -86,7 +91,7 @@ export function setupCheck(s: LocalSetup, web: string, tokenPath: string): Check
 async function probeSetup(client: NokkerClient, web: string | null): Promise<Check | null> {
   if (!web) return null;  // pas de Lokkal installé (serveur distant) : pas de setup local
   try {
-    return setupCheck(await client.getLocalSetup(), web, resolveTokenPath());
+    return setupCheck(await client.getLocalSetup());
   } catch (err) {
     if (err instanceof NokkerApiError && err.status === 404) return null;  // noyau sans /v1/local/setup
     return { name: t("model"), status: "warn", detail: t("setup unreadable ({0})", String(err).replace(/^Error: /, "")) };

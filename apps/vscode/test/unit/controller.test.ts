@@ -109,14 +109,17 @@ describe("ChatController contre le mock", () => {
 
   it("un tour : outils, diff natif, carte (bouton), carte forte = terminal (machine non liée), ligne de coût", async () => {
     ctl.addSelection({ relPath: "src/app.py", startLine: 1, endLine: 2, languageId: "python", text: "def add(a, b):\n    return a + b" });
+    mock.state.chatSurfaces.length = 0;
     const turn = ctl.send("corrige le test add");
     const card = (await until(() => posted.find((m) => m.type === "card" && m.card.choices))) as Extract<ToView, { type: "card" }>;
+    expect(new Set(mock.state.chatSurfaces)).toEqual(new Set(["vscode"])); // surface du client : X-Nokker-Surface
     expect(card.card.tool).toBe("terminal");
-    expect(card.card.choices!.map((c) => c.label)[0]).toBe("Pour cette session");
-    expect(card.card.choices!.map((c) => c.id)).toEqual(["session", "once", "always", "always", "reject"]);
-    await ctl.decide(card.card.id, card.card.choices![0]!.index);
+    expect(card.card.choices!.map((c) => c.label)[0]).toBe("Une fois");
+    expect(card.card.choices!.map((c) => c.id)).toEqual(["once", "session", "always", "always", "reject"]);
+    const sessionIdx = card.card.choices!.find((c) => c.id === "session")!.index;
+    await ctl.decide(card.card.id, sessionIdx);
     // Un second clic sur la même carte n'envoie rien.
-    await ctl.decide(card.card.id, card.card.choices![0]!.index);
+    await ctl.decide(card.card.id, sessionIdx);
     const strong = (await until(() => posted.find((m) => m.type === "card" && m.card.choices === null))) as Extract<ToView, { type: "card" }>;
     expect(strong.card.choices).toBeNull(); // pas de bouton
     // Machine non liée (défaut du mock) : la carte ne part pas au téléphone, elle se décide au terminal.
@@ -176,9 +179,10 @@ describe("ChatController contre le mock", () => {
       await turn;
       const txt = posted.slice(n).filter((m) => m.type === "text").map((m) => (m as { append: string }).append).join("");
       expect(txt).toContain("is waiting for your approval");
-      // Un refus ne lance pas de tour de suite (`continuation: "none"`) : la demande et la suite de l'approbation.
-      expect(txt).not.toContain("refused");
-      expect(posted.slice(n).filter((m) => m.type === "cost")).toHaveLength(2);
+      // Noyau n27 : un refus répond 202 et le modèle CONTINUE : le panneau reste occupé jusqu'à la suite du refus —
+      // le tour qui a posé la carte, la suite de l'approbation et la suite du refus (3 coûts).
+      expect(txt).toContain("One action was refused.");
+      expect(posted.slice(n).filter((m) => m.type === "cost")).toHaveLength(3);
       // L'appel approuvé se ferme sur le `tool.result` de l'exécuteur, avec la vraie sortie de l'outil.
       const tools = posted.slice(n).filter((m) => m.type === "tool").map((m) => (m as Extract<ToView, { type: "tool" }>).tool);
       const pytest = tools.filter((t) => t.target.startsWith("pytest"));
@@ -199,7 +203,7 @@ describe("ChatController contre le mock", () => {
       const n = posted.length;
       const turn = ctl.send("corrige le test add");
       const card = (await until(() => posted.slice(n).find((m) => m.type === "card" && m.card.choices))) as Extract<ToView, { type: "card" }>;
-      await ctl.decide(card.card.id, card.card.choices![0]!.index);
+      await ctl.decide(card.card.id, card.card.choices!.find((c) => c.id === "session")!.index);
       const strongCards = () => posted.slice(n).filter((m) => m.type === "card" && !m.card.choices) as Array<Extract<ToView, { type: "card" }>>;
       await until(() => strongCards().length >= 2);
       const [first, second] = strongCards();

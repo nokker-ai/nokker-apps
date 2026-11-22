@@ -48,9 +48,9 @@ export function placeNew(p: PlaceInput): { x: number; y: number } {
     for (let x = maxX; x >= bounds.x; x -= 24) {
       const r = { x, y, w: size.w, h: size.h };
       let score = 0;
-      for (const f of p.forbidden) score += overlap(r, f) * 12;
+      for (const f of p.forbidden) score += overlap(r, f) * 200;
       for (const o of p.others) score += overlap(r, o) * 1;
-      for (const o of p.soft ?? []) score += overlap(r, o) * 2.5;
+      for (const o of p.soft ?? []) score += overlap(r, o) * 8;
       score += (Math.abs(x - anchor.x) + Math.abs(y - anchor.y)) * 40;
       if (score < best.score) best = { x, y, score };
     }

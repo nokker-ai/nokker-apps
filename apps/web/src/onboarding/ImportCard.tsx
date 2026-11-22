@@ -1,6 +1,6 @@
 /**
  * « Tu viens d'un autre agent ? » (lot 30), à la fin du premier lancement de Lokkal : reprendre skills, consignes et
- * serveurs MCP d'une installation Claude Code, Cursor, Hermes ou OpenClaw. Rien n'est écrit avant « Importer » ; aucun
+ * serveurs MCP d'une installation Claude Code, Codex, Cursor, Hermes ou OpenClaw. Rien n'est écrit avant « Importer » ; aucun
  * secret n'est copié ; un serveur MCP s'ajoute dans une session (Nina le propose, la carte forte fait foi). Si le
  * noyau ne voit pas l'installation (cas normal sous docker), la commande à lancer sur la machine, puis son rapport.
  */

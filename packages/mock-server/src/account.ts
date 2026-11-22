@@ -7,7 +7,7 @@
  */
 import { argsSha256, type Approval, type BillingStatus, type VoucherCheck } from "@nokker-apps/sdk";
 import { finalizeDecision, MOCK_USER, randomId, type MockState } from "./state.js";
-import { householdMinor, householdUsage } from "./household.js";
+import { householdMinor, cleanFirstName, firstNameOf, memberName, setFirstName, householdUsage } from "./household.js";
 import { currentTerms, termsLangOf } from "./onboarding.js";
 
 type Send = (status: number, payload: unknown, headers?: Record<string, string>) => void;
@@ -32,7 +32,7 @@ interface AccountMock {
   termsLang: "fr" | "en";
   /** Langue du compte (`POST /v1/dev/account-mock {lang}`) ; null : celle du navigateur qui appelle
    * (`Accept-Language`), comme un compte créé dans cette langue. */
-  lang: "fr" | "en" | null;
+  lang: "fr" | "en" | "de" | "it" | null;
 }
 
 const mocks = new WeakMap<MockState, AccountMock>();
@@ -126,7 +126,7 @@ export async function handleAccount(
     }
     if (typeof b.turns_today === "number") m.turnsToday = b.turns_today;
     if (b.mode === "soft" || b.mode === "hard") m.mode = b.mode;
-    if (b.lang === "fr" || b.lang === "en" || b.lang === null) m.lang = b.lang;
+    if (b.lang === "fr" || b.lang === "en" || b.lang === "de" || b.lang === "it" || b.lang === null) m.lang = b.lang;
     send(200, { ok: true });
     return true;
   }
@@ -148,6 +148,24 @@ export async function handleAccount(
     return { terms_current: { version: cur.version, lang: cur.lang }, terms_outdated: termsLangOf(m.termsAccepted) === null };
   };
 
+  /** `GET /v1/account` et la réponse de `PATCH {lang}` : le compte. `lang_is_default` : la langue est celle de la détection. */
+  const accountView = (): void => {
+    const first = firstNameOf(state, MOCK_USER);
+    send(200, {
+      email: `${MOCK_USER}@example.ch`,
+      first_name: first,
+      name: memberName(first, `${MOCK_USER}@example.ch`),
+      // Noyau (7f1e1215) : `lang` = la langue posée, sinon « fr » (jamais null) ; `lang_is_default` dit que rien n'est posé.
+      lang: m.lang ?? "fr",
+      lang_is_default: m.lang === null,
+      created_at: "2026-10-12T08:30:00+02:00",
+      status: "active",
+      terms: { version: m.termsAccepted, accepted_at: "2026-10-12T08:31:10+02:00" },
+      ...termsState(),
+      consents: householdMinor(state, MOCK_USER) ? { training: false, training_locked: "minor" } : { training: m.training },
+    });
+  };
+
   if (method === "POST" && path === "/v1/account/terms") {
     const b = await readBody();
     const lang = termsLangOf(String(b.version ?? ""));
@@ -158,19 +176,28 @@ export async function handleAccount(
     return true;
   }
 
-  if (method === "GET" && path === "/v1/account") {
-    send(200, {
-      email: `${MOCK_USER}@example.ch`,
-      lang: m.lang ?? (/^\s*en\b/i.test(acceptLanguage) ? "en" : "fr"),
-      created_at: "2026-10-12T08:30:00+02:00",
-      status: "active",
-      terms: { version: m.termsAccepted, accepted_at: "2026-10-12T08:31:10+02:00" },
-      ...termsState(),
-      consents: householdMinor(state, MOCK_USER) ? { training: false, training_locked: "minor" } : { training: m.training },
-    });
+  if (method === "PATCH" && path === "/v1/account") {
+    const b = await readBody();
+    // Langue du compte (contrat de dev du 18.11.2026) : `{lang: "fr"|"en"|"de"|"it"|null}` → 200 avec le compte ; null = suivre la détection.
+    if (b && typeof b === "object" && "lang" in b && Object.keys(b).length === 1) {
+      const v = (b as { lang: unknown }).lang;
+      if (!(v === null || v === "fr" || v === "en" || v === "de" || v === "it")) return send(400, { error: "bad_lang", message: "langue attendue : fr, en, de, it ou null" }), true;
+      m.lang = v;
+      return accountView(), true;
+    }
+    // Prénom du profil (noyau ebb9ae3) : seul champ modifiable ; vide l'efface.
+    if (!b || typeof b !== "object" || !("first_name" in b) || Object.keys(b).some((k) => k !== "first_name")) return send(400, { error: "invalid", message: 'corps attendu : {"first_name": "…"}' }), true;
+    const first = cleanFirstName(b.first_name);
+    if (first === null) return send(400, { error: "bad_first_name", message: "prénom invalide : lettres, espaces, trait d'union, apostrophe et point seulement, 40 caractères au plus" }), true;
+    setFirstName(state, MOCK_USER, first);
+    send(200, { first_name: first, name: memberName(first, `${MOCK_USER}@example.ch`) });
     return true;
   }
 
+  if (method === "GET" && path === "/v1/account") {
+    accountView();
+    return true;
+  }
   if (method === "PUT" && path === "/v1/account/consent") {
     const b = await readBody();
     if (b.scope !== "training" || typeof b.granted !== "boolean") return send(400, { error: "invalid" }), true;

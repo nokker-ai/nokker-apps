@@ -299,6 +299,7 @@ export function activate(context: vscode.ExtensionContext): NokkerExtensionApi {
       userAgent: `nokker-vscode/${context.extension.packageJSON.version as string}`,
       t,
       lang: costLang(vscode.env.language),
+      language: vscode.env.language,
       folders: openFolders,
     },
   );

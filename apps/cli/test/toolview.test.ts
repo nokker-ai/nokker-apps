@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { NokkerEvent } from "@nokker-apps/sdk";
-import { LIVE_WINDOW, applyToolEvent, formatToolLine, liveLines, previewLines, toolTarget, type ToolLine } from "../src/toolview.js";
-import { approvalTarget, choiceToDecision, decisionSummary, formatRemaining, localChoices, remainingSeconds, resolveEffect } from "../src/approval-model.js";
+import { LIVE_WINDOW, applyToolEvent, formatToolLine, liveLines, previewLines, stripEnvelope, toolTarget, type ToolLine } from "../src/toolview.js";
+import { approvalTarget, cardChoices, choiceToDecision, choicesLegend, decisionSummary, formatRemaining, localChoices, reasonText, remainingSeconds, resolveEffect } from "../src/approval-model.js";
 import type { Approval } from "@nokker-apps/sdk";
 
 const call = (id: string, name: string, args: Record<string, unknown>, effect = "write"): NokkerEvent =>
@@ -113,6 +113,10 @@ describe("modèle de la carte locale", () => {
     expect(choiceToDecision("session")).toEqual({ decision: "approve", scope: "session" });
     expect(choiceToDecision("reject")).toEqual({ decision: "reject", scope: "once" });
     expect(approvalTarget(card())).toBe("rm -rf build");
+    // Le noyau donne la cible lisible et caviardée (`target`) : elle prime ; sans elle, la logique locale reste le repli.
+    expect(approvalTarget({ ...card(), target: "rm -rf build  # nettoyage" } as Approval)).toBe("rm -rf build  # nettoyage");
+    expect(approvalTarget({ ...card(), target: "   " } as Approval)).toBe("rm -rf build");
+    expect(approvalTarget({ ...card(), target: { command: "x" } } as unknown as Approval)).toBe("rm -rf build"); // jamais un objet
     expect(decisionSummary(card(), "approved", "always", "terminal(rm -rf*)")).toContain("terminal(rm -rf*)");
     expect(decisionSummary(card(), "expired")).toContain("expired");
     expect(remainingSeconds(card())).toBeGreaterThan(290);
@@ -172,5 +176,95 @@ describe("carte posée par le modèle (LOKKAL.md §7.4.9)", () => {
     expect(formatToolLine(rejected[0]!)).toBe("✗ terminal rm -rf build");
     expect(rejected[0]!.preview).toBe("rejected — not run");
     expect(applyToolEvent(lines, decided("appr_2", "expired"))[0]!.preview).toBe("approval expired — not run");
+  });
+});
+
+describe("enveloppe du noyau masquée à l'affichage (ticket T4)", () => {
+  const pytest = '{"returncode": 0}\n<untrusted-data kind="terminal:output" id="9f2c1a">\n===== 7 passed in 0.12s =====\n</untrusted-data id="9f2c1a">';
+  it("les lignes de balise disparaissent, le contenu reste intact", () => {
+    expect(stripEnvelope(pytest)).toBe('{"returncode": 0}\n===== 7 passed in 0.12s =====');
+    expect(previewLines(pytest)).toEqual(['{"returncode": 0}', "===== 7 passed in 0.12s ====="]);
+    expect(stripEnvelope('a <untrusted-data kind="x" id="1">b</untrusted-data id="1"> c')).toBe("a b c");
+    expect(stripEnvelope("pas d'enveloppe\n<div>html</div>")).toBe("pas d'enveloppe\n<div>html</div>");
+    expect(stripEnvelope("[balise retirée] reste")).toBe("[balise retirée] reste");
+  });
+  it("aperçu d'un tool.result terminal sans enveloppe", () => {
+    const lines = applyToolEvent(applyToolEvent([], call("c1", "terminal", { command: "pytest -q" })), result("c1", "terminal", true, 900, pytest));
+    expect(previewLines(lines[0]!.preview).join("\n")).not.toContain("untrusted-data");
+    expect(lines[0]!.preview).toContain("7 passed"); // la donnée elle-même n'est pas touchée
+  });
+});
+
+describe("carte du terminal : ordre fixe, légende, motif (ticket T5)", () => {
+  const card = (command: string): Approval =>
+    ({ tool_name: "terminal", arguments: { command }, strength: "standard", suggested_rules: [`terminal(${command})`], suggested_rule_kinds: ["exact"] }) as unknown as Approval;
+  it("commande de test : Une fois en premier partout (CLI, VS Code, ACP) ; l'ordre inverse seulement sur demande", () => {
+    expect(cardChoices(card("pytest -q")).map((c) => [c.key, c.id])).toEqual([["1", "once"], ["2", "session"], ["3", "always"], ["4", "reject"]]);
+    expect(localChoices(card("pytest -q")).map((c) => c.id)).toEqual(["once", "session", "always", "reject"]);
+    expect(localChoices(card("pytest -q"), { sessionFirstForTests: true }).map((c) => c.id)).toEqual(["session", "once", "always", "reject"]);
+  });
+  it("légende construite d'après les choix", () => {
+    expect(choicesLegend(cardChoices(card("pytest -q")), "4:59")).toBe("choose: 1/a once · 2/s this session · 3 always · 4/r reject\nor ↑/↓; then Enter · expires in 4:59");
+  });
+  it("motifs du noyau reformulés ; motif inconnu inchangé", () => {
+    expect(reasonText("mode accept_edits : \u00e9criture demand\u00e9e", "terminal")).toBe("File edits go through without asking, but a command that can change files waits for your OK.");
+    expect(reasonText("mode default : \u00e9criture demand\u00e9e", "terminal")).toBe("In this mode, every change and every command waits for your OK.");
+    expect(reasonText("r\u00e8gle ask terminal(git push*)", "terminal")).toBe("Your settings ask for your OK on terminal(git push*).");
+    expect(reasonText("Commande destructive.", "terminal")).toBe("Commande destructive.");
+  });
+});
+
+describe("chemins du bac à sable affichés en chemins locaux (ajout T4)", () => {
+  it("/workspace/… → dossier local (~ pour le dossier personnel) ; rien sans session ; pas de faux amis", async () => {
+    const { homedir } = await import("node:os");
+    const { displayPath, setWorkspaceView } = await import("../src/toolview.js");
+    try {
+      expect(displayPath("/workspace/calc.py")).toBe("/workspace/calc.py"); // aucune session : inchangé
+      setWorkspaceView(`${homedir()}/nokker/calc`);
+      expect(displayPath("/workspace/calc.py")).toBe("~/nokker/calc/calc.py");
+      expect(displayPath("/workspace")).toBe("~/nokker/calc");
+      expect(displayPath('File "/workspace/tests/test_calc.py", line 3')).toBe('File "~/nokker/calc/tests/test_calc.py", line 3');
+      expect(displayPath("cd /workspace && pytest")).toBe("cd ~/nokker/calc && pytest");
+      expect(displayPath("/workspaces/x /data/workspace/y")).toBe("/workspaces/x /data/workspace/y");
+      expect(toolTarget("read_file", { path: "/workspace/src/a.py" })).toBe("~/nokker/calc/src/a.py");
+      expect(previewLines("/workspace/calc.py:3: E1 error")).toEqual(["~/nokker/calc/calc.py:3: E1 error"]);
+      setWorkspaceView("/srv/projets/calc");
+      expect(displayPath("/workspace/calc.py")).toBe("/srv/projets/calc/calc.py");
+      // Montage rendu par le noyau (`workspace`) : c'est lui qui est traduit, plus le /workspace supposé.
+      setWorkspaceView("/srv/projets/calc", "/sandbox/ws");
+      expect(displayPath("/sandbox/ws/calc.py")).toBe("/srv/projets/calc/calc.py");
+      expect(displayPath("/workspace/calc.py")).toBe("/workspace/calc.py");
+      // `workspace: null` : pas de montage, chemins déjà réels, rien n'est traduit.
+      setWorkspaceView("/srv/projets/calc", null);
+      expect(displayPath("/workspace/calc.py")).toBe("/workspace/calc.py");
+    } finally {
+      setWorkspaceView(null);
+    }
+    expect(displayPath("/workspace/calc.py")).toBe("/workspace/calc.py");
+  });
+});
+
+describe("appel refusé d'emblée (status: refused)", () => {
+  const refused = (id: string, extra: Record<string, unknown>): NokkerEvent =>
+    ({ type: "tool.result", thread_id: "th_1", turn_id: "th_1:0", call_id: id, name: "terminal", is_error: true, ms: 23, preview: "refused", ...extra }) as NokkerEvent;
+  it("status refused : ✗ et la raison courte, pas « ✓ … 23 ms »", () => {
+    let lines = applyToolEvent([], call("r1", "terminal", { command: "ls" }, "destructive"));
+    lines = applyToolEvent(lines, refused("r1", { status: "refused", reason: "permissions:no_code_session" }));
+    expect(formatToolLine(lines[0]!)).toBe("✗ terminal ls — refused: no code session open");
+  });
+  it("même sans status (noyau plus ancien) : is_error + reason permissions: = refus", () => {
+    let lines = applyToolEvent([], call("r2", "terminal", { command: "ls" }));
+    lines = applyToolEvent(lines, refused("r2", { reason: "permissions:plan_mode" }));
+    expect(formatToolLine(lines[0]!)).toBe("✗ terminal ls — refused: plan mode: read-only");
+  });
+  it("refus par la personne sur la carte (reason declined) : « refused by you », sans « refused: » devant", () => {
+    let lines = applyToolEvent([], call("r4", "terminal", { command: "rm -rf build" }, "destructive"));
+    lines = applyToolEvent(lines, refused("r4", { status: "refused", reason: "declined" }));
+    expect(formatToolLine(lines[0]!)).toBe("✗ terminal rm -rf build — refused by you");
+  });
+  it("une erreur ordinaire garde « ✗ … ms »", () => {
+    let lines = applyToolEvent([], call("r3", "terminal", { command: "false" }));
+    lines = applyToolEvent(lines, refused("r3", { reason: undefined, status: "error" }));
+    expect(formatToolLine(lines[0]!)).toBe("✗ terminal false 23 ms");
   });
 });

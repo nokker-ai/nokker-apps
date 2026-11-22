@@ -1,13 +1,15 @@
 /**
  * Analyse des arguments de ligne de commande — pur (pas de `process.exit`, pas d'I/O), testable
  * directement. `bin.ts` n'en fait qu'un appel puis bascule entre mode interactif (Ink), mode
- * non-interactif (`-p`/`--print`) et sous-commandes (`doctor`, `logs`, `update`, `backup`, `restore`, `import`, `acp`).
+ * non-interactif (`-p`/`--print`) et sous-commandes (`doctor`, `logs`, `update`, `backup`, `restore`, `import`, `sites`, `acp`).
  */
 import { parseLang, t, type Lang } from "./i18n/index.js";
 import { IMPORT_SOURCES, PROJECT_SOURCES, type ImportSource } from "./import.js";
 
-export type Subcommand = "doctor" | "logs" | "update" | "backup" | "restore" | "import" | "acp" | null;
-const SUBCOMMANDS = ["doctor", "logs", "update", "backup", "restore", "import", "acp"] as const;
+export type Subcommand = "doctor" | "logs" | "update" | "backup" | "restore" | "import" | "sites" | "acp" | "open" | "sessions" | null;
+const SUBCOMMANDS = ["doctor", "logs", "update", "backup", "restore", "import", "sites", "acp", "open", "sessions"] as const;
+/** `nokker sites enable|update` : sites connectés (installeur posé, `install.sh --sites-only`). */
+export type SitesAction = "enable" | "update";
 
 export interface ParsedArgs {
   serverUrl: string;
@@ -41,6 +43,12 @@ export interface ParsedArgs {
   targetVersion: string | null;
   /** backup : `nokker backup list` liste les sauvegardes au lieu d'en faire une. */
   backupList: boolean;
+  /** open [chemin] / sessions [revoke <id>] : arguments positionnels. */
+  positional: string[];
+  /** `nokker open --code` : le code d'ouverture seul, sans lien (à coller dans la page de clé). */
+  codeOnly: boolean;
+  /** sites : `enable` ou `update` (les deux lancent `install.sh --sites-only`). */
+  sitesAction: SitesAction | null;
   /** backup / backup list : `--to <dossier|s3://…>`. */
   to: string | null;
   /** backup : `--keep N` (sauvegardes locales gardées). */
@@ -83,6 +91,9 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
   let check = false;
   let targetVersion: string | null = null;
   let backupList = false;
+  let sitesAction: SitesAction | null = null;
+  const positional: string[] = [];
+  let codeOnly = false;
   let to: string | null = null;
   let keep: number | null = null;
   let encrypt = false;
@@ -102,12 +113,19 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
       command = arg as Subcommand; // sous-commande, avant ou après --server
     } else if (command === "backup" && arg === "list" && !backupList) {
       backupList = true;
+    } else if (command === "sites" && sitesAction === null && arg !== undefined && !arg.startsWith("-")) {
+      if (arg === "enable" || arg === "update") sitesAction = arg;
+      else error ??= t("sites expects enable or update");
+    } else if ((command === "open" || command === "sessions") && arg !== undefined && !arg.startsWith("-")) {
+      positional.push(arg);
     } else if (command === "restore" && source === null && arg !== undefined && !arg.startsWith("-")) {
       source = arg;
     } else if (command === "import" && importArg === null && arg !== undefined && !arg.startsWith("-")) {
       importArg = arg;
       if ((IMPORT_SOURCES as readonly string[]).includes(arg)) importSource = arg as ImportSource;
       else error ??= t("import expects one of: {0}", IMPORT_SOURCES.join(", "));
+    } else if (arg === "--code" && command === "open") {
+      codeOnly = true;
     } else if (arg === "--project") {
       const v = argv[++i];
       if (v && !v.startsWith("-")) project = v;
@@ -184,8 +202,12 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
     error ??= t("--project only applies to {0}: {1} reads nothing in a project.", PROJECT_SOURCES.join(", "), importSource);
   }
   if (command === "import" && importArg === null && !help) error ??= t("import expects one of: {0}", IMPORT_SOURCES.join(", "));
+  if (command === "sites" && sitesAction === null && !help) error ??= t("sites expects enable or update");
+  if (command === "open" && codeOnly && positional.length > 0) error ??= t("open --code prints only the code: it takes no path");
+  if (command === "open" && positional.length > 1) error ??= t("open expects one path, for example: nokker open /setup");
+  if (command === "sessions" && !(positional.length === 0 || (positional[0] === "revoke" && positional.length === 2))) error ??= t("sessions expects nothing (list) or: revoke <id>");
   return {
     serverUrl, serverExplicit, print, json, sound, help, version, command, fix, follow, lines, since, component, check,
-    targetVersion, backupList, to, keep, encrypt, yes, source, importSource, project, apply, lang, error,
+    targetVersion, backupList, sitesAction, positional, codeOnly, to, keep, encrypt, yes, source, importSource, project, apply, lang, error,
   };
 }

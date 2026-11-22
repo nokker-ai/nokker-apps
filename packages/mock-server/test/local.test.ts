@@ -489,7 +489,7 @@ describe("décision locale : réponse tout de suite (LOKKAL.md §7.4.3, §7.4.9)
     return { status: r.status, json: (await r.json()) as Record<string, unknown> };
   };
 
-  it("inline : 202 running (approuvée) / 200 none (refus) ; status approved|rejected ; le tool.result porte approval_id", async () => {
+  it("inline : 202 running (approuvée) / 202 running (refus : le tour reprend, noyau n27) ; status approved|rejected ; le tool.result porte approval_id", async () => {
     const th = await newSession("/work/inline-202");
     const turn = startTurn(th, "corrige le test add");
     const c1 = await until(() => pendingCard(th));
@@ -501,12 +501,12 @@ describe("décision locale : réponse tout de suite (LOKKAL.md §7.4.3, §7.4.9)
     expect(done1).toMatchObject({ call_id: r1.json.call_id, is_error: false });
     const c2 = await until(() => cardAfter(th, c1.id));
     const r2 = await raw(c2.id, { decision: "reject", scope: "once" });
-    expect(r2.status).toBe(200);
-    expect(r2.json).toMatchObject({ approval_id: c2.id, status: "rejected", continuation: "none" });
+    expect(r2.status).toBe(202);
+    expect(r2.json).toMatchObject({ approval_id: c2.id, status: "rejected", continuation: "running" });
     await turn;
   });
 
-  it("kernel : la carte rend la main ; approuvée → queued derrière le tour, tool.result de l'exécuteur AVANT le tour de suite ; refus → rien ne tourne", async () => {
+  it("kernel : la carte rend la main ; approuvée → queued derrière le tour, tool.result de l'exécuteur AVANT le tour de suite ; refus (n27) → 202, tool.result refused/declined puis le tour CONTINUE", async () => {
     mock.state.approvalStyle = "kernel";
     try {
       const th = await newSession("/work/kernel-202");
@@ -533,11 +533,18 @@ describe("décision locale : réponse tout de suite (LOKKAL.md §7.4.3, §7.4.9)
       await until(() => !mock.state.threadBusy(th));
       const started = events.filter((e) => e.type === "turn.started" && e.thread_id === th).length;
       const r2 = await raw(c2.id, { decision: "reject", scope: "once" });
-      expect(r2.status).toBe(200);
-      expect(r2.json).toMatchObject({ status: "rejected", continuation: "none" });
-      await wait(100);
-      expect(events.filter((e) => e.type === "turn.started" && e.thread_id === th).length).toBe(started);
-      expect(resultsOf(th).some((e) => e.approval_id === c2.id)).toBe(false);
+      // Noyau n27 : un refus répond 202 et le modèle reçoit le refus : le tour CONTINUE.
+      expect(r2.status).toBe(202);
+      expect(r2.json).toMatchObject({ approval_id: c2.id, status: "rejected", call_id: c2.call_id ?? null });
+      expect(["queued", "running"]).toContain(r2.json.continuation);
+      const refused = await until(() => resultsOf(th).find((e) => e.approval_id === c2.id));
+      expect(refused).toMatchObject({ call_id: c2.call_id, name: "terminal", is_error: true, status: "refused", reason: "declined" });
+      await wait(300);
+      // Le tour de suite part APRÈS le tool.result « refused ».
+      expect(events.filter((e) => e.type === "turn.started" && e.thread_id === th).length).toBe(started + 1);
+      const evs = events.slice(from);
+      const refusedAt = evs.indexOf(refused);
+      expect(evs.findIndex((e, i) => i > refusedAt && e.type === "turn.started" && e.thread_id === th)).toBeGreaterThan(refusedAt);
     } finally {
       mock.state.approvalStyle = "inline";
     }

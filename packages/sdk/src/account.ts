@@ -5,9 +5,18 @@
  * compris, répond 403 `{"error":{"message":"forbidden"}}` (aucun code dédié).
  */
 
+/** Langues que le noyau accepte pour le compte (`PATCH /v1/account {lang}`) ; `null` : suivre la détection (navigateur). */
+export type AccountLang = "fr" | "en" | "de" | "it";
+export const ACCOUNT_LANGS: readonly AccountLang[] = ["fr", "en", "de", "it"];
+
 export interface AccountInfo {
   email: string;
+  /** Prénom du profil (vide si aucun) et nom montré (le prénom, sinon la partie locale de l'adresse) — 072. */
+  first_name?: string;
+  name?: string;
   lang: string;
+  /** Vrai : la langue montrée est celle de la détection (rien n'a été choisi). Absent (noyau d'avant) : on ne sait pas. */
+  lang_is_default?: boolean;
   created_at: string;
   /** Toujours `active` en pratique : un compte suspendu ne lit plus `GET /v1/account` (403). */
   status: string;

@@ -15,6 +15,9 @@ export { isHardline } from "./local.js";
 export { costBook, MOCK_COST_MODEL, MOCK_PREFIX_TOKENS, MOCK_PRICES } from "./cost.js";
 export { localMock, LOCAL_TOKEN } from "./local-setup.js";
 export { seedDemo, sessionMessage, type DemoIds } from "./demo.js";
+export { createBubble } from "./bubbles.js";
+export { accordRequest, accordReset, accordSeedDevice, accordSet, accordSetLastSeen, ACCORD_HOST_FP } from "./accord.js";
+export { accessReset, accessSetCodeTtl, SESSION_CODE_TTL_S, SESSION_TOKEN_TTL_S } from "./local-access.js";
 import { seedDemo, settleApprovalBubbles, type DemoIds } from "./demo.js";
 
 export interface MockServerHandle {
@@ -72,10 +75,16 @@ export async function startMockServer(
     goals?: boolean;
     /** Foyer (X23) : `MOCK_HOUSEHOLD=payer|member|minor|none` (défaut `off` : 404 comme le noyau sans drapeau). */
     household?: "off" | "payer" | "member" | "minor" | "none";
+    /** `MOCK_HOUSEHOLD_MINORS=denied` : foyer hors de la liste des foyers autorisés aux profils mineurs (bêta). */
+    householdMinors?: "open" | "denied";
     /** Drapeau `code.enabled` (LOKKAL §7.28) ; défaut `MOCK_CODE=1`, sinon éteint. */
     code?: boolean;
     /** Flag `local.cast.enabled` (SCREEN-CAST §7) ; `MOCK_CAST=1`, otherwise off. */
     cast?: boolean;
+    /** V3 (BROWSER-LIVE) : `MOCK_BROWSER_LIVE=1`, otherwise off. */
+    browserLive?: boolean;
+    /** Flag `ambient.screens.enabled` (core docs/SCREENS.md, V7) ; `MOCK_SCREENS=1`, otherwise off. */
+    screens?: boolean;
     /** Flag `show_me` (core docs/SHOW-ME.md) ; `MOCK_SHOW_ME=1`, otherwise off. */
     showMe?: boolean;
     /** Reading a reply aloud ; `MOCK_TTS=1`. */
@@ -119,6 +128,8 @@ export async function startMockServer(
     goals: opts.goals ?? process.env.MOCK_GOALS === "1",
     code: opts.code ?? process.env.MOCK_CODE === "1",
     cast: opts.cast ?? process.env.MOCK_CAST === "1",
+    browserLive: opts.browserLive ?? process.env.MOCK_BROWSER_LIVE === "1",
+    screens: opts.screens ?? process.env.MOCK_SCREENS === "1",
     showMe: opts.showMe ?? process.env.MOCK_SHOW_ME === "1",
     tts: opts.tts ?? process.env.MOCK_TTS === "1",
     guide: opts.guide ?? process.env.MOCK_GUIDE === "1",
@@ -130,6 +141,7 @@ export async function startMockServer(
     payAgent: opts.payAgent ?? (["wise", "wise-linked", "own_card"].includes(process.env.MOCK_PAY_AGENT ?? "") ? (process.env.MOCK_PAY_AGENT as "wise" | "wise-linked" | "own_card") : "off"),
     folder: opts.folder ?? process.env.MOCK_FOLDER === "1",
     crewMail: opts.crewMail ?? (process.env.MOCK_CREW_MAIL === "off" || process.env.MOCK_CREW_MAIL === "nobox" ? process.env.MOCK_CREW_MAIL : "on"),
+    householdMinors: opts.householdMinors ?? (process.env.MOCK_HOUSEHOLD_MINORS === "denied" ? "denied" : "open"),
     household: opts.household ?? (["payer", "member", "minor", "none"].includes(process.env.MOCK_HOUSEHOLD ?? "") ? (process.env.MOCK_HOUSEHOLD as "payer" | "member" | "minor" | "none") : "off"),
   });
   if (state.payments) state.payDecided = (a, d, by) => payDecided(state, a, d, by);

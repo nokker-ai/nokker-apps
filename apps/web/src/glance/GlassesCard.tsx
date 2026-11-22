@@ -8,6 +8,7 @@ import qrcode from "qrcode-generator";
 import { NokkerApiError, type GlanceDevice, type GlanceOffer, type NokkerClient } from "@nokker-apps/sdk";
 import { tr } from "../i18n/index.js";
 import { off as offCap } from "../capabilities.js";
+import { timeKey } from "../sessions/origins.js";
 
 /** QR drawn as SVG rectangles from the generator's modules (no HTML injected). */
 export function QrSvg({ text, size = 176 }: { text: string; size?: number }): React.ReactElement {
@@ -126,11 +127,12 @@ export function GlassesCard({ client }: { client: NokkerClient }): React.ReactEl
             <li key={d.id} data-glasses={d.id}>
               <div>
                 <strong>{d.name}</strong>
-                <div className="ob-note">{d.last_seen_at ? tr("Last read {0}", new Date(d.last_seen_at).toLocaleString()) : tr("Not used yet")}</div>
+                {d.surface === "wall" ? <span className="ob-muted" data-glance-surface="wall"> · {tr("Wall screen")}</span> : null}
+                <div className="ob-note">{d.last_seen_at ? tr("Last read {0}", new Date(timeKey(d.last_seen_at)).toLocaleString()) : tr("Not used yet")}</div>
               </div>
               {confirm === d.id ? (
                 <button type="button" className="ob-btn danger" onClick={() => revoke(d.id)}>
-                  {tr("Revoke these glasses")}
+                  {d.surface === "wall" ? tr("Remove this wall screen") : tr("Revoke these glasses")}
                 </button>
               ) : (
                 <button type="button" className="ob-btn" onClick={() => setConfirm(d.id)}>

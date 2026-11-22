@@ -34,7 +34,8 @@ def scenario(argv):
     ap.add_argument("--server", required=True)
     ap.add_argument("--cwd", required=True)
     ap.add_argument("--max-decisions", type=int, default=3)
-    ap.add_argument("--decide", choices=["1", "2"], default="1", help="touche envoyée sur chaque carte (1 ou 2 selon l'ordre affiché)")
+    ap.add_argument("--decide", choices=["1", "2"], default="1", help="choix sur chaque carte (1 ou 2 selon l'ordre affiché), confirmé par Entrée après le silence")
+    ap.add_argument("--race", action="store_true", help="au moment où la carte apparaît, tape un message + Entrée (ne doit RIEN décider)")
     ap.add_argument("--config-dir", default=os.environ.get("NOKKER_CONFIG_DIR_OVERRIDE"))
     ap.add_argument("--token-file")
     ap.add_argument("--idle", type=float, default=12.0)
@@ -73,7 +74,8 @@ def scenario(argv):
                 if strip_ansi(chunk).strip():
                     st["last_text"] = time.time()
 
-    result = {"cards": [], "turns_user": None, "duration_s": None, "final_text": "", "bounded": False, "error": None}
+    result = {"cards": [], "turns_user": None, "duration_s": None, "final_text": "", "bounded": False, "error": None,
+              "race_kept_pending": None}
     thread_id = None
     try:
         t0 = time.time()
@@ -118,8 +120,20 @@ def scenario(argv):
                 if not seen:
                     result["error"] = "carte " + card["id"] + " détectée par l'API mais jamais rendue à l'écran"
                     break
-                pump(0.3)  # laisse Ink brancher les touches de la carte
-                os.write(fd, a.decide.encode())
+                if a.race:
+                    # répétition du 07.11 : l'Entrée d'un message tapé pour le composeur arrive à l'instant même où la
+                    # carte s'affiche (avant, elle validait le choix par défaut) ; puis une rafale de texte.
+                    # Frappes une à une (un bloc d'un coup serait lu par Ink comme un collage, sans touche Entrée).
+                    for ch in [b"\r"] + [bytes([c]) for c in b"salut, et les tests ?"] + [b"\r"]:
+                        os.write(fd, ch)
+                        pump(0.03)
+                pump(0.9)  # la carte ignore toute frappe jusqu'à 600 ms de silence (anti-rebond)
+                if a.race:
+                    still = [x for x in mine_pending() if x["id"] == card["id"]]
+                    result["race_kept_pending"] = bool(still) and result["race_kept_pending"] is not False
+                os.write(fd, a.decide.encode())  # un chiffre CHOISIT seulement…
+                pump(0.9)
+                os.write(fd, b"\r")  # … Entrée confirme, après 600 ms de silence
                 args = card.get("arguments") or {}
                 result["cards"].append({"t": round(time.time() - t_task, 1), "tool": card.get("tool_name"), "command": args.get("command") or args.get("path") or args.get("hash") or ""})
                 st["last_text"] = time.time()

@@ -129,6 +129,22 @@ describe("session locale", () => {
     expect((await new CliSession(off as never, null).openLocal("/w/p")).skills).toBe("unknown");
   });
 
+  it("workspace du noyau : chaîne, null (rien à traduire) ou absent (repli /workspace) ; lu à la création comme à la reprise", async () => {
+    const mk = (workspace: string | null | undefined, listed: boolean) => ({
+      listLocalSessions: async () => (listed ? [{ thread_id: "th_w", cwd: "/w/p", last_turn_at: null, ...(workspace !== undefined ? { workspace } : {}) }] : []),
+      createLocalSession: async () => ({ thread_id: "th_n", cwd: "/w/p", ...(workspace !== undefined ? { workspace } : {}) }),
+      getThread: async () => ({ messages: [] }),
+      getLocalSessionSkills: async () => ({ thread_id: "th_w", skills: "off" }),
+    });
+    for (const listed of [false, true]) {
+      for (const w of ["/sandbox", null, undefined] as const) {
+        const s = new CliSession(mk(w, listed) as never, null);
+        await s.openLocal("/w/p");
+        expect(s.workspace).toBe(w);
+      }
+    }
+  });
+
   it("403 hors racines", async () => {
     const s3 = new CliSession(client, null);
     await expect(s3.openLocal("/etc")).rejects.toMatchObject({ status: 403 });
@@ -282,6 +298,23 @@ describe("mode non interactif : fin de tour (D7)", () => {
     expect(res.error).toEqual({ code: "provider_error", message: "upstream 502 (mock)" });
     expect(res.exit_code).toBe(4);
     expect(JSON.parse(JSON.stringify(res))).toMatchObject({ error: { code: "provider_error" }, exit_code: 4 });
+  });
+
+  it("repli de palier : turn.done.notice et fallback recopiés (turn_notice, fallback), jamais une erreur ; rien sans repli", async () => {
+    const res = await printWith("simulate a deep fallback");
+    expect(res.turn_notice).toBe("Reply in lighter mode: deep mode is unavailable right now.");
+    expect(res.fallback).toEqual({ from: "deep", to: "ship" });
+    expect(res.error).toBeNull();
+    expect(res.exit_code).toBe(0);
+    const plain = await printWith("hello");
+    expect(plain.turn_notice).toBeUndefined();
+    expect(plain.fallback).toBeUndefined();
+  });
+
+  it("quota atteint : turn.done.error {quota_exceeded, retry_at} recopié (code 4)", async () => {
+    const res = await printWith("simulate a quota");
+    expect(res.error).toEqual({ code: "quota_exceeded", message: "usage quota reached", retry_at: "2026-12-01T00:00:00Z" });
+    expect(res.exit_code).toBe(4);
   });
 
   it("refus d'office du noyau (hardline, sans carte) : refused: true seul suffit pour le code 3", async () => {

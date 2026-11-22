@@ -45,7 +45,8 @@ describe("Lokkal opened without its local key", () => {
     expect(local).toContain("data-local-key-page");
     expect(local).toContain("Ce Nokker tourne sur ta machine");
     expect(local).toContain("http://127.0.0.1:7420/setup");
-    expect(local).toContain("~/.nokker/state/local-token");
+    expect(local).toContain("nokker open --code"); // le code seul ; la clé locale n'entre jamais dans un navigateur
+    expect(local).not.toContain("local-token");
     expect(local).not.toMatch(/bêta privée|Candidater|Se connecter/);
 
     stubPage("app.nokker.ai");

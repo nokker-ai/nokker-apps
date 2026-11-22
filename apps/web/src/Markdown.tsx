@@ -4,6 +4,7 @@
  * `dangerouslySetInnerHTML`, donc pas de risque d'injection même si le texte vient du modèle).
  */
 import React from "react";
+import { MaskedText } from "./components/redaction.js";
 
 interface Segment {
   text: string;
@@ -31,10 +32,11 @@ function parseInline(line: string): Segment[] {
 
 function renderSegments(segs: Segment[]): React.ReactNode {
   return segs.map((s, i) => {
-    if (s.code) return <code key={i}>{s.text}</code>;
-    if (s.bold) return <strong key={i}>{s.text}</strong>;
-    if (s.italic) return <em key={i}>{s.text}</em>;
-    return <React.Fragment key={i}>{s.text}</React.Fragment>;
+    // P9b : les marqueurs ⟦CODE-n⟧ passent par MaskedText (démasqués s'ils viennent de cet appareil, sinon en puce).
+    if (s.code) return <code key={i}><MaskedText text={s.text} /></code>;
+    if (s.bold) return <strong key={i}><MaskedText text={s.text} /></strong>;
+    if (s.italic) return <em key={i}><MaskedText text={s.text} /></em>;
+    return <MaskedText key={i} text={s.text} />;
   });
 }
 

@@ -1,12 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { ImportItem, ImportReport } from "@nokker-apps/sdk";
-import { groupReport, hostCommand, itemLabel, mcpRequest, nothingVisible } from "../src/onboarding/importModel.js";
+import { SOURCES, groupReport, hostCommand, itemLabel, mcpRequest, nothingVisible } from "../src/onboarding/importModel.js";
 import { t } from "../src/onboarding/i18n.js";
 
 const it_ = (kind: string, status: ImportItem["status"], source: string, detail: Record<string, unknown> = {}): ImportItem => ({ kind, status, source, target: null, reason: "r", detail });
 const rep = (items: ImportItem[]): ImportReport => ({ origin: "claude-code", counts: {} as ImportReport["counts"], items });
 
 describe("écran d'import", () => {
+  it("le texte d'introduction cite exactement les outils des boutons (FR et EN)", () => {
+    for (const lang of ["fr", "en"] as const) {
+      const intro = t(lang, "impIntro");
+      for (const { label } of SOURCES) expect(intro, `${lang}: ${label}`).toContain(label);
+      // Aucun outil cité qui n'ait pas son bouton : les noms propres du texte sont tous des boutons.
+      const cited = ["Claude Code", "Codex", "Cursor", "Hermes", "OpenClaw"].filter((n) => intro.includes(n));
+      expect(cited.sort()).toEqual(SOURCES.map((x) => x.label).sort());
+    }
+  });
   it("regroupe : repris, MCP à ajouter dans une session, pas repris ; lignes de fichier retirées", () => {
     const mcp = it_("mcp", "planned", "~/.claude.json#mcpServers.docs", { entry: { name: "docs", url: "https://m.example.org" } });
     const g = groupReport(rep([it_("skill", "planned", "/s/pdf", { name: "pdf" }), mcp, it_("mcp", "unsupported", "x#mcpServers.fs"), it_("source-file", "skipped", "/x.json"), it_("note", "native", "CLAUDE.md")]));

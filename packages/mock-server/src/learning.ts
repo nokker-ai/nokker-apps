@@ -3,7 +3,7 @@
  * (versions, diff unifié, retour, `0` = désactiver) et règles suggérées (`rule_store` : `user_settings` pour le
  * propriétaire de Lokkal, null au nuage → 409 no_rule_store). `MOCK_LEARNING=off` : tout en 404, comme un drapeau éteint.
  */
-import type { ApprovalSuggestion, JournalEntry, PendingNote, SkillVersion } from "@nokker-apps/sdk";
+import type { ApprovalSuggestion, JournalEntry, LongNote, PendingNote, SkillVersion } from "@nokker-apps/sdk";
 import { LOCAL_OWNER, type MockState } from "./state.js";
 
 type Send = (status: number, payload: unknown) => void;
@@ -13,6 +13,7 @@ interface Learning {
   journal: JournalEntry[];
   skills: Map<string, SkillVersion[]>;
   suggestions: ApprovalSuggestion[];
+  long: LongNote[];
 }
 
 const now = (): string => new Date().toISOString();
@@ -44,7 +45,10 @@ function seed(): Learning {
     { id: nid("sg"), rule: "terminal(npm test*)", tool: "terminal", approved: 7, rejected: 0, approval_ids: [], first_at: ago(200), last_at: ago(3) },
     { id: nid("sg"), rule: "write_file(docs/**)", tool: "write_file", approved: 5, rejected: 0, approval_ids: [], first_at: ago(150), last_at: ago(20) },
   ];
-  return { notes, journal, skills, suggestions };
+  const long: LongNote[] = [
+    { name: "fact-allergie-noix", scope: "user", kind: "fact", title: "Allergie aux noix", text: "Je suis allergique aux noix : rien avec des noix dans les recettes.", created_at: ago(96), updated_at: ago(96), mine: true },
+  ];
+  return { notes, journal, skills, suggestions, long };
 }
 
 function lstate(state: MockState): Learning {
@@ -69,14 +73,36 @@ const err = (send: Send, status: number, code: string, message: string): true =>
 
 export async function handleLearning(state: MockState, user: string | null, method: string, path: string, readBody: () => Promise<Record<string, unknown>>, send: Send): Promise<boolean> {
   const bare = path.split("?", 1)[0]!;
-  const learningRoute = bare.startsWith("/v1/learning/") || bare.startsWith("/v1/memory/pending");
+  const learningRoute = bare.startsWith("/v1/learning/") || bare.startsWith("/v1/memory/pending") || bare.startsWith("/v1/memory/long");
   const suggestionsRoute = bare.startsWith("/v1/approvals/suggestions");
   if (!learningRoute && !suggestionsRoute) return false;
+  if (bare.startsWith("/v1/memory/long") && process.env.MOCK_LONG_MEMORY === "off") return send(404, { error: { code: "not_found", message: "not found" } }), true;
   if (process.env.MOCK_LEARNING === "off") return send(404, { error: { message: "not found" } }), true;
   if (!user) return send(401, { error: { message: "authentification requise" } }), true;
   const L = lstate(state);
   const q = new URLSearchParams(path.split("?", 2)[1] ?? "");
 
+  if (method === "GET" && bare === "/v1/memory/long") return send(200, { household: null, notes: L.long }), true;
+  if (method === "POST" && bare === "/v1/memory/long/notes") {
+    const b = await readBody();
+    const title = typeof b.title === "string" ? b.title.trim() : "";
+    const text = typeof b.text === "string" ? b.text.trim() : "";
+    const kind = b.kind === "rule" || b.kind === "feedback" || b.kind === "fact" ? b.kind : "fact";
+    if (!title || !text || title.length > 120 || text.length > 1500) return err(send, 400, "bad_note", "titre 1–120, texte 1–1500");
+    const name = `${kind}-${title.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
+    const dup = L.long.find((n) => n.name === name || (n.title === title && n.text === text));
+    if (dup) return send(200, { note: dup, duplicate: true }), true;
+    const note: LongNote = { name, scope: "user", kind, title, text, created_at: now(), updated_at: now(), mine: true };
+    L.long.unshift(note);
+    return send(201, { note }), true;
+  }
+  const del = /^\/v1\/memory\/long\/notes\/([^/]+)$/.exec(bare);
+  if (method === "DELETE" && del) {
+    const i = L.long.findIndex((n) => n.name === decodeURIComponent(del[1]!));
+    if (i < 0) return err(send, 404, "unknown_note", "note inconnue");
+    L.long.splice(i, 1);
+    return send(200, { deleted: true }), true;
+  }
   if (method === "GET" && bare === "/v1/memory/pending") {
     const status = q.get("status") ?? "pending";
     if (!["pending", "approved", "rejected", "all"].includes(status)) return err(send, 400, "bad_query", "status ∈ pending, approved, rejected, all");
@@ -88,6 +114,7 @@ export async function handleLearning(state: MockState, user: string | null, meth
     if (!n) return err(send, 404, "unknown_note", "note inconnue");
     if (n.status !== "pending") return err(send, 409, "already_decided", "déjà décidée");
     const ok = dec[2] === "approve";
+    if (ok && process.env.MOCK_MEMORY_DOWN === "1") return err(send, 503, "no_memory", "mémoire indisponible");
     Object.assign(n, { status: ok ? "approved" : "rejected", decided_at: now(), decided_by: user, result: ok ? `${n.kind}-${n.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}` : null });
     L.journal.unshift({ id: nid("lj"), kind: ok ? "memory.approved" : "memory.rejected", subject: n.id, at: now(), actor: "owner", version: null, thread_id: n.thread_id, turn_index: n.turn_index, detail: { source: n.source, kind: n.kind, scope: n.scope, title: n.title, note: n.result } });
     return send(200, { note: n }), true;

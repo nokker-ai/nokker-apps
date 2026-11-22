@@ -32,6 +32,12 @@ export interface PrintResult {
   thread_id: string;
   /** Dossier de la session locale (`null` si le serveur n'en propose pas). */
   cwd: string | null;
+  /** Pourquoi la session de code n'a pas été ouverte (dossier hors des racines, serveur sans session de code) ; absent sinon. */
+  notice?: string;
+  /** Ligne d'état du noyau pour la personne (`turn.done.notice` : repli sur le mode allégé), dans la langue du tour ; absente sinon. */
+  turn_notice?: string;
+  /** Le tour a été servi par un autre palier que celui demandé (`turn.done.fallback`) ; absent sans repli. */
+  fallback?: { from: string; to: string };
   pending_approvals: string[];
   refused: RefusedEffect[];
   cancelled: boolean;
@@ -72,11 +78,16 @@ export async function runPrint(
   // Windows + Lokkal dans WSL : le noyau reçoit le chemin Linux ; les @refs se lisent toujours dans `cwd` (local).
   const target = serverCwdFor(cwd, wsl);
   let local = target.kind !== "other-distro";
+  let notice: string | undefined;
   try {
     if (local) await session.openLocal(target.cwd, lastThreads);
   } catch (err) {
     if (!(err instanceof NokkerApiError) || ![403, 404, 405].includes(err.status)) throw err;
     local = false;
+    // Jamais en silence : sans cela le tour part dans un fil ordinaire (sans outils de code) et personne ne sait pourquoi.
+    notice = err.status === 403
+      ? t("Folder outside the roots declared by the server: {0}. Plain thread opened instead.", target.cwd)
+      : t("This server offers no local code session — plain thread.");
   }
 
   const refused: RefusedEffect[] = [];
@@ -85,6 +96,8 @@ export async function runPrint(
   let refusedByCore = false;
   let error: TurnDoneError | null = null;
   let cost: Omit<TurnCostEvent, "type"> | undefined;
+  let turnNotice: string | undefined;
+  let fallback: { from: string; to: string } | undefined;
   let doneResolve: () => void = () => {};
   const done = new Promise<void>((r) => (doneResolve = r));
   let connectedResolve: () => void = () => {};
@@ -101,7 +114,9 @@ export async function runPrint(
       if (e.type === "turn.done" && e.thread_id === session.threadId) {
         if (e.cancelled) cancelled = true;
         if (e.refused) refusedByCore = true;
-        if (e.error && typeof e.error === "object") error = { code: String(e.error.code ?? "internal_error"), message: String(e.error.message ?? "") };
+        if (e.error && typeof e.error === "object") error = { code: String(e.error.code ?? "internal_error"), message: String(e.error.message ?? ""), ...(typeof e.error.retry_at === "string" ? { retry_at: e.error.retry_at } : {}) };
+        if (typeof e.notice === "string" && e.notice.trim()) turnNotice = e.notice.trim();
+        if (e.fallback && typeof e.fallback === "object") fallback = { from: String(e.fallback.from ?? ""), to: String(e.fallback.to ?? "") };
         doneResolve();
       }
       if (e.type !== "approval.requested") return;
@@ -131,6 +146,9 @@ export async function runPrint(
       reply,
       thread_id: session.threadId,
       cwd: local ? target.cwd : null,
+      ...(notice ? { notice } : {}),
+      ...(turnNotice ? { turn_notice: turnNotice } : {}),
+      ...(fallback ? { fallback } : {}),
       pending_approvals: pending.map((a) => a.id),
       refused,
       cancelled,

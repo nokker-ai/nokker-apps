@@ -28,7 +28,7 @@ const EMAIL = "alice@example.com";
 const CODE = "123456"; // MOCK_EMAIL_CODE
 // /v1/guide : le build de prod (E2E_PREVIEW=1) allume le guide, que le mock de cette recette ne sert pas (404).
 const ALLOWED_4XX = [
-  [404, /\/v1\/(guide|speech|account\/models|capabilities|packs|code\/sessions|household\/invitations\/received|sso\/connections|glance\/devices|house|presence|memory\/consolidation\/runs|local\/folder\/runs|payments\/method\/balance)(\?|$)/],
+  [404, /\/v1\/(guide|speech|account\/models|capabilities|local\/sites|packs|code\/sessions|household\/invitations\/received|sso\/connections|glance\/devices|house|presence|memory\/consolidation\/runs|local\/folder\/runs|payments\/method\/balance)(\?|$)/],
   [401, /\/v1\/local\//], // as in the other journeys: a cloud session asks no local route
 ];
 const PHONE = { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true };

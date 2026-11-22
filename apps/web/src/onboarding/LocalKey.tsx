@@ -1,22 +1,21 @@
 /**
  * Lokkal opened without its local key (docs/LOKKAL.md §7.1): the page is served on 127.0.0.1 / localhost by the
  * machine itself, so the nokker.ai sign-in (private beta, « Apply ») is the wrong door. This explains how to open it
- * with the key: the link the installer prints (`/setup#token=…`), or the key file pasted here. A pasted key is checked
- * against this core (`GET /v1/local/setup`), kept like a key from the fragment (localStorage), then the page reloads:
+ * with a one-time code: the link the installer prints (`/setup#code=…`), or the code of `nokker open --code` pasted here. The
+ * local key never enters a browser. A pasted code is exchanged for a session key of its own (revocable), checked against this
+ * core (`GET /v1/local/setup`), then the page reloads:
  * to `/setup` while the first-launch setup is not done, to the app otherwise.
  */
 import React, { useEffect, useState } from "react";
 import { BRAND } from "@nokker-apps/brand";
 import { NokkerApiError } from "@nokker-apps/sdk";
-import { createClient } from "../api.js";
+import { SERVER_URL, createClient } from "../api.js";
 import { uiLang } from "../components/ConnectorsTab.js";
 import { writeJson } from "../viewState.js";
 import { t, type Lang } from "./i18n.js";
-import { keepLocalToken } from "./localToken.js";
+import { takeLocalToken } from "./localToken.js";
+import { redeemSessionCode, takeCodeNote, type CodeFailure } from "./sessionCode.js";
 import { applyStoredTheme } from "./theme.js";
-
-/** Default key file of the installer (`--dir` defaults to ~/.nokker). */
-export const LOCAL_KEY_FILE = "~/.nokker/state/local-token";
 
 type Check = "idle" | "checking" | "wrong" | "unreachable";
 
@@ -28,16 +27,25 @@ export function afterLocalKey(setupDone: boolean): string {
 export function LocalKeyHelp({ lang: L, origin, onOpened }: { lang: Lang; origin: string; onOpened: (setupDone: boolean) => void }): React.ReactElement {
   const [key, setKey] = useState("");
   const [check, setCheck] = useState<Check>("idle");
+  // Le lien `#code=` qui vient d'échouer (déjà servi, périmé…) : dit une fois, avec le moyen d'en obtenir un autre.
+  const [codeNote] = useState<CodeFailure | null>(() => takeCodeNote());
 
   async function open(): Promise<void> {
     const k = key.trim();
     if (!k) return;
+    // La page ne prend QUE le code d'ouverture (« nokker open --code ») : la clé locale n'entre jamais dans un navigateur. Une
+    // saisie qui n'a pas la forme d'un code (la clé locale collée par habitude, par exemple) est refusée ici, avant tout réseau.
+    if (!/^[A-Za-z0-9_-]{16,64}$/.test(k)) return void setCheck("wrong");
     setCheck("checking");
     try {
+      if (!(await redeemSessionCode(SERVER_URL, k, { persistent: true }))) {
+        const why = takeCodeNote();
+        return void setCheck(why === "unreachable" || why === null ? "unreachable" : "wrong");
+      }
+      const token = takeLocalToken() ?? ""; // la clé de SESSION que l'échange vient de garder
       const c = createClient();
-      c.setToken(k);
+      c.setToken(token);
       const setup = await c.getLocalSetup();
-      keepLocalToken(k);
       onOpened(setup.done);
     } catch (err) {
       setCheck(err instanceof NokkerApiError && (err.status === 401 || err.status === 403) ? "wrong" : "unreachable");
@@ -46,12 +54,16 @@ export function LocalKeyHelp({ lang: L, origin, onOpened }: { lang: Lang; origin
 
   return (
     <div className="lk-key" data-local-key>
+      {codeNote ? (
+        <p className="ob-error" role="alert" data-code-note={codeNote}>
+          {t(L, codeNote === "used" ? "lkCodeUsed" : codeNote === "expired" ? "lkCodeExpired" : codeNote === "limited" ? "lkCodeLimited" : codeNote === "scope" ? "lkCodeScope" : "lkCodeUnreachable")}
+        </p>
+      ) : null}
       <ol className="lk-key-steps">
         <li>{t(L, "lkKeyStepLink", { url: `${origin}/setup` })}</li>
         <li>
-          {t(L, "lkKeyStepFile", { file: LOCAL_KEY_FILE })}
-          <code className="imp-cmd">cat {LOCAL_KEY_FILE}</code>
-          <span className="ob-note">{t(L, "lkKeyDirNote")}</span>
+          {t(L, "lkKeyStepCode")}
+          <code className="imp-cmd">nokker open --code</code>
         </li>
       </ol>
       <form
@@ -66,7 +78,7 @@ export function LocalKeyHelp({ lang: L, origin, onOpened }: { lang: Lang; origin
           <label htmlFor="lk-key-input">{t(L, "lkKeyLabel")}</label>
           <input
             id="lk-key-input"
-            type="password"
+            type="text"
             autoComplete="off"
             autoCapitalize="none"
             spellCheck={false}

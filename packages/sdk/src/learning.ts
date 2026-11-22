@@ -7,11 +7,11 @@ export type PendingStatus = "pending" | "approved" | "rejected";
 
 export interface PendingNote {
   id: string;
-  source: "memory_note" | "propose";
+  source: "memory_note" | "propose" | "household";
   kind: string;
   title: string;
   text: string;
-  scope: "project" | "user";
+  scope: "project" | "user" | "household";
   derived_from: string;
   project: string;
   links: string[];

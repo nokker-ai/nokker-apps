@@ -7,6 +7,7 @@ import { takeLinkReturn } from "../link/code.js";
 import { LocalKeyPage } from "../onboarding/LocalKey.js";
 import { InstallCard } from "../pwa/InstallCard.js";
 import { SsoLogin } from "../sso/SsoLogin.js";
+import { ShareNote } from "../platform/ShareNote.js";
 import type { NokkerStore } from "../store.js";
 
 export const BETA_URL = "https://nokker.ai/beta";
@@ -100,6 +101,7 @@ function CloudWelcome({ client, access, status, retryAccess, deviceStatus, forge
 
   return (
     <div className="ob">
+      <ShareNote />
       <main className="ob-card wl-card" aria-labelledby="wl-title">
         <header className="wl-logo">
           <img className="only-light" src="/brand/nokker-emblem-light.svg" alt="" width={56} height={56} />

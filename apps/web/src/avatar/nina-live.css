@@ -1,0 +1,5 @@
+/* <NinaLive> : remplit son parent ; la vidéo (cover) recouvre le rig dès qu'elle arrive. */
+.nk-nina-live { position: relative; width: 100%; height: 100%; overflow: hidden; }
+.nk-nina-live-rig { position: absolute; inset: 0; width: 100%; height: 100%; aspect-ratio: auto; }
+.nk-nina-live-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 400ms ease; }
+.nk-nina-live[data-mode="live"] .nk-nina-live-video { opacity: 1; }

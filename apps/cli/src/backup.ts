@@ -16,7 +16,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { hostCommand, readLokkal, type LokkalConfig } from "./lokkal.js";
+import { hostCommand, readLokkal, scriptEnv, type LokkalConfig } from "./lokkal.js";
 import { t } from "./i18n/index.js";
 import { run as realRun, type Runner } from "./proc.js";
 
@@ -139,16 +139,13 @@ export async function runBackup(o: BackupOptions): Promise<number> {
     }
     extraEnv[PASSPHRASE_ENV] = first;
   }
-  if (loc.cfg?.wsl_distro && (extraEnv[PASSPHRASE_ENV] || env[PASSPHRASE_ENV])) {
-    // wsl.exe ne transmet que les variables listées dans WSLENV.
-    const cur = env.WSLENV ?? "";
-    if (!cur.split(":").includes(PASSPHRASE_ENV)) extraEnv.WSLENV = cur ? `${cur}:${PASSPHRASE_ENV}` : PASSPHRASE_ENV;
-  }
+  // Langue de cette commande pour backup.sh ; sous WSL, phrase de passe et langue traversent wsl.exe par WSLENV.
+  const scriptVars = scriptEnv(loc.cfg, extraEnv, env, env[PASSPHRASE_ENV] ? [PASSPHRASE_ENV] : []);
 
   // La question a été posée ici : backup.sh ne la repose pas.
   const args = backupArgs({ ...o, yes: o.action === "restore" ? true : o.yes }, loc.installDir, !loc.cfg?.wsl_distro);
   const h = hostCommand(loc.cfg, "sh", [loc.script, ...args]);
-  const r = await run(h.cmd, h.args, { inherit: true, timeoutMs: 6 * 3_600_000, ...(Object.keys(extraEnv).length ? { env: extraEnv } : {}) });
+  const r = await run(h.cmd, h.args, { inherit: true, timeoutMs: 6 * 3_600_000, env: scriptVars });
   if (r.error === "ENOENT") {
     err(`${t("{0} not found: cannot run backup.sh.", h.cmd)}\n`);
     return 1;

@@ -43,22 +43,27 @@ describe("doctor en anglais", () => {
     expect(memoryCheck({ ok: true, mode: "direct", store: { notes: 3 } } as unknown as LocalMemoryStatus)).toEqual({ name: "mémoire", status: "ok", detail: "directe, 3 note(s)" });
   });
 
-  it("doctor : premier réglage — avertit avec le lien du setup, sans jamais écrire le jeton", () => {
+  it("doctor : premier réglage — avertit avec la commande qui donne le lien (code à usage unique), jamais de jeton", () => {
     const base = { done: true, models: { router: { linked: false, account: null }, byok: [], local: [] }, default: null, connectors: [], channels: [] };
-    const W = "http://127.0.0.1:7420/", P = "/home/u/.nokker/state/local-token";
-    const link = "http://127.0.0.1:7420/setup#token=$(cat /home/u/.nokker/state/local-token)";
-    const notDone = setupCheck({ ...base, done: false } as never, W, P);
-    expect(notDone).toEqual({ name: "model", status: "warn", detail: `first setup not finished — open ${link}` });
-    expect(setupCheck(base as never, W, P).detail).toBe(`no default model chosen — open ${link}`);
-    expect(setupCheck({ ...base, default: "router" } as never, W, P).detail).toContain("not linked");
+    const link = "nokker open /setup"; // plus de #token=$(cat …) : un code de 60 s, mint par la commande
+    const notDone = setupCheck({ ...base, done: false } as never);
+    expect(notDone).toEqual({ name: "model", status: "warn", detail: `first setup not finished — run ${link}` });
+    expect(setupCheck(base as never).detail).toBe(`no default model chosen — run ${link}`);
+    expect(setupCheck({ ...base, default: "router" } as never).detail).toContain("not linked");
     const byok = (b: object) => ({ ...base, default: "byok:k", models: { ...base.models, byok: [{ name: "k", base_url: "https://x/v1", has_key: true, ...b }] } });
-    expect(setupCheck(byok({ model: null }) as never, W, P).detail).toContain("byok:k has no model name");
-    expect(setupCheck(byok({ model: "m", has_key: false }) as never, W, P).detail).toContain("byok:k has no key");
-    expect(setupCheck({ ...base, default: "byok:gone" } as never, W, P).detail).toContain("byok:gone no longer exists");
-    expect(setupCheck(byok({ model: "m" }) as never, W, P)).toEqual({ name: "model", status: "ok", detail: "default byok:k (m)" });
-    expect(setupCheck({ ...base, default: "local:http://o:11434|qwen3:4b" } as never, W, P).status).toBe("ok");
+    expect(setupCheck(byok({ model: null }) as never).detail).toContain("byok:k has no model name");
+    expect(setupCheck(byok({ model: "m", has_key: false }) as never).detail).toContain("byok:k has no key");
+    expect(setupCheck({ ...base, default: "byok:gone" } as never).detail).toContain("byok:gone no longer exists");
+    expect(setupCheck(byok({ model: "m" }) as never)).toEqual({ name: "model", status: "ok", detail: "default byok:k (m)" });
+    expect(setupCheck({ ...base, default: "local:http://o:11434|qwen3:4b" } as never).status).toBe("ok");
+    // répétition du 07.11 : done false mais machine reliée au Router → pas de faux « premier réglage »
+    const linkedOnly = { ...base, done: false, models: { ...base.models, router: { linked: true, account: "a", model: "qwen/q" } } };
+    expect(setupCheck(linkedOnly as never)).toEqual({ name: "model", status: "ok", detail: "default router (qwen/q)" });
+    // done false, reliée, mais un défaut byok cassé : l'erreur du défaut reste dite
+    expect(setupCheck({ ...linkedOnly, default: "byok:gone" } as never).detail).toContain("byok:gone no longer exists");
     setLang("fr");
-    expect(setupCheck({ ...base, done: false } as never, W, P)).toEqual({ name: "modèle", status: "warn", detail: `premier réglage pas terminé — ouvre ${link}` });
+    expect(setupCheck({ ...base, done: false } as never)).toEqual({ name: "modèle", status: "warn", detail: `premier réglage pas terminé — lance ${link}` });
+    expect(JSON.stringify(setupCheck({ ...base, done: false } as never))).not.toMatch(/token/i);
     setLang("en");
   });
 
@@ -168,9 +173,9 @@ describe("pont ACP en anglais", () => {
       const turn = editor.request<{ stopReason: string }>("session/prompt", { sessionId, prompt: [{ type: "text", text: "corrige le test add" }] }).promise;
       const ask = await until(() => sent.find((m) => m.method === "session/request_permission"));
       const names = (ask.params!.options as Array<{ name: string }>).map((o) => o.name);
-      // Commande de test : la session d'abord (mêmes règles que le client terminal), puis « une fois ».
+      // Même ordre que le client terminal, même pour une commande de test : « une fois » d'abord, puis la session.
       // Libellés d'après `suggested_rule_kinds` (noyau du 01.11) : commande exacte, puis préfixe.
-      expect(names.slice(0, 2)).toEqual(["This exact command for this session", "Once"]);
+      expect(names.slice(0, 2)).toEqual(["Once", "This exact command for this session"]);
       expect(names[names.length - 1]).toBe("Reject");
       expect(names.some((n) => /^Always this exact command: \S/.test(n))).toBe(true);
       expect(names).not.toContain("Pour cette session");

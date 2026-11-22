@@ -20,11 +20,16 @@ export function mockCapabilities(state: MockState, local: boolean): { version: 1
     agents: true,
     approvals: true,
     billing: cloud,
+    // Narration vocale des points désignés : MOCK_NARRATION=404|off = noyau sans la route (off : le dit aussi par la capacité).
+    browser_narration: process.env.MOCK_NARRATION !== "404" && process.env.MOCK_NARRATION !== "off",
     cloud_byok: cloud && cloudByokOn(),
     code: cloud && state.code,
     connectors_multi: cloud && connectorsMultiOn(),
     connectors_oauth: cloud && connectorsOAuthOn(),
     consolidation: cloud && state.consolidation,
+    // Mode dossier et ACCORD : listés par le noyau (le web n'a plus à sonder leur route et à voir un 404 en console).
+    accord: local && state.accordEnabled,
+    folder: local && state.folder,
     family_calendar: false,
     glance: true,
     guide: state.guide,

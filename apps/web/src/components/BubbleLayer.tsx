@@ -34,6 +34,9 @@ interface DragState {
 
 const LEAVE_MS = 460;
 const FLY_MS = 1000;
+
+/** Bulle d'approbation encore à décider (ni terminée ni échouée). */
+const pendingApproval = (b: BubbleT): boolean => b.kind === "approval" && b.status !== "done" && b.status !== "failed";
 const ENTER_MS = 700;
 
 /**
@@ -63,6 +66,18 @@ export function BubbleLayer({
   const [popover, setPopover] = useState<{ id: string; kind: Popover } | null>(null);
   const [dropMenu, setDropMenu] = useState<{ bubble: BubbleT; threadId: string; top: number; left: number; origin: { x?: number; y?: number } } | null>(null);
   const [order, setOrder] = useState<string[]>([]);
+  /** La marge à droite du fil est plus étroite qu'une bulle (≈ 1280 px) : mode « pile » — pas de position libre, seules la
+   * carte en attente la plus récente et la dernière bulle active sont dépliées, les autres se replient sur leur en-tête et
+   * s'empilent en bas de la marge. La colonne du fil n'est jamais recouverte. */
+  const [narrow, setNarrow] = useState(false);
+  const [stack, setStack] = useState<Record<string, { x: number; y: number }>>({});
+  /** Bulles déplacées à la main (ou rangées) pendant cette session : elles gardent leur position, hors pile. */
+  const dragged = useRef(new Set<string>());
+  /** Bulles repliées d'office faute de place (la pile dépliée dépasserait la pile repliée). */
+  const [forced, setForced] = useState<Set<string>>(new Set());
+  /** En-têtes repliées sans place dans la pile : masquées, comptées par la pastille « +N ». */
+  const [hiddenIds, setHiddenIds] = useState<string[]>([]);
+  const [pileY, setPileY] = useState(0);
   const layerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
@@ -189,6 +204,7 @@ export function BubbleLayer({
       const rr = row?.getBoundingClientRect();
       // Déposée sur une session : la bulle se range sous le menu Déplacer/Copier, à droite du tiroir — la
       // session ciblée reste visible (surlignée) et rien ne sort de l'écran.
+      dragged.current.add(d.id);
       setPos({ [d.id]: rr ? { x: rr.right + 10 - d.layerLeft, y: rr.top + 108 - d.layerTop } : { x: Math.max(0, x), y: Math.max(0, y) } });
       if (d.target) {
         const bubble = bubbles.find((b) => b.id === d.id);
@@ -221,7 +237,8 @@ export function BubbleLayer({
   };
 
   // Plus récente en haut, notifications d'abord : ce qui vient d'arriver est sous les yeux.
-  const rank = (r: Rendered): string => `${r.b.kind === "notify" ? "1" : "0"}${r.b.created_at}`;
+  // Une approbation en attente passe devant tout : on ne doit jamais avoir à chercher la carte qu'il faut décider.
+  const rank = (r: Rendered): string => `${pendingApproval(r.b) ? "2" : r.b.kind === "notify" ? "1" : "0"}${r.b.created_at}`;
   // Une notify émise DEPUIS le fil où l'on est (on vient d'écrire à une autre session) n'apprend rien : masquée.
   const fromHere = (b: BubbleT): boolean => b.kind === "notify" && b.state.from_thread === current?.id;
   const visible = rendered.filter((r) => !views[r.b.id]?.hidden && !fromHere(r.b)).sort((a, b) => rank(b).localeCompare(rank(a)));
@@ -262,11 +279,23 @@ export function BubbleLayer({
       .slice(0, inline ? 1 : 3)
       .map((b) => b.id),
   );
+  // Mode pile : dépliées seulement la carte en attente la plus récente et la dernière bulle active.
+  const narrowExpanded = new Set<string>();
+  if (narrow) {
+    const live = visible.filter((r) => !r.leaving).map((r) => r.b);
+    const newest = (a: BubbleT[]): BubbleT | undefined => [...a].sort((x, y) => y.created_at.localeCompare(x.created_at))[0];
+    const pend = newest(live.filter(pendingApproval));
+    if (pend) narrowExpanded.add(pend.id);
+    const others = live.filter((b) => !pendingApproval(b) && !forced.has(b.id));
+    const act = newest(others.filter((b) => b.status === "working")) ?? newest(others.filter((b) => b.kind !== "notify"));
+    if (act) narrowExpanded.add(act.id);
+  }
   const isCollapsed = (id: string): boolean => {
     const v = views[id]?.collapsed;
     if (v !== undefined) return v;
+    if (narrow) return !narrowExpanded.has(id);
     const b = bubbles.find((x) => x.id === id);
-    return !(b?.kind === "notify" || recent.has(id));
+    return !(b?.kind === "notify" || (b && pendingApproval(b)) || recent.has(id));
   };
   const W = layerRef.current?.clientWidth ?? 1400;
   const H = layerRef.current?.clientHeight ?? 900;
@@ -296,15 +325,42 @@ export function BubbleLayer({
     return el ? { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight } : null;
   }, []);
 
+  // Largeur des bulles : 420 px, ou la marge libre à droite du fil (≥ 280 px) quand elle est plus étroite — à 1280 px la
+  // marge fait ~293 px : des bulles de 420 px recouvriraient le bout droit des messages.
+  useLayoutEffect(() => {
+    if (inline) return;
+    const apply = (): void => {
+      const layer = layerRef.current;
+      if (!layer) return;
+      const c = rel(document.querySelector(".composer"));
+      const free = c ? layer.clientWidth - (c.x + c.w) - 16 - 20 : 420;
+      layer.style.setProperty("--bubble-w", `${free < 420 ? Math.max(280, Math.round(free)) : 420}px`);
+      setNarrow(free < 420);
+    };
+    apply();
+    window.addEventListener("resize", apply);
+    return () => window.removeEventListener("resize", apply);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inline, threadKey]);
+
+  /** Les 3 derniers messages du fil (toutes origines) et la saisie : ce qu'une bulle ne doit pas couvrir. */
+  const lastMessageRects = (): Rect[] => {
+    const msgs = [...document.querySelectorAll(".chat .msg")].slice(-3);
+    return [...msgs.map((m) => rel(m)), rel(document.querySelector(".composer"))].filter(Boolean) as Rect[];
+  };
+  /** La colonne du fil (sa largeur = celle de la saisie), sur toute la hauteur : les bulles se posent dans la marge à droite. */
+  const threadColumn = (): Rect[] => {
+    const c = rel(document.querySelector(".composer")) ?? rel(document.querySelector(".chat-inner"));
+    const b = usable();
+    return c ? [{ x: c.x, y: b.y, w: c.w, h: b.h }] : [];
+  };
   // Pose des nouvelles bulles (avant peinture : elles sont rendues invisibles le temps d'être mesurées).
-  const unplaced = inline ? [] : rendered.filter((r) => !r.leaving && !posOf(r.b.id)).map((r) => r.b.id);
+  const unplaced = inline || narrow ? [] : rendered.filter((r) => !r.leaving && !posOf(r.b.id)).map((r) => r.b.id);
   useLayoutEffect(() => {
     if (inline || !unplaced.length || !layerRef.current) return;
     const bounds = usable();
-    const replies = document.querySelectorAll(".chat .msg.nina");
-    const forbidden = [rel(replies[replies.length - 1] ?? null), rel(document.querySelector(".composer"))].filter(Boolean) as Rect[];
-    const chatCol = rel(document.querySelector(".chat-inner"));
-    const soft = chatCol ? [chatCol] : [];
+    const forbidden = lastMessageRects();
+    const soft = threadColumn();
     const placed: Rect[] = rendered
       .filter((r) => !unplaced.includes(r.b.id) && posOf(r.b.id))
       .map((r) => {
@@ -327,7 +383,71 @@ export function BubbleLayer({
     }
     setPos(patch);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unplaced.join(","), inline]);
+  }, [unplaced.join(","), inline, narrow]);
+
+  // Mode pile : dépliées en haut de la marge (carte en attente d'abord), repliées empilées en bas (la plus récente tout en bas).
+  const stackSig = `${narrow}|${[...forced].join(",")}|${visible.filter((r) => !r.leaving).map((r) => `${r.b.id}${isCollapsed(r.b.id) ? "c" : "o"}`).join(",")}`;
+  useLayoutEffect(() => {
+    const layer = layerRef.current;
+    if (inline || !narrow || !layer) return;
+    const compute = (): void => {
+      const area = usable();
+      const live = visible.filter((r) => !r.leaving && !dragged.current.has(r.b.id));
+      const sizeOf = (id: string): { w: number; h: number } => {
+        const m = bubbleRect(id);
+        return { w: m?.w ?? 292, h: m?.h ?? 40 };
+      };
+      const byNew = (a: Rendered, b: Rendered): number => b.b.created_at.localeCompare(a.b.created_at);
+      const open = live.filter((r) => !isCollapsed(r.b.id)).sort((a, b) => Number(pendingApproval(b.b)) - Number(pendingApproval(a.b)) || byNew(a, b));
+      const shut = live.filter((r) => isCollapsed(r.b.id)).sort(byNew);
+      const pos: Record<string, { x: number; y: number }> = {};
+      let top = area.y;
+      for (const r of open) {
+        const { w, h } = sizeOf(r.b.id);
+        pos[r.b.id] = { x: Math.round(layer.clientWidth - 20 - w), y: Math.round(top) };
+        top += h + 10;
+      }
+      const end = area.y + area.h;
+      const hs = shut.map((r) => sizeOf(r.b.id).h);
+      const gap = 4;
+      // Les en-têtes repliées ne se chevauchent jamais (cibles ≥ 24 px, lisibles) : on en garde autant qu'il en tient sous la
+      // pile dépliée, les plus récentes d'abord ; les autres sont masquées et comptées dans la pastille « +N ».
+      const room = end - top;
+      let used = 0;
+      let shown = 0;
+      const hide: string[] = [];
+      shut.forEach((r, i) => {
+        const { w, h } = sizeOf(r.b.id);
+        if (used + h > room && !(i === 0)) {
+          hide.push(r.b.id);
+          return;
+        }
+        shown++;
+        pos[r.b.id] = { x: Math.round(layer.clientWidth - 20 - w), y: Math.round(end - used - h) };
+        used += h + gap;
+      });
+      const bottom = end - used + gap;
+      setHiddenIds((prev) => (prev.join() === hide.join() ? prev : hide));
+      void shown;
+      setPileY(Math.round(end - used + gap - 28));
+      // La pile dépliée touche la pile repliée : on replie la dernière bulle active (jamais la carte en attente).
+      const last = open.filter((r) => !pendingApproval(r.b)).pop();
+      if (top > bottom + 6 && last && !forced.has(last.b.id)) {
+        setForced((f) => new Set(f).add(last.b.id));
+        return;
+      }
+      setStack((prev) => {
+        const a = JSON.stringify(prev);
+        const b = JSON.stringify({ ...prev, ...pos });
+        return a === b ? prev : { ...prev, ...pos };
+      });
+    };
+    compute();
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(compute);
+    layer.querySelectorAll("[data-bubble-id]").forEach((el) => ro?.observe(el));
+    return () => ro?.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stackSig, inline]);
 
   // Une bulle posée qui GRANDIT ensuite (image d'un « montre-moi », réponses, étapes) remonte pour rester dans la
   // fenêtre : la pose ne connaît que sa taille d'origine, et une bulle plus bas que le bord ne se lit plus.
@@ -367,6 +487,7 @@ export function BubbleLayer({
         return { id: b.id, w: m?.w ?? 420, h: m?.h ?? 200 };
       });
     setArranging(true);
+    items.forEach((i) => dragged.current.add(i.id));
     setPos(arrange(items, usable()));
     setOrder(items.map((i) => i.id).reverse());
     const t = setTimeout(() => setArranging(false), 600);
@@ -457,18 +578,23 @@ export function BubbleLayer({
   }
 
   return (
-    <div className={`bubble-layer ${arranging ? "arranging" : ""}`} ref={layerRef} {...anchor("bubbles")}>
+    <div className={`bubble-layer ${arranging ? "arranging" : ""} ${narrow ? "pile" : ""}`} ref={layerRef} {...anchor("bubbles")}>
       {visible.map((r) => {
-        const placed = drag?.id === r.b.id ? drag : posOf(r.b.id);
-        const z = 10 + Math.max(0, order.indexOf(r.b.id)) + (drag?.id === r.b.id ? 500 : 0) + (r.b.kind === "notify" ? 200 : 0);
+        const placed = drag?.id === r.b.id ? drag : narrow && !dragged.current.has(r.b.id) ? stack[r.b.id] : posOf(r.b.id);
+        const z = 10 + Math.max(0, order.indexOf(r.b.id)) + (drag?.id === r.b.id ? 500 : 0) + (r.b.kind === "notify" ? 200 : 0) + (pendingApproval(r.b) ? 300 : 0);
         return renderBubble(r, {
           position: "absolute",
           left: placed ? Math.max(0, Math.min(placed.x, W - 160)) : 0,
           top: placed ? Math.max(0, Math.min(placed.y, H - 56)) : 0,
           zIndex: z,
-          ...(placed ? {} : { visibility: "hidden" as const }),
+          ...(placed && !(narrow && hiddenIds.includes(r.b.id)) ? {} : { visibility: "hidden" as const, pointerEvents: "none" as const }),
         });
       })}
+      {narrow && hiddenIds.length ? (
+        <span className="pile-more" style={{ top: pileY }} title={tr("{0} other bubble(s) folded: close one to see the next.", hiddenIds.length)}>
+          +{hiddenIds.length}
+        </span>
+      ) : null}
       {dropMenu ? (
         <DropMenu
           bubbleTitle={displayTitle(dropMenu.bubble)}

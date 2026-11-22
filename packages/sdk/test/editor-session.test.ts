@@ -111,6 +111,34 @@ describe("EditorSession : carte forte, où elle attend (LOKKAL.md §7.3)", () =>
   }, 10_000);
 });
 
+describe("EditorSession : turn.delta cumulatif", () => {
+  const frame = (id: number, data: Record<string, unknown>): string => `id: ${id}\nevent: ${String(data.type)}\ndata: ${JSON.stringify(data)}\n\n`;
+
+  it("deux deltas cumulatifs du même turn_id ne donnent qu'un seul texte (le noyau envoie la réponse entière)", async () => {
+    const fetchImpl: FetchLike = async () =>
+      sse(
+        [
+          frame(1, { type: "turn.started", thread_id: "th_1", turn_id: "th_1:suite" }),
+          frame(2, { type: "turn.delta", thread_id: "th_1", turn_id: "th_1:suite", text: "Début." }),
+          frame(3, { type: "turn.delta", thread_id: "th_1", turn_id: "th_1:suite", text: "Début. Fin." }),
+          frame(4, { type: "turn.delta", thread_id: "th_1", turn_id: "th_1:suite", text: "Début. Fin." }),
+        ],
+        true,
+      );
+    const client = new NokkerClient({ baseUrl: "http://127.0.0.1:1", token: "t", fetchImpl });
+    const hub = new LocalEventHub(client);
+    const s = new EditorSession(client, hub, "th_1", "/w", { read: async () => null });
+    const parts: string[] = [];
+    s.setSink({ onText: (t) => parts.push(t) });
+    s.attach();
+    await hub.ready();
+    for (let i = 0; i < 100 && parts.join("").length < 11; i++) await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(parts.join("")).toBe("Début. Fin.");
+    expect(parts).toEqual(["Début.", " Fin."]);
+  }, 10_000);
+});
+
 describe("LocalEventHub.listenAll et textes de l'éditeur", () => {
   const frame = (id: number, data: Record<string, unknown>): string => `id: ${id}\nevent: ${String(data.type)}\ndata: ${JSON.stringify(data)}\n\n`;
 

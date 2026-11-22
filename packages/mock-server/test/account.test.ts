@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { NokkerClient } from "@nokker-apps/sdk";
+import { NokkerApiError, NokkerClient } from "@nokker-apps/sdk";
 import { accountMock, startMockServer, type MockServerHandle } from "../src/index.js";
 import { weekWindowUtc } from "../src/account.js";
 
@@ -159,5 +159,20 @@ describe("consentement d'entraînement", () => {
     const bad = await c.setAccountConsent("nope" as "training", true).catch((e) => e);
     expect(bad.status).toBe(400);
     expect(bad.body).toEqual({ error: "invalid" });
+  });
+});
+
+describe("langue du compte (contrat de dev du 18.11.2026) : PATCH /v1/account {lang}", () => {
+  it("fr|en|de|it|null → 200 avec le compte ; null suit la détection (lang_is_default) ; autre chose : 400 bad_lang", async () => {
+    const de = await c.setAccountLang("de");
+    expect(de).toMatchObject({ lang: "de", lang_is_default: false, email: expect.any(String) });
+    expect((await c.getAccount()).lang).toBe("de");
+    const auto = await c.setAccountLang(null);
+    expect(auto.lang_is_default).toBe(true);
+    expect(auto.lang).toBe("fr"); // noyau 7f1e1215 : jamais null, « fr » tant que rien n'est posé (la détection est celle du navigateur)
+    for (const bad of ["es", "", "FR", 3]) {
+      const e = await c.setAccountLang(bad as never).then(() => null, (x: NokkerApiError) => x);
+      expect([bad, e?.status, e?.code]).toEqual([bad, 400, "bad_lang"]);
+    }
   });
 });

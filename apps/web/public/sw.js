@@ -6,7 +6,7 @@ const SHELL = `nokker-shell-${BUILD}`;
 const ASSETS = "nokker-assets";
 const MAX_ASSETS = 80;
 const NEVER = [/^\/v1\//, /^\/healthz/, /^\/\.well-known\//, /^\/sw\.js$/];
-const PRECACHE = ["/", "/manifest.webmanifest", "/brand/icon/nokker-app-192.png", "/brand/icon/apple-touch-icon.png"];
+const PRECACHE = ["/", "/manifest.webmanifest", "/brand/icon/nokker-app-192.png", "/brand/icon/apple-touch-icon.png", "/brand/fonts/fonts.css", "/brand/fonts/ibm-plex-sans-latin-400-normal.woff2"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

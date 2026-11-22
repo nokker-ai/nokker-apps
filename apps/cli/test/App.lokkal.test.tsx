@@ -174,6 +174,7 @@ describe("mémoire de projet", () => {
     await frameHas(r, "Oublier cette note ?");
     await key(r, "o");
     await frameHas(r, "✓ Oubliée : Run the test suite before every commit (rule-run-tests-before-commit-3f2a).");
+    await frameHas(r, "11 note(s) indexée(s)"); // l'état de la mémoire longue est relu APRÈS l'oubli (12 avant)
     await type(r, "/memory");
     await frameHas(r, "Notes apprises (1) :");
     f = r.lastFrame()!;
@@ -187,7 +188,7 @@ describe("mémoire de projet", () => {
       const r = render(<App baseUrl={mock.url} cwd={join(work, "nomem")} />);
       await frameHas(r, "Session de code sur");
       await type(r, "/memory");
-      await frameHas(r, "Mémoire du projet indisponible sur ce noyau (local.project_memory est éteint).");
+      await frameHas(r, "Mémoire du projet indisponible sur ce serveur (local.project_memory est éteint).");
       r.unmount();
     } finally {
       mock.state.projectMemory = true;
@@ -218,7 +219,7 @@ describe("sous-agents en arrière-plan", () => {
     expect(r.lastFrame()).toContain("worktree : nokker/sa-");
     expect(r.lastFrame()).toMatch(/coût : 4210 jetons · .*CHF/);
     await type(r, `/agents cancel ${id}`);
-    await frameHas(r, "Ce noyau ne sait pas encore arrêter un seul sous-agent");
+    await frameHas(r, "Ce serveur ne sait pas encore arrêter un seul sous-agent");
     await type(r, "/agents cancel all");
     await frameHas(r, "sous-agent(s) arrêté(s)");
     r.unmount();
@@ -290,6 +291,47 @@ describe("anglais par défaut", () => {
       await wait(50);
     }
     expect(r.lastFrame()).not.toContain("remember the milk");
+    r.unmount();
+  });
+});
+
+describe("/model (ticket T2)", () => {
+  const local = async (method: string, body?: unknown): Promise<Record<string, any>> => {
+    const res = await fetch(`${mock.url}/v1/local/setup${method === "PUT" ? "/models" : ""}`, {
+      method,
+      headers: { authorization: "Bearer local-dev-token", "content-type": "application/json" },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    return (await res.json()) as Record<string, any>;
+  };
+
+  it("liste les modèles, puis change le défaut de la MACHINE après confirmation, sans toucher aux entrées byok", async () => {
+    await local("PUT", { byok: [{ name: "own", base_url: "https://api.example.com/v1", model: "qwen3.8-27b", ok: true, api_key: "k-own" }], default: "byok:own" });
+    const root = await repo("models");
+    const r = render(<App baseUrl={mock.url} cwd={root} />);
+    await frameHas(r, "Faire confiance aux skills de ce dépôt ?");
+    await key(r, "n");
+    await frameHas(r, "modèle : byok:own · qwen3.8-27b");
+    if (process.env.NOKKER_CAPTURE) await writeFile(join(process.env.NOKKER_CAPTURE, "model-0-header.txt"), r.lastFrame()!);
+    await type(r, "/model");
+    await frameHas(r, "Modèles de cette machine :");
+    const listed = r.lastFrame()!;
+    expect(listed).toContain("router");
+    expect(listed).toMatch(/› byok:own \(qwen3\.8-27b\)\s+← défaut/);
+    expect(listed).toContain("local qwen2.5:7b");
+    expect(listed).not.toContain("Commande inconnue");
+    if (process.env.NOKKER_CAPTURE) await writeFile(join(process.env.NOKKER_CAPTURE, "model-1-list.txt"), listed);
+    await type(r, "/model qwen2.5:7b");
+    await frameHas(r, "Changer le modèle par défaut de cette machine ?");
+    if (process.env.NOKKER_CAPTURE) await writeFile(join(process.env.NOKKER_CAPTURE, "model-2-confirm.txt"), r.lastFrame()!);
+    expect((await local("GET")).default).toBe("byok:own"); // rien n'a changé avant la confirmation
+    await key(r, "o");
+    await frameHas(r, "✓ Modèle par défaut de cette machine : local qwen2.5:7b.");
+    await frameHas(r, "modèle : qwen2.5:7b");
+    if (process.env.NOKKER_CAPTURE) await writeFile(join(process.env.NOKKER_CAPTURE, "model-3-done.txt"), r.lastFrame()!);
+    const after = await local("GET");
+    expect(after.default).toBe("local:http://host.docker.internal:11434|qwen2.5:7b");
+    expect(after.models.byok).toEqual([{ name: "own", base_url: "https://api.example.com/v1", model: "qwen3.8-27b", ok: true, has_key: true }]);
     r.unmount();
   });
 });

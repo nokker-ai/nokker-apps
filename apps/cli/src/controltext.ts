@@ -25,7 +25,9 @@ export function loopThreadTitle(prompt: string): string | null {
 
 /** Message utilisateur d'un historique relu (reprise de session) : un bloc de contrôle s'affiche sous sa forme courte,
  * comme pendant la session (« (loop) tic », « (goal) is the goal reached? ») ; tout autre texte, tel quel. */
-export function shownUserText(content: string): string {
+export function shownUserText(content: string, origin?: string | null): string {
+  const decided = approvalSummary(content, origin);
+  if (decided) return decided;
   const m = /^\s*\[([^\]\n]+)\]\n([\s\S]*)\n\[\/([^\]\n]+)\]\s*$/.exec(content);
   if (!m || m[3] === undefined) return content;
   const header = m[1]!;
@@ -56,4 +58,21 @@ export function hideGoalMarker(text: string, streaming = false): string {
     return out.slice(0, out.lastIndexOf("\n") + 1).replace(/\s+$/, "");
   }
   return out;
+}
+
+/** Tour qui suit une décision : le noyau écrit pour le MODÈLE un bloc `[Approbation]…[/Approbation]` (outil, décision,
+ * résultat entre balises `<untrusted-data>`), marqué `origin: "approval"` ; les tours d'avant le champ se reconnaissent
+ * à leur en-tête. Jamais rendu brut : une ligne courte (« terminal : approuvé »). `null` pour tout autre message. */
+export function approvalSummary(content: string, origin?: string | null): string | null {
+  if (origin !== "approval" && !content.trimStart().startsWith("[Approbation]")) return null;
+  const field = (name: string): string => new RegExp(`^${name} : (.*)$`, "m").exec(content)?.[1]?.trim() ?? "";
+  const tool = field("Outil") || t("action");
+  const status = field("D\u00e9cision");
+  const label =
+    status === "approved" || status === "executed" ? t("approved")
+    : status === "rejected" || status === "denied" ? t("rejected")
+    : status === "expired" ? t("expired")
+    : status === "failed" ? t("approved, then failed")
+    : status || t("decided");
+  return `${tool} : ${label}`;
 }

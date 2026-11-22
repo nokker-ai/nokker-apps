@@ -62,6 +62,10 @@ export type LocalAction =
   | { type: "link_vault" }
   | { type: "byok_added"; name: string; base_url: string; model: string; hasKey: boolean }
   | { type: "byok_removed"; name: string }
+  /** « Ajouter » enregistre tout de suite (PUT de setup) : en cours / rangé / refusé. */
+  | { type: "byok_persist_start" }
+  | { type: "byok_persisted"; setup: LocalSetup }
+  | { type: "byok_persist_failed"; error: string }
   | { type: "choose"; value: string }
   | { type: "models_submit" }
   | { type: "models_saved"; setup: LocalSetup }
@@ -69,6 +73,8 @@ export type LocalAction =
   | { type: "connectors_linked"; any: boolean }
   | { type: "telegram_started" }
   | { type: "next" }
+  /** Connecteurs → Modèles : relier le compte nokker.ai (le lien se démarre à l'étape Modèles). */
+  | { type: "back_to_models" }
   | { type: "finish_submit" }
   | { type: "finish_ok" }
   | { type: "finish_failed"; error: string };
@@ -144,6 +150,11 @@ export function byokName(baseUrl: string): string {
   return n || "cle";
 }
 
+/** Nom de clé accepté : minuscules, chiffres et tirets, 40 caractères au plus, ni tiret ni vide au début. */
+export function validByokName(name: string): boolean {
+  return /^[a-z0-9][a-z0-9-]{0,39}$/.test(name);
+}
+
 /** Adresse acceptable pour un essai : http(s):// et un hôte non vide (le noyau juge ensuite si ça répond). */
 export function validApiUrl(baseUrl: string): boolean {
   const m = /^https?:\/\/([^/?#\s]+)/.exec(baseUrl.trim());
@@ -206,6 +217,17 @@ export function reduceLocal(s: LocalFlowState, a: LocalAction): LocalFlowState {
     }
     case "byok_removed":
       return s.step === "models" ? withDefault({ ...s, byok: s.byok.filter((b) => b.name !== a.name), error: undefined }) : s;
+    case "byok_persist_start":
+      return s.step === "models" ? { ...s, submitting: true, error: undefined } : s;
+    case "byok_persisted": {
+      if (s.step !== "models") return s;
+      // Les entrées relues du noyau sont rangées ; celles que le noyau n'a pas gardées restent « à enregistrer ».
+      const stored = byokFromView(a.setup.models.byok);
+      const names = new Set(stored.map((b) => b.name));
+      return withDefault({ ...s, submitting: false, error: undefined, byok: [...stored, ...s.byok.filter((b) => !names.has(b.name))], chosen: a.setup.default ?? s.chosen });
+    }
+    case "byok_persist_failed":
+      return s.step === "models" ? { ...s, submitting: false, error: a.error } : s;
     case "choose":
       return s.step === "models" && isAvailable(s, a.value) ? { ...s, chosen: a.value, error: undefined } : s;
     case "models_submit":
@@ -220,6 +242,8 @@ export function reduceLocal(s: LocalFlowState, a: LocalAction): LocalFlowState {
       return { ...s, connectorsLinked: a.any };
     case "telegram_started":
       return { ...s, telegramStarted: true };
+    case "back_to_models":
+      return s.step === "connectors" ? { ...s, step: "models", error: undefined } : s;
     case "next":
       if (s.step === "connectors") return { ...s, step: "channels" };
       if (s.step === "channels") return { ...s, step: "done" };
